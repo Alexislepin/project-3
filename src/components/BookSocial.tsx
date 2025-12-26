@@ -241,8 +241,8 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
     }
   };
 
-  const loadComments = async () => {
-    if (!bookKey || bookKey === 'unknown') return;
+  const loadComments = async (): Promise<{ commentsCount: number } | null> => {
+    if (!bookKey || bookKey === 'unknown') return null;
 
     try {
       // Charger comments: filter on book_key with candidate keys (supports legacy format)
@@ -262,12 +262,12 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
           status: (commentsError as any).status,
         });
         setComments([]);
-        return;
+        return { commentsCount: 0 };
       }
 
       if (!commentsData || commentsData.length === 0) {
         setComments([]);
-        return;
+        return { commentsCount: 0 };
       }
 
       // Extraire user_ids et charger profils
@@ -292,13 +292,12 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
 
       setComments(combinedComments as any);
       
-      // Dispatch global event for Explorer synchronization
-      dispatchCountsChanged(likes.length, commentsData.length, isLiked);
+      // Retourner les valeurs pour dispatch unique dans loadAll
+      return { commentsCount: commentsData.length };
     } catch (error) {
       console.error('Exception loading comments:', error);
       setComments([]);
-      // Dispatch event with zero comments on error
-      dispatchCountsChanged(likes.length, 0, isLiked);
+      return { commentsCount: 0 };
     }
   };
 
