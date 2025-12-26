@@ -1,5 +1,6 @@
 import { Heart, MessageCircle, BookOpen, Dumbbell, Brain, Target, Quote } from 'lucide-react';
 import { formatDistanceToNow } from '../utils/dateUtils';
+import { BookCover } from './BookCover';
 
 interface ActivityQuote {
   text: string;
@@ -71,17 +72,29 @@ export function ActivityCard({ activity, onReact, onComment }: ActivityCardProps
 
       <div className="mb-3">
         {activity.type === 'reading' && activity.book ? (
-          <div className="mb-3">
-            <div className="flex items-baseline gap-2 mb-1">
-              <h3 className="text-lg">
-                <span className="text-stone-600">a lu </span>
-                <span className="font-bold text-stone-900">{activity.book.title}</span>
-              </h3>
-              {activity.pages_read && activity.pages_read > 0 && (
-                <span className="text-stone-500 text-sm font-medium">· {activity.pages_read} pages</span>
-              )}
+          <div className="mb-3 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline gap-2 mb-1">
+                <h3 className="text-lg">
+                  <span className="text-stone-600">a lu </span>
+                  <span className="font-bold text-stone-900">{activity.book.title}</span>
+                </h3>
+                {activity.pages_read && activity.pages_read > 0 && (
+                  <span className="text-stone-500 text-sm font-medium">· {activity.pages_read} pages</span>
+                )}
+              </div>
+              <p className="text-stone-500 text-sm">de {activity.book.author}</p>
             </div>
-            <p className="text-stone-500 text-sm">de {activity.book.author}</p>
+            {activity.book.cover_url && (
+              <div className="w-12 h-16 shrink-0 rounded overflow-hidden">
+                <BookCover
+                  coverUrl={activity.book.cover_url}
+                  title={activity.book.title || ''}
+                  author={activity.book.author || ''}
+                  className="w-full h-full"
+                />
+              </div>
+            )}
           </div>
         ) : (
           <>

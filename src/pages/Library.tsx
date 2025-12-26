@@ -460,8 +460,8 @@ export function Library({}: LibraryProps) {
     await loadExplorerBooks(false);
   };
 
-  const getProgress = (currentPage: number, totalPages: number) => {
-    if (!totalPages) return 0;
+  const getProgress = (currentPage: number, totalPages: number | null) => {
+    if (!totalPages || totalPages === 0) return 0;
     return Math.round((currentPage / totalPages) * 100);
   };
 
@@ -981,7 +981,7 @@ export function Library({}: LibraryProps) {
           title: olBook.title,
           authors: olBook.authors,
           category: undefined,
-          pageCount: undefined,
+          pageCount: olBook.pages || undefined,
           publisher: undefined,
           isbn: olBook.isbn13 || olBook.isbn10 || cleanIsbn,
           description: olBook.description,
@@ -1225,6 +1225,7 @@ export function Library({}: LibraryProps) {
                       isbn: book.isbn,
                       isbn13: book.isbn,
                       isbn10: book.isbn,
+                      pageCount: book.number_of_pages_median || undefined,
                     };
                     
                     // Book object for getBookKey and actions
@@ -1368,10 +1369,10 @@ export function Library({}: LibraryProps) {
                   </div>
                 );
               }
-              const progress = getProgress(userBook.current_page, book.total_pages || 0);
+              const progress = getProgress(userBook.current_page, book.total_pages ?? null);
               const displayTitle = book.title;
               const displayAuthor = book.author;
-              const displayPages = book.total_pages || 0;
+              const displayPages = book.total_pages ?? null;
 
               // Use book.cover_url
               const displayCover: string | null = book.cover_url || null;
@@ -1425,7 +1426,7 @@ export function Library({}: LibraryProps) {
                       <div className="mb-2">
                         <div className="flex items-center justify-between text-xs text-text-sub-light mb-1">
                           <span>
-                            {userBook.current_page} / {displayPages} pages
+                            {userBook.current_page} {displayPages ? `/ ${displayPages} pages` : 'pages'}
                           </span>
                           <span className="font-semibold">{progress}%</span>
                         </div>
@@ -1444,9 +1445,13 @@ export function Library({}: LibraryProps) {
                           {book.genre}
                         </span>
                       )}
-                      {displayPages > 0 && (
+                      {displayPages ? (
                         <span className="inline-block text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
                           {displayPages} pages
+                        </span>
+                      ) : (
+                        <span className="inline-block text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-medium">
+                          Pages inconnues
                         </span>
                       )}
                     </div>
@@ -1484,7 +1489,7 @@ export function Library({}: LibraryProps) {
             author: selectedBookDetails.authors,
             cover_url: selectedBookDetails.thumbnail,
             genre: selectedBookDetails.category,
-            total_pages: selectedBookDetails.pageCount || 0,
+            total_pages: (selectedBookDetails.pageCount && selectedBookDetails.pageCount > 0) ? selectedBookDetails.pageCount : null,
             description: selectedBookDetails.description,
             publisher: selectedBookDetails.publisher,
             isbn: selectedBookDetails.isbn,
@@ -1508,7 +1513,7 @@ export function Library({}: LibraryProps) {
             author: selectedBookForComments.authors,
             cover_url: selectedBookForComments.thumbnail,
             genre: selectedBookForComments.category,
-            total_pages: selectedBookForComments.pageCount || 0,
+            total_pages: (selectedBookForComments.pageCount && selectedBookForComments.pageCount > 0) ? selectedBookForComments.pageCount : null,
             description: selectedBookForComments.description || "Chargement...",
             publisher: selectedBookForComments.publisher,
             isbn: selectedBookForComments.isbn,

@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { SessionSummary } from './SessionSummary';
 import { BookCover } from '../components/BookCover';
 import { AppHeader } from '../components/AppHeader';
+import { updateStreakAfterActivity } from '../utils/streak';
 
 interface ActiveSessionProps {
   onFinish: () => void;
@@ -18,7 +19,8 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const [showSummary, setShowSummary] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
-  const [pagesRead, setPagesRead] = useState('');
+  const [startPage, setStartPage] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState('');
   const [saving, setSaving] = useState(false);
   const [currentStreak, setCurrentStreak] = useState(0);
   const { user } = useAuth();
@@ -101,6 +103,8 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
   const startSession = () => {
     if (selectedBook) {
+      // Store starting page when session begins
+      setStartPage(selectedBook.current_page || 0);
       setShowBookSelect(false);
       setIsRunning(true);
     }
@@ -111,22 +115,33 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   };
 
   const handleFinish = async () => {
-    if (!user || !selectedBook) return;
+    if (!user || !selectedBook || startPage === null) return;
 
     setSaving(true);
 
-    const pages = parseInt(pagesRead) || 0;
+    const endPage = parseInt(currentPage) || startPage;
+    const pagesRead = Math.max(0, endPage - startPage);
     const durationMinutes = Math.max(1, Math.floor(seconds / 60));
 
-    // Update user_books current_page if pages were read
-    if (pages > 0) {
-      const newPage = (selectedBook.current_page || 0) + pages;
-      await supabase
-        .from('user_books')
-        .update({ current_page: newPage, updated_at: new Date().toISOString() })
-        .eq('user_id', user.id)
-        .eq('book_id', selectedBook.book_id);
+    // Check if book is completed
+    const totalPages = selectedBook.book?.total_pages;
+    const isCompleted = totalPages && endPage >= totalPages;
+
+    // Update user_books current_page and status if completed
+    const updateData: any = {
+      current_page: endPage,
+      updated_at: new Date().toISOString(),
+    };
+    if (isCompleted) {
+      updateData.status = 'completed';
+      updateData.completed_at = new Date().toISOString();
     }
+
+    await supabase
+      .from('user_books')
+      .update(updateData)
+      .eq('user_id', user.id)
+      .eq('book_id', selectedBook.book_id);
 
     // Insert activity in activities table
     const activityData = {
@@ -134,7 +149,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       type: 'reading',
       title: selectedBook.book ? `Read ${selectedBook.book.title}` : 'Reading session',
       book_id: selectedBook.book_id,
-      pages_read: pages,
+      pages_read: pagesRead,
       duration_minutes: durationMinutes,
     };
 
@@ -149,6 +164,9 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       return;
     }
 
+    // Update streak after activity is created
+    await updateStreakAfterActivity(user.id);
+
     setSaving(false);
     setShowSummary(true);
   };
@@ -159,15 +177,17 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  if (showSummary && selectedBook && selectedBook.book) {
+  if (showSummary && selectedBook && selectedBook.book && startPage !== null) {
+    const endPage = parseInt(currentPage) || startPage;
+    const pagesRead = Math.max(0, endPage - startPage);
     return (
       <SessionSummary
         bookTitle={selectedBook.book.title}
         bookAuthor={selectedBook.book.author}
         bookId={selectedBook.book_id}
-        pagesRead={parseInt(pagesRead) || 0}
+        pagesRead={pagesRead}
         durationMinutes={Math.floor(seconds / 60)}
-        currentPage={(selectedBook.current_page || 0) + (parseInt(pagesRead) || 0)}
+        currentPage={endPage}
         onComplete={onFinish}
         onCancel={() => setShowSummary(false)}
       />
@@ -273,7 +293,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                       {selectedBook.book.title}
                     </p>
                     <p className="text-text-sub-light text-xs font-medium truncate">
-                      Page {selectedBook?.current_page || 0} of {selectedBook.book.total_pages || 0}
+                      Page {selectedBook?.current_page || 0} {selectedBook.book.total_pages ? `of ${selectedBook.book.total_pages}` : ''}
                     </p>
                   </div>
                 </>
@@ -303,17 +323,26 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
           <div className="w-full">
             <label className="flex items-center justify-between gap-4 bg-card-light border-2 border-gray-200 rounded-full p-2 pl-6 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary transition-all">
-              <span className="text-base font-bold whitespace-nowrap">Pages lues</span>
+              <span className="text-base font-bold whitespace-nowrap">Page actuelle</span>
               <div className="flex items-center gap-2 flex-1 justify-end">
                 <input
                   type="number"
-                  value={pagesRead}
-                  onChange={(e) => setPagesRead(e.target.value)}
+                  value={currentPage}
+                  onChange={(e) => setCurrentPage(e.target.value)}
                   className="w-24 text-right bg-transparent border-none p-0 text-xl font-bold placeholder-text-sub-light focus:ring-0"
-                  placeholder="0"
-                  min="0"
+                  placeholder={startPage?.toString() || "0"}
+                  min={startPage || 0}
                 />
-                <span className="text-text-sub-light text-sm pr-4">pgs</span>
+                {startPage !== null && parseInt(currentPage) >= startPage && (
+                  <span className="text-text-sub-light text-xs pr-2">
+                    (+{Math.max(0, (parseInt(currentPage) || startPage) - startPage)} pgs)
+                  </span>
+                )}
+                {startPage !== null && parseInt(currentPage) < startPage && (
+                  <span className="text-red-500 text-xs pr-2">
+                    (min: {startPage})
+                  </span>
+                )}
               </div>
             </label>
           </div>

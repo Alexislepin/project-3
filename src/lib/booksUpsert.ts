@@ -71,7 +71,15 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
 
   const google_books_id = book?.google_books_id || book?.googleBooksId || book?.volumeInfo?.id || null;
 
-  const total_pages = book?.total_pages || book?.pageCount || book?.volumeInfo?.pageCount || null;
+  // Extract total_pages: prefer existing, then pageCount, then volumeInfo.pageCount
+  // IMPORTANT: Only set if > 0, otherwise null (not 0)
+  const total_pages = 
+    (typeof book?.total_pages === 'number' && book.total_pages > 0) ? book.total_pages :
+    (typeof book?.pageCount === 'number' && book.pageCount > 0) ? book.pageCount :
+    (typeof book?.volumeInfo?.pageCount === 'number' && book.volumeInfo.pageCount > 0) ? book.volumeInfo.pageCount :
+    (typeof book?.pages === 'number' && book.pages > 0) ? book.pages :
+    (typeof book?.number_of_pages === 'number' && book.number_of_pages > 0) ? book.number_of_pages :
+    null;
 
   // Use cover_url as-is (no OpenLibrary fallback since we don't have openlibrary_key in DB)
   let finalCoverUrl = cover_url;

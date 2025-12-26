@@ -249,9 +249,13 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
                       {book.genre}
                     </span>
                   )}
-                  {book.total_pages > 0 && (
+                  {book.total_pages ? (
                     <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
                       {book.total_pages} pages
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-500">
+                      Pages inconnues
                     </span>
                   )}
                   {book.edition && book.edition !== 'Standard Edition' && (

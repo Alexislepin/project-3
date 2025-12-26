@@ -602,7 +602,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                     console.warn('CurrentlyReading item without book data:', item);
                     return null;
                   }
-                  const progress = book.total_pages > 0 ? Math.round((item.current_page / book.total_pages) * 100) : 0;
+                  const progress = (book.total_pages && book.total_pages > 0) ? Math.round((item.current_page / book.total_pages) * 100) : 0;
                   return (
                     <button
                       key={book.id}

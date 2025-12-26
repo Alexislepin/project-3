@@ -209,9 +209,13 @@ export function Search() {
                         {book.category}
                       </span>
                     )}
-                    {book.pageCount && (
+                    {book.pageCount ? (
                       <span className="inline-block text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
                         {book.pageCount} pages
+                      </span>
+                    ) : (
+                      <span className="inline-block text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-medium">
+                        Pages inconnues
                       </span>
                     )}
                   </div>

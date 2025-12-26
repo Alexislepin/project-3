@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { BookCover } from '../components/BookCover';
 import { AppHeader } from '../components/AppHeader';
+import { updateStreakAfterActivity } from '../utils/streak';
 
 interface SessionSummaryProps {
   bookTitle: string;
@@ -112,6 +113,9 @@ export function SessionSummary({
           })
           .eq('id', user.id);
       }
+
+      // Update streak after activity is created
+      await updateStreakAfterActivity(user.id);
 
       onComplete();
     }

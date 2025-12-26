@@ -48,12 +48,9 @@ export function BookDetailsModal({
     console.log('[BookDetailsModal] book:', book);
   }, [book]);
 
-  // Load summary from book_summaries using book_key
+  // Load summary from book_summaries using book_key convention
   useEffect(() => {
-    // Use book_key if available, otherwise fallback to book.id (if not UUID)
-    const bookKey = book?.book_key || (book?.id && !isUuid(book.id) ? book.id : null);
-    
-    if (!bookKey) {
+    if (!book) {
       setSummary(null);
       return;
     }
@@ -61,38 +58,34 @@ export function BookDetailsModal({
     setLoadingSummary(true);
     (async () => {
       try {
-        // First, check if book_summaries has book_key column by trying it
-        let summaryData = null;
-        let summaryError = null;
-
-        // Try with book_key first (preferred)
-        const { data: dataByKey, error: errorByKey } = await supabase
-          .from('book_summaries')
-          .select('summary')
-          .eq('book_key', bookKey)
-          .maybeSingle();
-
-        if (!errorByKey && dataByKey) {
-          summaryData = dataByKey;
-        } else {
-          // If book_key doesn't work, try book_id (for UUIDs)
-          if (book?.id && isUuid(book.id)) {
-            const { data: dataById, error: errorById } = await supabase
-              .from('book_summaries')
-              .select('summary')
-              .eq('book_id', book.id)
-              .maybeSingle();
-            
-            if (!errorById) {
-              summaryData = dataById;
-              summaryError = errorById;
-            } else {
-              summaryError = errorById;
-            }
-          } else {
-            summaryError = errorByKey;
+        // Build book_key according to convention: isbn:${isbn} or uuid:${id}
+        let bookKey: string | null = null;
+        if (book.isbn) {
+          const cleanIsbn = String(book.isbn).replace(/[-\s]/g, '');
+          if (cleanIsbn.length >= 10) {
+            bookKey = `isbn:${cleanIsbn}`;
           }
         }
+        if (!bookKey && book.id) {
+          bookKey = `uuid:${book.id}`;
+        }
+
+        if (!bookKey) {
+          setLoadingSummary(false);
+          return;
+        }
+
+        // Query book_summaries: source='isbn' or 'uuid', source_id=isbn or id, lang='fr'
+        const source = book.isbn ? 'isbn' : 'uuid';
+        const sourceId = book.isbn ? String(book.isbn).replace(/[-\s]/g, '') : book.id;
+
+        const { data: summaryData, error: summaryError } = await supabase
+          .from('book_summaries')
+          .select('summary')
+          .eq('source', source)
+          .eq('source_id', sourceId)
+          .eq('lang', 'fr')
+          .maybeSingle();
 
         if (summaryError) {
           console.error('[BookDetailsModal] Error loading summary:', summaryError);
@@ -106,22 +99,18 @@ export function BookDetailsModal({
           return;
         }
 
-        // Fallback: use description if available
-        if (book.description) {
-          setSummary(book.description);
-          setLoadingSummary(false);
-          return;
-        }
+        // No summary found
+        setSummary(null);
+        setLoadingSummary(false);
       } catch (error) {
         console.error('[BookDetailsModal] Unexpected error loading summary:', error);
-      } finally {
         setLoadingSummary(false);
       }
     })();
-  }, [book?.book_key, book?.id, book?.description]);
+  }, [book?.id, book?.isbn]);
 
   // Determine display description
-  const displayDescription = summary || (book.description ? book.description : buildQuickSummary(book));
+  const displayDescription = summary || 'Résumé indisponible';
 
   // Scroll to comments section if initialTab is 'comments'
   useEffect(() => {
@@ -183,15 +172,17 @@ export function BookDetailsModal({
         </div>
 
         <div className="px-6 py-6">
-          <div className="flex gap-4 mb-6">
-            <BookCover
-              coverUrl={book.cover_url}
-              title={book.title}
-              author={book.author || 'Auteur inconnu'}
-              className="w-28 shrink-0 aspect-[2/3] rounded-xl overflow-hidden shadow-lg"
-            />
+          <div className="flex gap-4 mb-6 items-start">
+            <div className="w-20 h-28 shrink-0">
+              <BookCover
+                coverUrl={book.cover_url}
+                title={book.title}
+                author={book.author || 'Auteur inconnu'}
+                className="w-full h-full rounded-lg overflow-hidden shadow-sm border border-gray-200"
+              />
+            </div>
 
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <h3 className="text-2xl font-bold text-text-main-light mb-2 leading-tight">
                 {book.title}
               </h3>
@@ -205,9 +196,13 @@ export function BookDetailsModal({
                     {book.genre}
                   </span>
                 )}
-                {book.total_pages > 0 && (
+                {book.total_pages ? (
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
                     {book.total_pages} pages
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-500">
+                    Pages inconnues
                   </span>
                 )}
                 {book.edition && book.edition !== 'Standard Edition' && (

@@ -28,6 +28,7 @@ export interface OpenLibraryDoc {
   cover_i?: number;
   key?: string;
   isbn?: string;
+  number_of_pages_median?: number;
 }
 
 /**
@@ -88,6 +89,11 @@ export async function fetchOpenLibraryBrowse(
         ? doc.isbn[0]
         : undefined;
 
+      // Extract number_of_pages_median
+      const number_of_pages_median = typeof doc.number_of_pages_median === 'number' && doc.number_of_pages_median > 0
+        ? doc.number_of_pages_median
+        : undefined;
+
       // Generate stable ID from key or fallback
       const id = key || (isbn ? `isbn:${isbn}` : `ol-${title.toLowerCase().replace(/\s+/g, '-')}`);
 
@@ -105,6 +111,7 @@ export async function fetchOpenLibraryBrowse(
         cover_i,
         key,
         isbn,
+        number_of_pages_median,
       });
     }
 

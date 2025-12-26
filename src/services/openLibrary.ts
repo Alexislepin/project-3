@@ -447,6 +447,7 @@ export async function fetchByIsbn(isbn: string): Promise<{
       openLibraryWorkKey: cached.openLibraryKey,
       coverUrl: cached.coverUrl || undefined,
       cover_i: cached.cover_i,
+      pages: cached.pages,
     };
   }
 
@@ -465,6 +466,7 @@ export async function fetchByIsbn(isbn: string): Promise<{
       openLibraryWorkKey: cached.openLibraryKey,
       coverUrl: cached.coverUrl || undefined,
       cover_i: cached.cover_i,
+      pages: cached.pages,
     };
   }
 
@@ -548,6 +550,9 @@ export async function fetchByIsbn(isbn: string): Promise<{
       }
     }
 
+    // Extract pages from normalized book
+    const pages = normalized.pages;
+
     const result = {
       title,
       authors,
@@ -557,6 +562,7 @@ export async function fetchByIsbn(isbn: string): Promise<{
       openLibraryWorkKey,
       coverUrl,
       cover_i,
+      pages,
     };
 
     // Store as OpenLibraryBook format in cache (for consistency)
@@ -569,6 +575,7 @@ export async function fetchByIsbn(isbn: string): Promise<{
       coverUrl: coverUrl || null,
       cover_i,
       openLibraryKey: openLibraryWorkKey,
+      pages: normalized.pages,
     };
     
     const entry: CachedIsbnEntry = {

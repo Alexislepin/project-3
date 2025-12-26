@@ -111,50 +111,72 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     setLoading(true);
 
     try {
-      // Save onboarding data to user_profiles
-      const onboardingData: any = {
-        interests: ['reading'],
-        onboarding_completed: true,
-        // Store goals in a JSON field or separate columns
-        onboarding_goals: {
-          time_goal_minutes: timeGoal,
-          books_per_month: booksPerMonth,
-          reading_time_preference: readingTime,
-          favorite_genre: genre,
-          reading_level: readingLevel,
-        },
-      };
-
-      await supabase
-        .from('user_profiles')
-        .update(onboardingData)
-        .eq('id', user.id);
-
-      // Optionally create user_goals entries
-      if (timeGoal) {
-        await supabase.from('user_goals').upsert({
-          user_id: user.id,
-          type: 'daily_time',
-          target_value: timeGoal,
-          current_value: 0,
-          period: 'daily',
-          active: true,
-        }, {
-          onConflict: 'user_id,type',
-        });
+      // Build interests array from genre and other preferences
+      const interests: string[] = [];
+      if (genre) {
+        // Map genre IDs to readable names
+        const genreMap: Record<string, string> = {
+          'fiction': 'Fiction',
+          'non-fiction': 'Non-fiction',
+          'business': 'Business',
+          'self-dev': 'Développement personnel',
+          'other': 'Autre',
+        };
+        interests.push(genreMap[genre] || genre);
+      }
+      
+      // Add reading level as interest tag
+      if (readingLevel) {
+        interests.push(`Niveau: ${readingLevel}`);
+      }
+      
+      // Store monthly books goal as interest tag (since monthly_books doesn't exist in schema)
+      if (booksPerMonth) {
+        interests.push(`goal:${booksPerMonth}_books_month`);
       }
 
-      if (booksPerMonth) {
-        await supabase.from('user_goals').upsert({
-          user_id: user.id,
-          type: 'monthly_books',
-          target_value: booksPerMonth,
-          current_value: 0,
-          period: 'monthly',
-          active: true,
-        }, {
-          onConflict: 'user_id,type',
-        });
+      // Determine notification settings
+      const notificationsEnabled = notificationPermission === 'granted';
+      const goalReminderEnabled = notificationsEnabled; // Enable if notifications are granted
+      const notificationTime = readingTime === 'morning' ? '08:00:00' :
+                               readingTime === 'afternoon' ? '13:00:00' :
+                               readingTime === 'evening' ? '20:00:00' :
+                               '20:00:00'; // Default to 20:00
+
+      // Update user_profiles with interests and notification settings
+      await supabase
+        .from('user_profiles')
+        .update({
+          interests: interests.length > 0 ? interests : ['reading'],
+          notifications_enabled: notificationsEnabled,
+          goal_reminder_enabled: goalReminderEnabled,
+          notification_time: notificationTime,
+        })
+        .eq('id', user.id);
+
+      // Create daily_time goal if timeGoal is set
+      if (timeGoal) {
+        // Determine goal type based on value
+        let goalType: string;
+        if (timeGoal === 15) {
+          goalType = 'daily_15min';
+        } else if (timeGoal === 30) {
+          goalType = 'daily_30min';
+        } else if (timeGoal === 60) {
+          goalType = 'daily_60min';
+        } else {
+          goalType = 'daily_time';
+        }
+
+        await supabase
+          .from('user_goals')
+          .insert({
+            user_id: user.id,
+            type: goalType,
+            target_value: goalType === 'daily_time' ? timeGoal : (goalType === 'daily_15min' ? 15 : goalType === 'daily_30min' ? 30 : 60),
+            period: 'daily',
+            active: true,
+          });
       }
     } catch (error) {
       console.error('Error saving onboarding data:', error);
