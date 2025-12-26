@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase';
 import { LoginPage } from './pages/Login';
 import { SignupPage } from './pages/Signup';
 import { Onboarding } from './components/auth/Onboarding';
+import { LanguageOnboarding } from './components/auth/LanguageOnboarding';
 import { AppLayout } from './components/layout/AppLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -35,17 +36,30 @@ function App() {
   // Hook 1: Auth context
   const { user, loading } = useAuth();
   
-  // Hook 2-6: State hooks (toujours dans le même ordre)
+  // Hook 2-7: State hooks (toujours dans le même ordre)
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [needsLanguageOnboarding, setNeedsLanguageOnboarding] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('home');
   const [showActiveSession, setShowActiveSession] = useState(false);
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Hook 7: Check onboarding status (NON-BLOQUANT)
+  // Hook 7: Check language onboarding (first check)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const storedLang = localStorage.getItem('lexu_lang');
+      if (!storedLang || (storedLang !== 'fr' && storedLang !== 'en')) {
+        setNeedsLanguageOnboarding(true);
+      } else {
+        setNeedsLanguageOnboarding(false);
+      }
+    }
+  }, []);
+
+  // Hook 8: Check onboarding status (NON-BLOQUANT)
   useEffect(() => {
     // Condition dans le body du hook (OK), pas autour du hook (interdit)
-    if (user) {
+    if (user && !needsLanguageOnboarding) {
       // FIX: Ne pas bloquer le render - vérifier onboarding en arrière-plan
       setCheckingOnboarding(true);
       const checkOnboardingStatus = async () => {
@@ -78,9 +92,9 @@ function App() {
     } else {
       setCheckingOnboarding(false);
     }
-  }, [user]);
+  }, [user, needsLanguageOnboarding]);
 
-  // Hook 8: Routing basé sur l'URL
+  // Hook 9: Routing basé sur l'URL
   useEffect(() => {
     const path = window.location.pathname;
     if (path === '/login' || path === '/signup') {
@@ -96,7 +110,7 @@ function App() {
     }
   }, []);
 
-  // Hook 9: Initialize iOS swipe back gesture
+  // Hook 10: Initialize iOS swipe back gesture
   useEffect(() => {
     initSwipeBack();
   }, []);
@@ -104,6 +118,10 @@ function App() {
   // ============================================
   // HANDLERS (pas de hooks ici)
   // ============================================
+  const handleLanguageOnboardingComplete = () => {
+    setNeedsLanguageOnboarding(false);
+  };
+
   const handleOnboardingComplete = () => {
     setNeedsOnboarding(false);
   };
@@ -142,6 +160,11 @@ function App() {
       return <SignupPage />;
     }
     return <LoginPage />;
+  }
+
+  // Language onboarding (first priority)
+  if (needsLanguageOnboarding) {
+    return <LanguageOnboarding onComplete={handleLanguageOnboardingComplete} />;
   }
 
   // FIX: Afficher l'UI même si onboarding check est en cours

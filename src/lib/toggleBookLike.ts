@@ -1,6 +1,14 @@
 import { supabase } from './supabase';
-import { getBookKey } from './bookSocial';
+import { canonicalBookKey } from './bookSocial';
+import { ensureBookInDB } from './booksUpsert';
 import { socialEvents } from './events';
+import { normalizeEventType } from './activityEvents';
+
+// Helper to check if a string is a UUID
+function isUuid(v?: string | null): boolean {
+  if (!v) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+}
 
 // Throttle anti-spam pour activity_events (évite inserts multiples < 400ms)
 const activityEventsThrottle = new Map<string, number>();
@@ -36,27 +44,33 @@ export async function toggleBookLike({
   newLiked: boolean;
 }> {
   try {
-    const bookKey = getBookKey(book);
+    // RÈGLE ABSOLUE: Calculer la clé canonique
+    const bookKey = canonicalBookKey(book);
     if (!bookKey || bookKey === 'unknown') {
       throw new Error('Missing or invalid bookKey');
     }
+
+    // RÈGLE ABSOLUE: S'assurer que le livre existe en DB
+    const bookUuid = await ensureBookInDB(supabase, book);
 
     // Re-check en DB (évite les états désync)
     const { data: existing, error: checkErr } = await supabase
       .from('book_likes')
       .select('id')
       .eq('user_id', userId)
-      .eq('book_key', bookKey)
+      .eq('book_id', bookUuid)
       .maybeSingle();
 
     if (checkErr) throw checkErr;
 
     if (existing?.id) {
-      // UNLIKE: supprimer le like existant
+      // UNLIKE: Delete from book_likes using book_uuid
+      // RÈGLE ABSOLUE: Unlike = delete
       const { error: delErr } = await supabase
         .from('book_likes')
         .delete()
-        .eq('id', existing.id);
+        .eq('user_id', userId)
+        .eq('book_id', bookUuid);
 
       if (delErr) throw delErr;
 
@@ -71,13 +85,13 @@ export async function toggleBookLike({
       (async () => {
         try {
           const { data: { user: currentUser } } = await supabase.auth.getUser();
-          if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
+          if (!currentUser?.id || !bookKey) return;
           
           await supabase
             .from('activity_events')
             .delete()
             .eq('actor_id', currentUser.id)
-            .eq('event_type', 'like')
+            .eq('event_type', normalizeEventType('like'))
             .eq('book_key', bookKey);
         } catch (err: any) {
           console.warn('[activity_events] delete failed', {
@@ -93,26 +107,22 @@ export async function toggleBookLike({
       socialEvents.emitSocialChanged(bookKey);
       return result;
     } else {
-      // LIKE: insérer un nouveau like
-      const { error: insErr } = await supabase
+      // LIKE: UPSERT (never INSERT)
+      // RÈGLE ABSOLUE: Like = UPSERT, jamais INSERT
+      const { error: upsertErr } = await supabase
         .from('book_likes')
-        .insert({ user_id: userId, book_key: bookKey });
+        .upsert(
+          {
+            user_id: userId,
+            book_key: bookKey,
+            book_id: bookUuid,
+          },
+          { onConflict: 'user_id,book_id' }
+        );
 
-      // Gérer les erreurs 409 (duplicate key) comme "déjà liké"
-      if (insErr) {
-        const msg = String((insErr as any)?.message || '');
-        const code = String((insErr as any)?.code || '');
-        if (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')) {
-          // Déjà liké, on retourne l'état "liked"
-          const result = {
-            newLikesCount: currentLikesCount,
-            newCommentsCount: currentCommentsCount,
-            newLiked: true,
-          };
-          onSuccess?.(result.newLikesCount, result.newCommentsCount, result.newLiked);
-          return result;
-        }
-        throw insErr;
+      // Handle upsert errors
+      if (upsertErr) {
+        throw upsertErr;
       }
 
       const newCount = currentLikesCount + 1;
@@ -126,7 +136,7 @@ export async function toggleBookLike({
       (async () => {
         try {
           const { data: { user: currentUser } } = await supabase.auth.getUser();
-          if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
+          if (!currentUser?.id || !stableBookKey) return;
           
           // Throttle anti-spam : vérifier si dernier insert < 400ms
           const throttleKey = `${bookKey}:like`;
@@ -143,6 +153,14 @@ export async function toggleBookLike({
           const isbn = book.isbn13 || book.isbn10 || book.isbn || null;
           const source = book.google_books_id ? 'google' : book.openLibraryKey ? 'openlibrary' : 'unknown';
 
+          const eventType = normalizeEventType('like');
+          
+          console.log('[activity_events] Inserting event:', {
+            event_type: eventType,
+            book_key: bookKey,
+            actor_id: currentUser.id,
+          });
+          
           await Promise.all([
             supabase
               .from('books_cache')
@@ -161,7 +179,7 @@ export async function toggleBookLike({
               .from('activity_events')
               .insert({
                 actor_id: currentUser.id,
-                event_type: 'like',
+                event_type: eventType,
                 book_key: bookKey,
                 comment_id: null,
               }),

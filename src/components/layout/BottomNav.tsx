@@ -1,4 +1,5 @@
 import { Home, BookOpen, User, Circle, TrendingUp } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface BottomNavProps {
   currentView: 'home' | 'search' | 'library' | 'profile' | 'insights';
@@ -7,12 +8,13 @@ interface BottomNavProps {
 }
 
 export function BottomNav({ currentView, onNavigate, onStartSession }: BottomNavProps) {
+  const { t } = useTranslation();
   const navItems = [
-    { id: 'home' as const, icon: Home, label: 'Accueil' },
-    { id: 'insights' as const, icon: TrendingUp, label: 'Stats' },
-    { id: 'record' as const, icon: Circle, label: 'Session', isCenter: true },
-    { id: 'library' as const, icon: BookOpen, label: 'Bibliothèque' },
-    { id: 'profile' as const, icon: User, label: 'Profil' },
+    { id: 'home' as const, icon: Home, label: t('nav.home') },
+    { id: 'insights' as const, icon: TrendingUp, label: t('nav.stats') },
+    { id: 'record' as const, icon: Circle, label: t('nav.session'), isCenter: true },
+    { id: 'library' as const, icon: BookOpen, label: t('nav.library') },
+    { id: 'profile' as const, icon: User, label: t('nav.profile') },
   ];
 
   return (
@@ -30,7 +32,7 @@ export function BottomNav({ currentView, onNavigate, onStartSession }: BottomNav
                 <button
                   onClick={onStartSession}
                   className="absolute -top-6 w-16 h-16 bg-primary rounded-full shadow-[0_4px_20px_rgba(249,245,6,0.4)] flex items-center justify-center hover:shadow-[0_6px_24px_rgba(249,245,6,0.5)] hover:scale-105 active:scale-95 transition-all border-4 border-background-light"
-                  aria-label="Démarrer une session de lecture"
+                  aria-label={t('session.title')}
                 >
                   <Circle className="w-8 h-8 text-black fill-current" />
                 </button>

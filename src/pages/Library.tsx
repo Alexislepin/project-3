@@ -13,12 +13,15 @@ import { BookCover } from '../components/BookCover';
 import { Toast } from '../components/Toast';
 import { debugLog, debugWarn, fatalError } from '../utils/logger';
 import { searchBookByISBN, searchBooks as searchGoogleBooks, Book as GoogleBook } from '../lib/googleBooks';
-import { fetchByIsbn as fetchOpenLibraryByIsbn } from '../services/openLibrary';
+import { fetchByIsbn as fetchOpenLibraryByIsbn, searchBooks as searchOpenLibraryBooks, fetchWorkDescription, fetchEditionDescription, generateFallbackSummary } from '../services/openLibrary';
 import { ensureBookInDB } from '../lib/booksUpsert';
+import { getTranslatedDescription } from '../lib/translate';
+import { useTranslation } from 'react-i18next';
 import { useSwipeTabs } from '../lib/useSwipeTabs';
 import { AppHeader } from '../components/AppHeader';
 import { fetchOpenLibraryBrowse, OpenLibraryDoc } from '../lib/openLibraryBrowse';
-import { getBookKey, getBookSocialCounts, type BookSocialCounts } from '../lib/bookSocial';
+import { getBookSocialCounts, normalizeBookKey, canonicalBookKey, type BookSocialCounts } from '../lib/bookSocial';
+import { ExploreGrid } from '../components/ExploreGrid';
 
 type BookStatus = 'reading' | 'completed' | 'want_to_read';
 type FilterType = BookStatus | 'explore';
@@ -33,6 +36,7 @@ interface LibraryProps {
 }
 
 export function Library({}: LibraryProps) {
+  const { t, i18n } = useTranslation();
   const [userBooks, setUserBooks] = useState<any[]>([]);
   const [filter, setFilter] = useState<FilterType>('reading');
   const [loading, setLoading] = useState(true);
@@ -54,11 +58,13 @@ export function Library({}: LibraryProps) {
   const [bookToEdit, setBookToEdit] = useState<any>(null);
   const [selectedBookDetails, setSelectedBookDetails] = useState<GoogleBook | null>(null);
   const [selectedBookForComments, setSelectedBookForComments] = useState<GoogleBook | null>(null);
+  const [selectedDbBook, setSelectedDbBook] = useState<any>(null); // For Explorer tab: DB book data
+  const [loadingSelected, setLoadingSelected] = useState(false); // Loading state for Explorer details
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [rateLimitError, setRateLimitError] = useState(false);
   const { user } = useAuth();
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchTimeoutRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   // Cache mémoire pour fetchOpenLibraryDescription
@@ -78,6 +84,29 @@ export function Library({}: LibraryProps) {
     threshold: 35,
     verticalThreshold: 1.2,
   });
+
+  // Listen to global book-social-counts-changed event from BookSocial
+  // This ensures Explorer cards update instantly when likes/comments change in BookDetailsModal
+  useEffect(() => {
+    const handleCountsChanged = (event: CustomEvent) => {
+      const { bookKey, likes, comments, isLiked } = event.detail;
+      if (bookKey && typeof likes === 'number' && typeof comments === 'number') {
+        setExploreSocialCounts((prev) => ({
+          ...prev,
+          [bookKey]: {
+            likes,
+            comments,
+            isLiked: isLiked ?? false,
+          },
+        }));
+      }
+    };
+
+    window.addEventListener('book-social-counts-changed', handleCountsChanged as EventListener);
+    return () => {
+      window.removeEventListener('book-social-counts-changed', handleCountsChanged as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -401,21 +430,20 @@ export function Library({}: LibraryProps) {
       // Disable loading immediately
       setLoading(false);
       
-      // Load social counts for new books
+      // Load social counts for new books using canonical keys
       if (newBooks.length > 0) {
+        // Convert OpenLibraryDoc to format compatible with canonicalBookKey
         const bookKeys = newBooks
           .map(book => {
-            // Convert OpenLibraryDoc to format for getBookKey
-            const bookForKey = {
+            const bookForCanonical = {
               id: book.key || book.id,
               key: book.key,
+              isbn: book.isbn,
               isbn13: book.isbn,
               isbn10: book.isbn,
-              isbn: book.isbn,
-              title: book.title,
-              author: book.authors,
+              openLibraryKey: book.key,
             };
-            return getBookKey(bookForKey);
+            return canonicalBookKey(bookForCanonical);
           })
           .filter((key): key is string => !!key && key !== 'unknown');
         
@@ -543,6 +571,169 @@ export function Library({}: LibraryProps) {
     return false;
   };
 
+  const openExplorerDetails = async (book: GoogleBook) => {
+    console.log('[Library Explorer] openDetails click', book.title);
+    setLoadingSelected(true);
+    try {
+      // Step 1: Ensure book exists in DB and get UUID
+      const dbBookId = await ensureBookInDB(supabase, book);
+
+      // Step 2: Fetch the book row from books table
+      const { data: dbBook, error: fetchError } = await supabase
+        .from('books')
+        .select('id, title, author, isbn, cover_url, total_pages, description, google_books_id, openlibrary_work_key, openlibrary_edition_key')
+        .eq('id', dbBookId)
+        .single();
+
+      if (fetchError) {
+        console.error('[Library Explorer openDetails] Error fetching book from DB:', fetchError);
+        fatalError('Error fetching book from DB:', fetchError);
+        setLoadingSelected(false);
+        return;
+      }
+
+      if (!dbBook) {
+        console.error('[Library Explorer openDetails] Book not found in DB after ensureBookInDB');
+        setLoadingSelected(false);
+        return;
+      }
+
+      // Backfill openlibrary_work_key if missing in DB but present in source object
+      const incomingWorkKey =
+        (book as any).openLibraryKey ||
+        (book as any).openlibrary_work_key ||
+        (book as any).key ||
+        (book as any).openLibraryWorkKey;
+
+      if (!dbBook.openlibrary_work_key && incomingWorkKey) {
+        const normalized = normalizeBookKey(incomingWorkKey);
+        if (normalized) {
+          const { error: updateError } = await supabase
+            .from('books')
+            .update({ openlibrary_work_key: normalized })
+            .eq('id', dbBookId);
+
+          if (updateError) {
+            console.warn('[Library Explorer openDetails] Failed to backfill openlibrary_work_key:', updateError);
+          } else {
+            // IMPORTANT: Update dbBook object for immediate UI use
+            dbBook.openlibrary_work_key = normalized;
+            console.log('[Library Explorer openDetails] Backfilled openlibrary_work_key:', normalized);
+          }
+        }
+      }
+
+      // BONUS: If description is null/empty, try to fetch fallback description from multiple sources
+      if (!dbBook.description || dbBook.description.trim().length === 0) {
+        let foundDescription: string | null = null;
+
+        // Priority 1: Try to get description from original book object (Google Books)
+        if (book.description && book.description.trim().length > 0) {
+          foundDescription = book.description.trim();
+        }
+        
+        // Priority 2: Try OpenLibrary Work API if we have work key
+        if (!foundDescription && dbBook.openlibrary_work_key) {
+          try {
+            const olDesc = await fetchWorkDescription(dbBook.openlibrary_work_key);
+            if (olDesc && olDesc.length > 0) {
+              foundDescription = olDesc;
+            }
+          } catch (error) {
+            console.log('[Library Explorer openDetails] Could not fetch OpenLibrary work description:', error);
+          }
+        }
+
+        // Priority 3: Try OpenLibrary Edition API if we have edition key
+        if (!foundDescription && dbBook.openlibrary_edition_key) {
+          try {
+            const olDesc = await fetchEditionDescription(dbBook.openlibrary_edition_key);
+            if (olDesc && olDesc.length > 0) {
+              foundDescription = olDesc;
+            }
+          } catch (error) {
+            console.log('[Library Explorer openDetails] Could not fetch OpenLibrary edition description:', error);
+          }
+        }
+
+        // Priority 4: Try to fetch from Google Books API if we have google_books_id
+        if (!foundDescription && dbBook.google_books_id) {
+          try {
+            const googleBook = await searchGoogleBooks(dbBook.title, undefined, 0, 1);
+            if (googleBook && googleBook.length > 0 && googleBook[0].description) {
+              const desc = googleBook[0].description.trim();
+              if (desc.length > 0) {
+                foundDescription = desc;
+              }
+            }
+          } catch (error) {
+            console.log('[Library Explorer openDetails] Could not fetch Google Books description:', error);
+          }
+        }
+
+        // Priority 5: Try OpenLibrary by ISBN if we have ISBN but no work key
+        if (!foundDescription && dbBook.isbn && !dbBook.openlibrary_work_key) {
+          try {
+            const olBook = await fetchOpenLibraryByIsbn(dbBook.isbn);
+            if (olBook?.openLibraryWorkKey) {
+              // Save work key for future use
+              await supabase
+                .from('books')
+                .update({ openlibrary_work_key: olBook.openLibraryWorkKey.startsWith('/') ? olBook.openLibraryWorkKey : `/works/${olBook.openLibraryWorkKey}` })
+                .eq('id', dbBookId);
+              
+              // Try to fetch description from work
+              if (olBook.openLibraryWorkKey) {
+                const olDesc = await fetchWorkDescription(olBook.openLibraryWorkKey);
+                if (olDesc && olDesc.length > 0) {
+                  foundDescription = olDesc;
+                }
+              }
+            }
+          } catch (error) {
+            console.log('[Library Explorer openDetails] Could not fetch OpenLibrary by ISBN:', error);
+          }
+        }
+
+        // Update DB if we found a description
+        if (foundDescription && foundDescription.length > 0) {
+          await supabase
+            .from('books')
+            .update({ description: foundDescription })
+            .eq('id', dbBookId);
+          dbBook.description = foundDescription;
+        } else {
+          // Fallback: Generate mini-summary
+          const fallback = generateFallbackSummary({
+            title: dbBook.title,
+            author: dbBook.author,
+            total_pages: dbBook.total_pages,
+            category: (book as any).category,
+            genre: (book as any).genre,
+          });
+          dbBook.description = fallback;
+        }
+      }
+
+      // Step 3: Translate description if needed
+      if (dbBook.description && dbBook.description.trim().length > 0) {
+        // Pass the full dbBook object to getTranslatedDescription so it can extract stable book_key
+        const translated = await getTranslatedDescription(dbBook, dbBook.description);
+        if (translated) {
+          dbBook.description = translated;
+        }
+      }
+
+      // Step 4: Open BookDetailsModal with DB book data
+      setSelectedDbBook(dbBook);
+      setLoadingSelected(false);
+    } catch (error: any) {
+      console.error('[Library Explorer openDetails] Unexpected error:', error);
+      fatalError('Error opening book details:', error);
+      setLoadingSelected(false);
+    }
+  };
+
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
     setRateLimitError(false);
@@ -599,11 +790,81 @@ export function Library({}: LibraryProps) {
       return;
     }
 
-    // For "explore" tab: no search (Explorer is browse-only)
+    // For "explore" tab: search via APIs (Google Books + OpenLibrary)
     if (filter === 'explore') {
-      setSearchResults([]);
-      setSearching(false);
-      setRateLimitError(false);
+      if (query.trim().length < 3) {
+        setSearchResults([]);
+        setSearching(false);
+        setRateLimitError(false);
+        // If query is empty, reload browse books
+        if (query.trim().length === 0) {
+          // Reset search results and reload browse
+          setSearchResults([]);
+          if (!explorerBooksLoaded || exploreBooks.length === 0) {
+            loadExplorerBooks(true);
+          }
+        }
+        return;
+      }
+
+      setSearching(true);
+      
+      // Debounce API calls
+      searchTimeoutRef.current = window.setTimeout(async () => {
+        try {
+          let results: GoogleBook[] = [];
+
+          // Priority 1: Try Google Books API
+          try {
+            const googleResults = await searchGoogleBooks(query.trim(), undefined, 0, 20);
+            if (googleResults && googleResults.length > 0) {
+              results = googleResults;
+              debugLog(`[Library Explorer Search] Found ${googleResults.length} results from Google Books`);
+            }
+          } catch (googleError: any) {
+            if (googleError?.message?.includes('API key')) {
+              debugLog('[Library Explorer Search] Google Books API key missing, trying OpenLibrary');
+            } else {
+              debugLog('[Library Explorer Search] Google Books error, trying OpenLibrary:', googleError);
+            }
+          }
+
+          // Priority 2: Fallback to OpenLibrary if Google returned 0 results or error
+          if (results.length === 0) {
+            try {
+              const olResults = await searchOpenLibraryBooks(query.trim(), 1);
+              if (olResults && olResults.length > 0) {
+                // Convert OpenLibraryBook to GoogleBook format
+                results = olResults.map((olBook) => ({
+                  id: olBook.openLibraryKey || olBook.isbn || `ol-${olBook.title}`,
+                  title: olBook.title,
+                  authors: olBook.author,
+                  category: undefined,
+                  pageCount: undefined, // OpenLibraryBook doesn't expose pages directly
+                  publisher: undefined,
+                  isbn: olBook.isbn || undefined,
+                  isbn13: olBook.isbn13 || undefined,
+                  isbn10: olBook.isbn10 || undefined,
+                  description: undefined,
+                  thumbnail: olBook.coverUrl || undefined,
+                  cover_i: olBook.cover_i,
+                }));
+                debugLog(`[Library Explorer Search] Found ${olResults.length} results from OpenLibrary`);
+              }
+            } catch (olError) {
+              debugLog('[Library Explorer Search] OpenLibrary error:', olError);
+            }
+          }
+
+          setSearchResults(results);
+          setSearching(false);
+        } catch (error) {
+          fatalError('Unexpected error in Explorer search:', error);
+          setSearchResults([]);
+          setSearching(false);
+        }
+      }, 300); // 300ms debounce
+
       return;
     }
   };
@@ -720,9 +981,9 @@ export function Library({}: LibraryProps) {
             .maybeSingle();
 
           if (existingRow) {
-            const statusLabel = existingRow.status === 'reading' ? 'En cours' : 
-                               existingRow.status === 'completed' ? 'Terminé' : 
-                               'À lire';
+            const statusLabel = existingRow.status === 'reading' ? t('library.reading') : 
+                               existingRow.status === 'completed' ? t('library.completed') : 
+                               t('library.wantToRead');
             setAddingBookId(null);
             setBookToAdd(null);
             setToast({ 
@@ -816,28 +1077,31 @@ export function Library({}: LibraryProps) {
         return { success: false, alreadyExists: false };
       }
 
-      // Mise à jour immédiate de l'UI sans reload
+      // Si on est dans l'onglet Explorer, ne pas faire de reload complet
+      if (filter === 'explore') {
+        setBookToAdd(null);
+        await loadBooksInLibrary();
+        setToast({ message: 'Livre ajouté avec succès !', type: 'success' });
+        return { success: true, alreadyExists: false };
+      }
+
+      // Pour les autres onglets, comportement normal avec changement de filtre
       setBookToAdd(null);
       setSearchResults([]);
       setSearchQuery('');
 
       setFilter(status);
-              setUserBooks(prev => {
-                // Si on vient d'un autre onglet, remplace la liste (sinon prepend)
-                if (filter !== status) {
-                  return finalRow ? [finalRow] : [];
-                }
-                // Sinon, ajoute au début de la liste existante
-                return finalRow ? [finalRow, ...prev] : prev;
-              });
+      setUserBooks(prev => {
+        // Si on vient d'un autre onglet, remplace la liste (sinon prepend)
+        if (filter !== status) {
+          return finalRow ? [finalRow] : [];
+        }
+        // Sinon, ajoute au début de la liste existante
+        return finalRow ? [finalRow, ...prev] : prev;
+      });
 
-              // Update booksInLibrary set after successful add (for explore tab)
-              if (filter === 'explore') {
-                await loadBooksInLibrary();
-              }
-
-              setToast({ message: 'Livre ajouté avec succès !', type: 'success' });
-              return { success: true, alreadyExists: false };
+      setToast({ message: 'Livre ajouté avec succès !', type: 'success' });
+      return { success: true, alreadyExists: false };
     } catch (error: any) {
       console.error('[handleAddBookToLibrary] UNEXPECTED ERROR', {
         error,
@@ -981,7 +1245,7 @@ export function Library({}: LibraryProps) {
           title: olBook.title,
           authors: olBook.authors,
           category: undefined,
-          pageCount: olBook.pages || undefined,
+          pageCount: undefined, // OpenLibraryBook doesn't expose pages directly
           publisher: undefined,
           isbn: olBook.isbn13 || olBook.isbn10 || cleanIsbn,
           description: olBook.description,
@@ -1030,7 +1294,7 @@ export function Library({}: LibraryProps) {
   return (
     <div className="max-w-2xl mx-auto font-sans text-neutral-900" style={{ isolation: 'isolate' }}>
       <AppHeader
-        title="Ma Bibliothèque"
+        title={t('library.title')}
         rightActions={
           <button
             onClick={() => setShowScanner(true)}
@@ -1103,7 +1367,7 @@ export function Library({}: LibraryProps) {
           <div className="mb-6">
             <div className="text-center py-8">
               <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-2"></div>
-              <div className="text-text-sub-light">Recherche du livre...</div>
+              <div className="text-text-sub-light">{t('library.searching')}</div>
             </div>
           </div>
         )}
@@ -1138,20 +1402,39 @@ export function Library({}: LibraryProps) {
                         className="flex flex-col rounded-2xl bg-white border border-black/5 p-2 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden"
                       >
                         <div className="rounded-2xl overflow-hidden bg-neutral-100 shadow-[0_10px_25px_rgba(0,0,0,0.10)]">
-                          <BookCover
-                            coverUrl={book.thumbnail}
-                            title={book.title}
-                            author={book.authors || 'Auteur inconnu'}
-                            isbn13={book.isbn13 || null}
-                            isbn10={book.isbn10 || null}
-                            cover_i={(book as any).cover_i || null}
-                            googleCoverUrl={book.googleCoverUrl || book.thumbnail || null}
-                            className="w-full aspect-[2/3] bg-neutral-100"
-                          />
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            className="cursor-pointer"
+                            onClick={() => filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book);
+                              }
+                            }}
+                          >
+                            <BookCover
+                              coverUrl={book.thumbnail}
+                              title={book.title}
+                              author={book.authors || 'Auteur inconnu'}
+                              isbn13={book.isbn13 || null}
+                              isbn10={book.isbn10 || null}
+                              cover_i={(book as any).cover_i || null}
+                              googleCoverUrl={book.googleCoverUrl || book.thumbnail || null}
+                              className="w-full aspect-[2/3] bg-neutral-100"
+                            />
+                          </div>
                         </div>
 
                         <div className="flex flex-col flex-1 mt-2">
-                          <h3 className="text-[13px] font-semibold leading-snug line-clamp-2">{book.title}</h3>
+                          <button
+                            type="button"
+                            className="text-[13px] font-semibold leading-snug line-clamp-2 text-left"
+                            onClick={() => filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book)}
+                          >
+                            {book.title}
+                          </button>
                           <p className="text-[11px] text-black/50 line-clamp-1">{book.authors}</p>
 
                           {filter === 'explore' ? (
@@ -1173,10 +1456,13 @@ export function Library({}: LibraryProps) {
                             )
                           ) : (
                             <button
-                              onClick={() => setDetailsBookId(book.id)}
+                              onClick={() => {
+                                // For search results (non-explore tabs), open BookDetailsModal with full book object
+                                setSelectedBookDetails(book);
+                              }}
                               className="mt-2 w-full rounded-xl bg-gray-100 text-text-main-light py-2 text-[12px] font-medium hover:bg-gray-200 transition"
                             >
-                              Voir les détails
+                              {t('book.details')}
                             </button>
                           )}
                         </div>
@@ -1194,7 +1480,7 @@ export function Library({}: LibraryProps) {
         ) : !searchQuery && filter === 'explore' ? (
           <div>
             <div className="mb-6">
-              <h2 className="text-lg font-semibold tracking-tight mb-2 text-text-main-light">Explorer</h2>
+              <h2 className="text-lg font-semibold tracking-tight mb-2 text-text-main-light">{t('library.explore')}</h2>
               <p className="text-xs text-black/50 mb-6">Découvrez des livres populaires français</p>
             </div>
 
@@ -1212,116 +1498,27 @@ export function Library({}: LibraryProps) {
               </div>
             ) : exploreBooks.length > 0 ? (
               <>
-                <div className="grid grid-cols-2 gap-3">
-                  {exploreBooks.map((book, index) => {
-                    // Convert OpenLibraryDoc to GoogleBook for modals and actions
-                    const googleBookConverted: GoogleBook = {
-                      id: book.key || book.id,
-                      title: book.title,
-                      authors: book.authors,
-                      thumbnail: book.cover_i 
-                        ? `https://covers.openlibrary.org/b/id/${book.cover_i}-M.jpg?default=false` 
-                        : undefined,
-                      isbn: book.isbn,
-                      isbn13: book.isbn,
-                      isbn10: book.isbn,
-                      pageCount: book.number_of_pages_median || undefined,
-                    };
-                    
-                    // Book object for getBookKey and actions
-                    const bookForActions = {
-                      id: book.key || book.id,
-                      key: book.key,
-                      isbn13: book.isbn,
-                      isbn10: book.isbn,
-                      isbn: book.isbn,
-                      title: book.title,
-                      author: book.authors,
-                      cover_url: googleBookConverted.thumbnail,
-                    };
-                    
-                    const bookKey = getBookKey(bookForActions);
-                    const alreadyAdded = isBookInLibrary(googleBookConverted);
-                    const socialCounts = exploreSocialCounts[bookKey] || { likes: 0, comments: 0, isLiked: false };
-                    const isLiked = socialCounts.isLiked ?? false;
-                    
-                    // Generate stable key: id || title-index
-                    const stableKey = book.id || `${book.title}-${index}`;
-                    
-                    return (
-                      <div
-                        key={stableKey}
-                        className="flex flex-col rounded-2xl bg-white border border-black/5 p-2 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden"
-                      >
-                        <div 
-                          className="relative cursor-pointer rounded-2xl overflow-hidden bg-neutral-100 shadow-[0_10px_25px_rgba(0,0,0,0.10)]"
-                          onClick={() => {
-                            setSelectedBookDetails(googleBookConverted);
-                          }}
-                        >
-                          <BookCover
-                            title={book.title}
-                            author={book.authors}
-                            cover_i={book.cover_i || null}
-                            className="w-full aspect-[2/3] bg-neutral-100"
-                            showQuickActions={true}
-                            book={bookForActions}
-                            likes={socialCounts.likes}
-                            comments={socialCounts.comments}
-                            isLiked={isLiked}
-                            onCountsChange={(nextLikes, nextComments, nextLiked) => {
-                              setExploreSocialCounts((prev) => ({
-                                ...prev,
-                                [bookKey]: { 
-                                  likes: nextLikes, 
-                                  comments: nextComments,
-                                  isLiked: nextLiked ?? isLiked,
-                                },
-                              }));
-                            }}
-                            onOpenComments={() => {
-                              setSelectedBookForComments(googleBookConverted);
-                            }}
-                            onShowToast={(message, type = 'info') => {
-                              setToast({ message, type });
-                            }}
-                          />
-                        </div>
-
-                        <div className="flex flex-col flex-1 mt-2">
-                          <h3 
-                            className="text-[13px] font-semibold leading-snug line-clamp-2 cursor-pointer hover:text-primary"
-                            onClick={() => {
-                              setSelectedBookDetails(googleBookConverted);
-                            }}
-                          >
-                            {book.title}
-                          </h3>
-                          <p className="text-[11px] text-black/50 line-clamp-1">{book.authors}</p>
-
-                          {alreadyAdded ? (
-                            <button
-                              disabled
-                              className="mt-2 w-full rounded-xl bg-gray-200 text-gray-600 py-2 text-[12px] font-medium disabled:opacity-60"
-                            >
-                              Déjà ajouté
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                setBookToAdd(googleBookConverted);
-                              }}
-                              disabled={addingBookId === book.id}
-                              className="mt-2 w-full rounded-xl bg-black text-white py-2 text-[12px] font-medium active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              {addingBookId === book.id ? 'Ajout en cours...' : 'Ajouter'}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <ExploreGrid
+                  exploreBooks={exploreBooks}
+                  exploreSocialCounts={exploreSocialCounts}
+                  booksInLibrary={booksInLibrary}
+                  addingBookId={addingBookId}
+                  isBookInLibrary={isBookInLibrary}
+                  onOpenDetails={openExplorerDetails}
+                  onAddToLibrary={(book) => setBookToAdd(book)}
+                  onCountsChange={(bookKey, nextLikes, nextComments, nextLiked) => {
+                    setExploreSocialCounts((prev) => ({
+                      ...prev,
+                      [bookKey]: { 
+                        likes: nextLikes, 
+                        comments: nextComments,
+                        isLiked: nextLiked,
+                      },
+                    }));
+                  }}
+                  onOpenComments={(book) => setSelectedBookForComments(book)}
+                  onShowToast={(message, type = 'info') => setToast({ message, type })}
+                />
 
                 {/* Infinite scroll sentinel */}
                 {hasMoreExplore && (
@@ -1336,9 +1533,9 @@ export function Library({}: LibraryProps) {
           <div className="text-center py-12">
             <Book className="w-16 h-16 mx-auto mb-4 text-text-sub-light" />
             <p className="text-lg font-medium text-text-main-light mb-2">
-              {filter === 'reading' && 'Aucun livre en cours'}
-              {filter === 'want_to_read' && 'Aucun livre à lire'}
-              {filter === 'completed' && 'Aucun livre terminé'}
+              {filter === 'reading' && t('library.noBooks')}
+              {filter === 'want_to_read' && t('library.noBooks')}
+              {filter === 'completed' && t('library.noBooks')}
             </p>
             <p className="text-sm text-text-sub-light mb-4">
               Envie de découvrir de nouveaux livres?
@@ -1348,7 +1545,7 @@ export function Library({}: LibraryProps) {
               className="px-6 py-3 bg-primary text-black rounded-xl font-bold hover:brightness-95 transition-all inline-flex items-center gap-2"
             >
               <TrendingUp className="w-5 h-5" />
-              Explorer
+              {t('library.explore')}
             </button>
           </div>
         ) : !searchQuery && userBooks.length > 0 ? (
@@ -1478,6 +1675,27 @@ export function Library({}: LibraryProps) {
         <BarcodeScanner
           onScan={handleBarcodeScan}
           onClose={() => setShowScanner(false)}
+        />
+      )}
+
+      {loadingSelected && (
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center">
+          <div className="bg-background-light rounded-2xl p-8">
+            <div className="text-text-sub-light">{t('common.loading')}</div>
+          </div>
+        </div>
+      )}
+
+      {selectedDbBook && (
+        <BookDetailsModal
+          book={selectedDbBook}
+          onClose={() => setSelectedDbBook(null)}
+          showAddButton={true}
+          onAddToLibrary={(dbBook) => {
+            // Ouvre le choix de statut (En cours / À lire / Terminé)
+            setBookToAdd(dbBook as any);
+            setSelectedDbBook(null); // option: fermer les détails
+          }}
         />
       )}
 

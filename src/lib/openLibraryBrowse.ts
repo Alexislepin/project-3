@@ -49,7 +49,8 @@ export async function fetchOpenLibraryBrowse(
     // Calculate page number for OpenLibrary API (1-indexed)
     const openLibraryPage = Math.floor(page / OPEN_LIBRARY_QUERIES.length) + 1;
 
-    const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&page=${openLibraryPage}&limit=${limit}`;
+    // Request number_of_pages_median in fields for proper page count
+    const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&page=${openLibraryPage}&limit=${limit}&fields=title,author_name,isbn,cover_i,key,number_of_pages_median`;
     
     const response = await fetch(url);
     

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Flame, BookOpen, Clock, LogOut, Edit, Users, Bell, UserPlus, Settings } from 'lucide-react';
+import { Flame, BookOpen, Clock, LogOut, Edit, Users, Bell, UserPlus, Settings, Globe } from 'lucide-react';
+import { setAppLanguage } from '../lib/appLanguage';
 import { Clubs } from './Clubs';
 import { EditProfileModal } from '../components/EditProfileModal';
 import { NotificationsModal } from '../components/NotificationsModal';
@@ -14,12 +16,14 @@ import { UserProfileView } from '../components/UserProfileView';
 import { BookCover } from '../components/BookCover';
 import { BookDetailsModal } from '../components/BookDetailsModal';
 import { AppHeader } from '../components/AppHeader';
+import { LanguageSelectorModal } from '../components/LanguageSelectorModal';
 
 interface ProfileProps {
   onNavigateToLibrary: () => void;
 }
 
 export function Profile({ onNavigateToLibrary }: ProfileProps) {
+  const { t } = useTranslation();
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState({ followers: 0, following: 0, activities: 0, books: 0, likes: 0 });
   const [loading, setLoading] = useState(true);
@@ -31,7 +35,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [currentlyReading, setCurrentlyReading] = useState<any[]>([]);
-  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
+  const [selectedUserBook, setSelectedUserBook] = useState<any | null>(null);
   const [showFollowersModal, setShowFollowersModal] = useState(false);
   const [showFollowingModal, setShowFollowingModal] = useState(false);
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
@@ -39,6 +43,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [likedBooks, setLikedBooks] = useState<any[]>([]);
   const [selectedLikedBook, setSelectedLikedBook] = useState<any | null>(null);
   const [showAllLikedBooks, setShowAllLikedBooks] = useState(false);
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const { user, signOut } = useAuth();
 
   useEffect(() => {
@@ -150,68 +155,53 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
   const loadWeeklyActivity = async () => {
     const profileId = viewingUserId || user?.id;
-    
     if (!profileId) {
-      console.log('[loadWeeklyActivity] No profileId, skipping');
       setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
       return;
     }
 
     try {
-      const today = new Date();
-      const dayOfWeek = today.getDay();
-      const startOfWeek = new Date(today);
-      startOfWeek.setDate(today.getDate() - dayOfWeek);
+      const now = new Date();
+
+      // Start of week (Monday 00:00 local)
+      const startOfWeek = new Date(now);
+      const day = startOfWeek.getDay(); // 0=Sun ... 6=Sat
+      const diffToMonday = (day + 6) % 7; // Mon=0, Tue=1, ... Sun=6
+      startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
       startOfWeek.setHours(0, 0, 0, 0);
 
-      const start = startOfWeek.toISOString();
-      if (!start || isNaN(new Date(start).getTime())) {
-        console.error('[loadWeeklyActivity] Invalid start date:', start);
-        setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
-        return;
-      }
+      const startISO = startOfWeek.toISOString();
 
       const { data: activities, error } = await supabase
         .from('activities')
         .select('pages_read, created_at')
         .eq('user_id', profileId)
-        .gte('created_at', start)
+        .gte('created_at', startISO)
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('[loadWeeklyActivity] activity_events error', {
-          error,
-          message: error.message,
-          details: (error as any).details,
-          hint: (error as any).hint,
-          code: (error as any).code,
-          profileId,
-          start,
-          end: today.toISOString(),
-          queryContext: 'loadWeeklyActivity',
-        });
-        // Fallback: set empty activity data and continue render
+        console.error('[loadWeeklyActivity] Error:', error);
         setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
         return;
       }
 
-      const weekData = [0, 0, 0, 0, 0, 0, 0];
+      const weekData = [0, 0, 0, 0, 0, 0, 0]; // Mon..Sun
 
-      if (activities && activities.length > 0) {
-        activities.forEach((activity) => {
-          if (!activity.created_at) return;
-          const activityDate = new Date(activity.created_at);
-          if (isNaN(activityDate.getTime())) return;
-          const dayIndex = activityDate.getDay();
-          const pagesRead = activity.pages_read || 0;
-          weekData[dayIndex] += pagesRead;
-        });
+      for (const a of activities ?? []) {
+        if (!a.created_at) continue;
+
+        const d = new Date(a.created_at);
+
+        // Convert to "Monday-based" index (Mon=0 ... Sun=6)
+        const js = d.getDay(); // Sun=0..Sat=6
+        const idx = (js + 6) % 7;
+
+        weekData[idx] += Number(a.pages_read) || 0;
       }
 
-      setWeeklyActivity([...weekData]);
-    } catch (err: any) {
-      console.error('[loadWeeklyActivity] Unexpected error:', err);
-      // Fallback: set empty activity data and continue render
+      setWeeklyActivity(weekData);
+    } catch (e) {
+      console.error('[loadWeeklyActivity] Unexpected:', e);
       setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
     }
   };
@@ -365,10 +355,50 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     await signOut();
   };
 
+  const formatInterestTag = (tag: string): { label: string; tone?: 'default' | 'accent' } => {
+    const raw = (tag || '').trim();
+    if (!raw) return { label: '' };
+
+    const cleanSpaces = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+    // goal:1_books_month  -> Objectif: 1 livre/mois
+    if (/^goal:/i.test(raw)) {
+      const v = raw.replace(/^goal:/i, '').trim(); // "1_books_month"
+      const m = v.match(/^(\d+)_books?_month$/i);
+      if (m) {
+        const n = Number(m[1]);
+        return { label: `Objectif: ${n} ${n === 1 ? 'livre' : 'livres'}/mois`, tone: 'accent' };
+      }
+      return { label: 'Objectif', tone: 'accent' };
+    }
+
+    // Niveau: restarting / level: beginner
+    if (/^(niveau|level)\s*:/i.test(raw)) {
+      const v = raw.replace(/^(niveau|level)\s*:/i, '').trim().toLowerCase();
+      const map: Record<string, string> = {
+        restarting: 'Débutant',
+        beginner: 'Débutant',
+        intermediate: 'Intermédiaire',
+        advanced: 'Avancé',
+      };
+      return { label: `Niveau: ${map[v] || v.charAt(0).toUpperCase() + v.slice(1)}`, tone: 'default' };
+    }
+
+    // generic cleanup
+    let label = raw.replace(/[_-]+/g, ' ');
+    label = cleanSpaces(label);
+    label = label.charAt(0).toUpperCase() + label.slice(1);
+
+    // truncate hard (avoid huge pills)
+    if (label.length > 22) label = label.slice(0, 21) + '…';
+
+    return { label, tone: 'default' };
+  };
+
   if (loading || !profile) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background-light">
-        <div className="text-text-sub-light">Chargement du profil...</div>
+        <div className="text-text-sub-light">{t('common.loadingProfile')}</div>
       </div>
     );
   }
@@ -377,7 +407,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     return (
       <div className="max-w-2xl mx-auto">
         <AppHeader
-          title="Retour au profil"
+          title={t('common.backToProfile')}
           showBack
           onBack={() => {
             setShowClubs(false);
@@ -394,20 +424,20 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   return (
     <div className="max-w-2xl mx-auto">
       <AppHeader
-        title="Profil"
+        title={t('profile.title')}
         rightActions={
           <>
             <button
               onClick={() => setShowSearchUsers(true)}
               className="p-2 hover:bg-black/5 rounded-full transition-colors"
-              title="Ajouter des amis"
+              title={t('profile.followers')}
             >
               <UserPlus className="w-5 h-5 text-text-sub-light" />
             </button>
             <button
               onClick={() => setShowNotifications(true)}
               className="p-2 hover:bg-black/5 rounded-full transition-colors relative"
-              title="Notifications"
+              title={t('common.notifications')}
             >
               <Bell className="w-5 h-5 text-text-sub-light" />
               {unreadNotificationsCount > 0 && (
@@ -419,7 +449,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             <button
               onClick={handleSignOut}
               className="p-2 hover:bg-black/5 rounded-full transition-colors"
-              title="Se déconnecter"
+              title={t('common.signOut')}
             >
               <LogOut className="w-5 h-5 text-text-sub-light" />
             </button>
@@ -454,14 +484,21 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               className="flex items-center gap-2 px-6 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
             >
               <Edit className="w-4 h-4" />
-              Modifier le profil
+              {t('profile.edit')}
             </button>
             <button
               onClick={() => setShowNotificationSettings(true)}
               className="flex items-center gap-2 px-4 py-2.5 bg-card-light border-2 border-gray-200 text-text-main-light rounded-xl hover:bg-gray-50 transition-colors font-medium"
-              title="Paramètres de notifications"
+              title={t('common.settings')}
             >
               <Settings className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowLanguageSelector(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-card-light border-2 border-gray-200 text-text-main-light rounded-xl hover:bg-gray-50 transition-colors font-medium"
+              title={t('onboarding.language.title')}
+            >
+              <Globe className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -472,7 +509,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
           >
             <p className="text-2xl font-bold leading-none text-text-main-light">{stats.followers}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Abonnés</p>
+            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.followers')}</p>
           </button>
 
           <button
@@ -480,7 +517,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
           >
             <p className="text-2xl font-bold leading-none text-text-main-light">{stats.following}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Suivis</p>
+            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.following')}</p>
           </button>
 
           <button
@@ -488,7 +525,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
           >
             <p className="text-2xl font-bold leading-none text-text-main-light">{stats.books}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Livres</p>
+            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.booksShort')}</p>
           </button>
 
           <button
@@ -496,7 +533,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
           >
             <p className="text-2xl font-bold leading-none text-text-main-light">{stats.likes}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Aimés</p>
+            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.likedBooks')}</p>
           </button>
 
           <div className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-primary text-black border border-primary shadow-md relative overflow-hidden aspect-square">
@@ -504,7 +541,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               <Flame className="w-16 h-16" />
             </div>
             <p className="text-2xl font-bold leading-none relative z-10">{profile.current_streak}</p>
-            <p className="text-[10px] text-black/70 font-bold relative z-10 text-center">Série</p>
+            <p className="text-[10px] text-black/70 font-bold relative z-10 text-center">{t('profile.streak')}</p>
           </div>
         </div>
 
@@ -512,81 +549,76 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
           <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
             <div className="flex items-center gap-2 text-text-sub-light mb-1">
               <BookOpen className="w-5 h-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Pages</p>
+              <p className="text-xs font-bold uppercase tracking-wide">{t('profile.pages')}</p>
             </div>
             <p className="text-3xl font-bold leading-none text-text-main-light">
               {(profile.total_pages_read / 1000).toFixed(1)}k
             </p>
-            <p className="text-xs text-text-sub-light">Total lues</p>
+            <p className="text-xs text-text-sub-light">{t('profile.totalRead')}</p>
           </div>
 
           <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
             <div className="flex items-center gap-2 text-text-sub-light mb-1">
               <Clock className="w-5 h-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Heures</p>
+              <p className="text-xs font-bold uppercase tracking-wide">{t('profile.hours')}</p>
             </div>
             <p className="text-3xl font-bold leading-none text-text-main-light">{profile.total_hours_logged}</p>
-            <p className="text-xs text-text-sub-light">Temps passé</p>
+            <p className="text-xs text-text-sub-light">{t('profile.timeSpent')}</p>
           </div>
         </div>
 
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4 px-1">
-            <h4 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">Activité hebdomadaire</h4>
-            <span className="text-xs font-medium bg-gray-100 px-2 py-1 rounded text-gray-600">
-              {weeklyActivity.reduce((a, b) => a + b, 0)} Pages
+        <div className="mb-5">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-text-sub-light">
+              {t('profile.weeklyActivity')}
+            </h4>
+            <span className="text-xs font-semibold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">
+              {weeklyActivity.reduce((a, b) => a + b, 0)} {t('library.pages')}
             </span>
           </div>
-          <div className="bg-card-light p-6 rounded-2xl border border-gray-200 shadow-sm">
-            <div className="flex gap-4">
-              <div className="flex flex-col justify-between h-40 py-1">
-                {(() => {
-                  const maxPages = Math.max(...weeklyActivity, 10);
-                  const step = Math.ceil(maxPages / 4);
-                  const yLabels = [step * 4, step * 3, step * 2, step, 0];
-                  console.log('Rendering chart - weeklyActivity:', weeklyActivity, 'maxPages:', maxPages);
-                  return yLabels.map((value, idx) => (
-                    <span key={idx} className="text-[10px] text-gray-400 font-medium">{value}</span>
-                  ));
-                })()}
-              </div>
 
-              <div className="flex-1 flex items-end justify-between h-40 gap-2">
-                {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map((day, index) => {
-                  const maxPages = Math.max(...weeklyActivity, 10);
-                  const pages = weeklyActivity[index];
-                  const heightPercent = maxPages > 0 ? (pages / maxPages) * 100 : 0;
-                  console.log(`Day ${day} (${index}): pages=${pages}, height=${heightPercent}%`);
-                  const today = new Date().getDay();
-                  const isToday = index === today;
+          <div className="bg-card-light px-4 py-4 rounded-2xl border border-gray-200 shadow-sm">
+            <div className="flex items-end justify-between gap-2">
+              {(() => {
+                const maxPages = Math.max(...weeklyActivity, 10);
+                const dayShort = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+
+                return weeklyActivity.map((pages, index) => {
+                  const height = Math.round((pages / maxPages) * 100);
+
+                  const isToday = (() => {
+                    const today = new Date();
+                    const todayIdx = (today.getDay() + 6) % 7;
+                    return index === todayIdx;
+                  })();
 
                   return (
-                    <div key={index} className="flex flex-col items-center gap-2 flex-1 group">
-                      <div className="w-full bg-gray-100 rounded-t-lg relative h-full flex items-end overflow-hidden">
-                        {pages > 0 ? (
-                          <div
-                            className={`w-full rounded-t-lg transition-all duration-300 relative ${
-                              isToday
-                                ? 'bg-primary shadow-[0_0_15px_rgba(249,245,6,0.4)]'
-                                : 'bg-primary/60 group-hover:bg-primary'
-                            }`}
-                            style={{ height: `${Math.max(heightPercent, 10)}%` }}
-                          >
-                            <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-bold text-text-main-light opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-white px-2 py-0.5 rounded shadow-sm">
-                              {pages}p
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="w-full h-1 bg-gray-200 rounded-t-lg"></div>
-                        )}
+                    <div key={index} className="flex flex-col items-center gap-2 flex-1">
+                      {/* Barre */}
+                      <div className="w-full h-24 bg-gray-100 rounded-xl flex items-end overflow-hidden">
+                        <div
+                          className={`w-full transition-all duration-500 ${isToday ? 'bg-primary' : 'bg-primary/50'}`}
+                          style={{
+                            height: pages > 0 ? `${Math.max(height, 10)}%` : '6px',
+                          }}
+                          title={`${pages} pages`}
+                        />
                       </div>
-                      <span className={`text-[10px] font-bold uppercase ${isToday ? 'text-text-main-light' : 'text-gray-400'}`}>
-                        {day}
-                      </span>
+
+                      {/* Label */}
+                      <div className="flex flex-col items-center leading-none">
+                        <span className={`text-[10px] font-bold uppercase ${isToday ? 'text-text-main-light' : 'text-gray-400'}`}>
+                          {dayShort[index]}
+                        </span>
+                        {/* petit chiffre optionnel en dessous (super lisible) */}
+                        <span className="text-[10px] text-gray-400 font-medium mt-1">
+                          {pages || ''}
+                        </span>
+                      </div>
                     </div>
                   );
-                })}
-              </div>
+                });
+              })()}
             </div>
           </div>
         </div>
@@ -603,19 +635,27 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                     return null;
                   }
                   const progress = (book.total_pages && book.total_pages > 0) ? Math.round((item.current_page / book.total_pages) * 100) : 0;
+                  
+                  // Extract ISBN for BookCover fallback
+                  const rawIsbn = (book.isbn || '').replace(/[-\s]/g, '');
+                  const isbn13 = rawIsbn.length === 13 ? rawIsbn : undefined;
+                  const isbn10 = rawIsbn.length === 10 ? rawIsbn : undefined;
+                  
                   return (
                     <button
                       key={book.id}
-                      onClick={() => setSelectedBookId(book.id)}
+                      onClick={() => setSelectedUserBook(item)}
                       className="flex flex-col items-center shrink-0"
                       style={{ width: '64px' }}
                     >
                       <div className="relative w-16 h-24 mb-2 rounded-lg overflow-hidden shadow-md group cursor-pointer hover:shadow-xl transition-shadow">
                         <BookCover
-                          coverUrl={book.cover_url}
+                          coverUrl={book.cover_url || undefined}
                           title={book.title}
                           author={book.author || 'Auteur inconnu'}
                           className="w-full h-full"
+                          isbn13={isbn13}
+                          isbn10={isbn10}
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-end p-2">
                           <div className="text-white text-xs font-bold mb-1">{progress}%</div>
@@ -638,13 +678,13 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
         <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">Livres aimés</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">{t('profile.likedBooksTitle')}</h2>
             {likedBooks.length > 8 && (
               <button
                 onClick={() => setShowAllLikedBooks(true)}
                 className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
               >
-                Voir plus
+                {t('common.viewMore')}
               </button>
             )}
           </div>
@@ -652,7 +692,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
           {likedBooks.length === 0 ? (
             <div className="text-center py-8">
               <BookOpen className="w-12 h-12 mx-auto mb-3 text-text-sub-light opacity-50" />
-              <p className="text-sm text-text-sub-light">Aucun livre aimé pour l'instant</p>
+              <p className="text-sm text-text-sub-light">{t('profile.noLikedBooksYet')}</p>
             </div>
           ) : (
             <div className="grid grid-cols-4 gap-3">
@@ -710,7 +750,6 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                         isbn13,
                         isbn10,
                       };
-                      console.log('[Profile] Opening liked book modal:', bookObj);
                       setSelectedLikedBook(bookObj);
                     }}
                     className="flex flex-col items-center"
@@ -734,17 +773,45 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
         {profile.interests && profile.interests.length > 0 && (
           <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light mb-3">Centres d'intérêt</h2>
-            <div className="flex flex-wrap gap-2">
-              {profile.interests.map((interest: string) => (
-                <span
-                  key={interest}
-                  className="px-3 py-1.5 bg-gray-100 text-text-main-light rounded-lg text-sm font-medium"
-                >
-                  {interest}
-                </span>
-              ))}
-            </div>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light mb-3">
+              {t('profile.interests')}
+            </h2>
+
+            {(() => {
+              const interests: string[] = Array.isArray(profile.interests) ? profile.interests : [];
+              const shown = interests.slice(0, 6);
+              const extra = Math.max(0, interests.length - shown.length);
+
+              return (
+                <div className="flex flex-wrap gap-2">
+                  {shown.map((interest: string) => {
+                    const ft = formatInterestTag(interest);
+                    const isAccent = ft.tone === 'accent';
+
+                    return (
+                      <span
+                        key={interest}
+                        className={[
+                          "px-3 py-1.5 rounded-full text-xs font-semibold border max-w-full truncate",
+                          isAccent
+                            ? "bg-primary/20 border-primary/30 text-text-main-light"
+                            : "bg-gray-100 border-gray-200 text-text-main-light",
+                        ].join(' ')}
+                        title={interest}
+                      >
+                        {ft.label}
+                      </span>
+                    );
+                  })}
+
+                  {extra > 0 && (
+                    <span className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-100 border-gray-200 text-text-main-light">
+                      +{extra}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -758,9 +825,9 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                 <Users className="w-6 h-6 text-lime-800" />
               </div>
               <div className="text-left">
-                <h3 className="font-bold text-text-main-light mb-0.5">Mes clubs</h3>
+                <h3 className="font-bold text-text-main-light mb-0.5">{t('profile.myClubs')}</h3>
                 <p className="text-sm text-text-sub-light">
-                  {clubCount === 0 ? 'Rejoignez des clubs de lecture' : `${clubCount} club${clubCount !== 1 ? 's' : ''}`}
+                  {clubCount === 0 ? t('profile.joinReadingClubs') : `${clubCount} club${clubCount !== 1 ? 's' : ''}`}
                 </p>
               </div>
             </div>
@@ -799,24 +866,36 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         <NotificationSettingsModal onClose={() => setShowNotificationSettings(false)} />
       )}
 
+      {showLanguageSelector && (
+        <LanguageSelectorModal
+          onClose={() => setShowLanguageSelector(false)}
+          onLanguageChange={async (lang: 'fr' | 'en') => {
+            // Use centralized function (single source of truth)
+            await setAppLanguage(lang);
+            setShowLanguageSelector(false);
+          }}
+        />
+      )}
+
       {showSearchUsers && (
         <SearchUsersModal 
           onClose={() => {
             setShowSearchUsers(false);
           }}
           onUserClick={(userId) => {
-            console.log('Clic sur profil:', userId);
             setShowSearchUsers(false);
             setViewingUserId(userId);
           }}
         />
       )}
 
-      {selectedBookId && (
+      {selectedUserBook?.book?.id && (
         <BookDetailsWithManagement
-          bookId={selectedBookId}
+          bookId={selectedUserBook.book.id}
+          userBookId={selectedUserBook.id}
+          currentPage={selectedUserBook.current_page || 0}
           onClose={() => {
-            setSelectedBookId(null);
+            setSelectedUserBook(null);
             loadCurrentlyReading();
             loadStats();
           }}
@@ -834,7 +913,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         <div className="fixed inset-0 bg-background-light z-[200] overflow-y-auto">
           <div className="max-w-2xl mx-auto">
             <AppHeader
-              title="Tous les livres aimés"
+              title={t('profile.allLikedBooks')}
               showBack
               onBack={() => setShowAllLikedBooks(false)}
             />
@@ -842,8 +921,8 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               {likedBooks.length === 0 ? (
                 <div className="text-center py-12">
                   <BookOpen className="w-16 h-16 mx-auto mb-4 text-text-sub-light opacity-50" />
-                  <p className="text-lg font-medium text-text-main-light mb-2">Aucun livre aimé</p>
-                  <p className="text-sm text-text-sub-light">Commencez à liker des livres pour les voir ici</p>
+                  <p className="text-lg font-medium text-text-main-light mb-2">{t('profile.noLikedBooks')}</p>
+                  <p className="text-sm text-text-sub-light">{t('profile.startLikingBooks')}</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-4 gap-3">
@@ -901,7 +980,6 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                             isbn13,
                             isbn10,
                           };
-                          console.log('[Profile] Opening liked book modal (all):', bookObj);
                           setSelectedLikedBook(bookObj);
                           setShowAllLikedBooks(false);
                         }}

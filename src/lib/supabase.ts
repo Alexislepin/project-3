@@ -1,15 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
 import { debugLog, fatalError } from '../utils/logger';
 
-// Support both VITE_ and NEXT_PUBLIC_ prefixes for compatibility
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
+// Use Legacy anon key (JWT) - NOT the new sb_publishable_ keys
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY; // Legacy anon key (JWT format: eyJ...)
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY)');
+  throw new Error('Missing Supabase environment variables. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (Legacy anon key, JWT format)');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Create Supabase client with proper configuration
+// This client automatically adds Authorization (Bearer token) and apikey headers to all requests
+// The apikey header is always added, even for unauthenticated requests
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+  },
+  // Ensure apikey header is always sent (Supabase client should do this automatically, but we're being explicit)
+  global: {
+    headers: {
+      'apikey': supabaseAnonKey,
+    },
+  },
+});
 
 // Check au démarrage (dev only)
 if (import.meta.env.DEV) {

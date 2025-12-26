@@ -7,6 +7,7 @@ import { FollowingModal } from './FollowingModal';
 import { UserLibraryView } from './UserLibraryView';
 import { BookCover } from './BookCover';
 import { BookDetailsModal } from './BookDetailsModal';
+import { BookDetailsWithManagement } from './BookDetailsWithManagement';
 import { AppHeader } from './AppHeader';
 
 interface UserProfileViewProps {
@@ -28,6 +29,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
   const [readingPreviewBooks, setReadingPreviewBooks] = useState<any[]>([]);
   const [likedPreviewBooks, setLikedPreviewBooks] = useState<any[]>([]);
   const [selectedBook, setSelectedBook] = useState<any | null>(null);
+  const [selectedUserBook, setSelectedUserBook] = useState<any | null>(null);
   const { user } = useAuth();
 
   const handleUserClick = (clickedUserId: string) => {
@@ -165,7 +167,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       .from('activity_events')
       .select('book_key')
       .eq('actor_id', userId)
-      .eq('event_type', 'like');
+      .eq('event_type', 'book_like');
 
     let likedCount = 0;
     if (likedEvents && likedEvents.length > 0) {
@@ -190,32 +192,15 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     // Load reading preview (max 8)
     const { data: readingBooks } = await supabase
       .from('user_books')
-      .select('book_id, book:books(id, title, author, cover_url, isbn)')
+      .select('id, book_id, current_page, book:books(id, title, author, cover_url, isbn, total_pages)')
       .eq('user_id', userId)
       .eq('status', 'reading')
       .order('updated_at', { ascending: false })
       .limit(8);
 
     if (readingBooks && readingBooks.length > 0) {
-      // Use book data directly - construct book_key from id or isbn
-      const previewData = readingBooks
-        .map((ub: any) => {
-          if (ub.book) {
-            // Construct book_key: prefer isbn, else use id
-            const bookKey = ub.book.isbn ? `isbn:${ub.book.isbn}` : ub.book.id;
-            return {
-              book_key: bookKey,
-              title: ub.book.title,
-              author: ub.book.author,
-              cover_url: ub.book.cover_url,
-            };
-          }
-          return null;
-        })
-        .filter(Boolean)
-        .slice(0, 8);
-
-      setReadingPreviewBooks(previewData);
+      // Store full user_book data for modal
+      setReadingPreviewBooks(readingBooks);
     } else {
       setReadingPreviewBooks([]);
     }
@@ -225,7 +210,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       .from('activity_events')
       .select('book_key')
       .eq('actor_id', userId)
-      .eq('event_type', 'like')
+      .eq('event_type', 'book_like')
       .order('created_at', { ascending: false })
       .limit(8);
 
@@ -489,30 +474,28 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
               </button>
             </div>
             <div className="grid grid-cols-4 gap-3">
-              {readingPreviewBooks.slice(0, 8).map((book) => (
-                <button
-                  key={book.book_key}
-                  onClick={() => {
-                    setSelectedBook({
-                      id: book.book_key,
-                      title: book.title || 'Titre inconnu',
-                      author: book.author || 'Auteur inconnu',
-                      cover_url: book.cover_url || null,
-                      thumbnail: book.cover_url || null,
-                    });
-                  }}
-                  className="flex flex-col items-center"
-                >
-                  <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
-                    <BookCover
-                      coverUrl={book.cover_url}
-                      title={book.title || ''}
-                      author={book.author || ''}
-                      className="w-full h-full"
-                    />
-                  </div>
-                </button>
-              ))}
+              {readingPreviewBooks.slice(0, 8).map((userBook) => {
+                const book = userBook.book;
+                if (!book) return null;
+                return (
+                  <button
+                    key={userBook.id}
+                    onClick={() => {
+                      setSelectedUserBook(userBook);
+                    }}
+                    className="flex flex-col items-center"
+                  >
+                    <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
+                      <BookCover
+                        coverUrl={book.cover_url}
+                        title={book.title || ''}
+                        author={book.author || ''}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -603,6 +586,18 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
           <BookDetailsModal
             book={selectedBook}
             onClose={() => setSelectedBook(null)}
+          />
+        )}
+
+        {selectedUserBook?.book?.id && (
+          <BookDetailsWithManagement
+            bookId={selectedUserBook.book.id}
+            userBookId={selectedUserBook.id}
+            currentPage={selectedUserBook.current_page || 0}
+            onClose={() => {
+              setSelectedUserBook(null);
+              loadPreviewBooks();
+            }}
           />
         )}
       </div>

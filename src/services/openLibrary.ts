@@ -595,4 +595,168 @@ export async function fetchByIsbn(isbn: string): Promise<{
   }
 }
 
+/**
+ * Fetch description from OpenLibrary Work API
+ * @param workKey OpenLibrary work key (e.g., "/works/OL123456W" or "OL123456W")
+ * @returns Description text or null
+ */
+export async function fetchWorkDescription(workKey: string): Promise<string | null> {
+  if (!workKey) return null;
+
+  try {
+    // Normalize work key: ensure it starts with /works/
+    let normalizedKey = workKey.trim();
+    if (!normalizedKey.startsWith('/works/')) {
+      if (normalizedKey.startsWith('OL') && normalizedKey.endsWith('W')) {
+        normalizedKey = `/works/${normalizedKey}`;
+      } else if (normalizedKey.startsWith('/')) {
+        normalizedKey = `/works${normalizedKey}`;
+      } else {
+        normalizedKey = `/works/${normalizedKey}`;
+      }
+    }
+
+    const url = `https://openlibrary.org${normalizedKey}.json`;
+    if (isDev) {
+      debugLog(`[OpenLibrary] Fetching work description: ${url}`);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (isDev) {
+        debugLog(`[OpenLibrary] Work API error (${response.status}) for ${normalizedKey}`);
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    // OpenLibrary work description can be in 'description' field (string or object with 'value')
+    let description: string | null = null;
+    
+    if (typeof data.description === 'string') {
+      description = data.description.trim();
+    } else if (data.description && typeof data.description === 'object' && data.description.value) {
+      description = String(data.description.value).trim();
+    }
+
+    // Clean HTML tags if present
+    if (description) {
+      description = description.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    return description && description.length > 0 ? description : null;
+  } catch (error) {
+    if (isDev) {
+      debugLog(`[OpenLibrary] Error fetching work description for ${workKey}:`, error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Fetch description from OpenLibrary Edition API
+ * @param editionKey OpenLibrary edition key (e.g., "/books/OL123456M" or "OL123456M")
+ * @returns Description text or null
+ */
+export async function fetchEditionDescription(editionKey: string): Promise<string | null> {
+  if (!editionKey) return null;
+
+  try {
+    // Normalize edition key: ensure it starts with /books/
+    let normalizedKey = editionKey.trim();
+    if (!normalizedKey.startsWith('/books/')) {
+      if (normalizedKey.startsWith('OL') && normalizedKey.endsWith('M')) {
+        normalizedKey = `/books/${normalizedKey}`;
+      } else if (normalizedKey.startsWith('/')) {
+        normalizedKey = `/books${normalizedKey}`;
+      } else {
+        normalizedKey = `/books/${normalizedKey}`;
+      }
+    }
+
+    const url = `https://openlibrary.org${normalizedKey}.json`;
+    if (isDev) {
+      debugLog(`[OpenLibrary] Fetching edition description: ${url}`);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (isDev) {
+        debugLog(`[OpenLibrary] Edition API error (${response.status}) for ${normalizedKey}`);
+      }
+      return null;
+    }
+
+    const data = await response.json();
+    // OpenLibrary edition description can be in 'description' field
+    let description: string | null = null;
+    
+    if (typeof data.description === 'string') {
+      description = data.description.trim();
+    } else if (data.description && typeof data.description === 'object' && data.description.value) {
+      description = String(data.description.value).trim();
+    }
+
+    // Clean HTML tags if present
+    if (description) {
+      description = description.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    return description && description.length > 0 ? description : null;
+  } catch (error) {
+    if (isDev) {
+      debugLog(`[OpenLibrary] Error fetching edition description for ${editionKey}:`, error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Generate a fallback mini-summary when no description is available
+ * @param book Book object with title, author, total_pages, category/genre, etc.
+ * @returns Generated mini-summary text
+ */
+export function generateFallbackSummary(book: {
+  title?: string;
+  author?: string;
+  authors?: string;
+  total_pages?: number | null;
+  pageCount?: number;
+  category?: string;
+  genre?: string;
+  firstPublishYear?: number;
+  publishedDate?: string;
+}): string {
+  const author = book.author || book.authors || 'un auteur';
+  const pages = book.total_pages || book.pageCount;
+  const year = book.firstPublishYear || (book.publishedDate ? new Date(book.publishedDate).getFullYear() : null);
+  const category = book.category || book.genre;
+
+  const parts: string[] = [];
+  
+  // Type de livre
+  if (category) {
+    parts.push(`Roman de ${author}`);
+  } else {
+    parts.push(`Livre de ${author}`);
+  }
+
+  // Année de publication
+  if (year) {
+    parts.push(`publié en ${year}`);
+  }
+
+  // Pages
+  if (pages) {
+    parts.push(`environ ${pages} pages`);
+  }
+
+  // Thèmes/catégories
+  if (category) {
+    parts.push(`thèmes: ${category}`);
+  }
+
+  return parts.join(', ') + '.';
+}
+
 

@@ -71,6 +71,35 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
 
   const google_books_id = book?.google_books_id || book?.googleBooksId || book?.volumeInfo?.id || null;
 
+  // Extract OpenLibrary keys for description fetching
+  let openlibrary_work_key: string | null = null;
+  let openlibrary_edition_key: string | null = null;
+  
+  // Extract from various formats
+  if (book?.openLibraryKey || book?.openlibrary_key || book?.openLibraryWorkKey) {
+    const key = book?.openLibraryKey || book?.openlibrary_key || book?.openLibraryWorkKey;
+    if (typeof key === 'string') {
+      // Normalize: /works/OL123456W or works/OL123456W -> /works/OL123456W
+      if (key.includes('/works/')) {
+        openlibrary_work_key = key.startsWith('/') ? key : `/${key}`;
+      } else if (key.includes('/books/')) {
+        openlibrary_edition_key = key.startsWith('/') ? key : `/${key}`;
+      } else if (key.startsWith('OL') && key.endsWith('W')) {
+        openlibrary_work_key = `/works/${key}`;
+      } else if (key.startsWith('OL') && key.endsWith('M')) {
+        openlibrary_edition_key = `/books/${key}`;
+      }
+    }
+  }
+  
+  // Also check if we have work key from fetchByIsbn result
+  if (book?.openLibraryWorkKey) {
+    const workKey = book.openLibraryWorkKey;
+    if (typeof workKey === 'string' && workKey.includes('/works/')) {
+      openlibrary_work_key = workKey.startsWith('/') ? workKey : `/${workKey}`;
+    }
+  }
+
   // Extract total_pages: prefer existing, then pageCount, then volumeInfo.pageCount
   // IMPORTANT: Only set if > 0, otherwise null (not 0)
   const total_pages = 
@@ -104,6 +133,14 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
         total_pages,
         google_books_id,
       };
+
+      // Update OpenLibrary keys if available (don't overwrite existing with null)
+      if (openlibrary_work_key) {
+        updateData.openlibrary_work_key = openlibrary_work_key;
+      }
+      if (openlibrary_edition_key) {
+        updateData.openlibrary_edition_key = openlibrary_edition_key;
+      }
 
       // IMPORTANT: n'écrase jamais la cover par null
       if (finalCoverUrl) {
@@ -144,6 +181,14 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
       google_books_id,
     };
 
+    // Update OpenLibrary keys if available (don't overwrite existing with null)
+    if (openlibrary_work_key) {
+      updateData.openlibrary_work_key = openlibrary_work_key;
+    }
+    if (openlibrary_edition_key) {
+      updateData.openlibrary_edition_key = openlibrary_edition_key;
+    }
+
     if (finalCoverUrl) {
       updateData.cover_url = finalCoverUrl;
     }
@@ -178,6 +223,8 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
           cover_url: finalCoverUrl,
           description,
           isbn: cleanIsbn || null,
+          openlibrary_work_key: openlibrary_work_key || null,
+          openlibrary_edition_key: openlibrary_edition_key || null,
         },
         {
           onConflict: cleanIsbn ? 'isbn' : undefined,

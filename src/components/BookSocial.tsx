@@ -1,9 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Heart, Send, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { getBookKey } from '../lib/bookSocial';
+import { canonicalBookKey, candidateBookKeysFromBook } from '../lib/bookSocial';
+import { ensureBookInDB } from '../lib/booksUpsert';
+
+// Helper to check if a string is a UUID
+function isUuid(v?: string | null): boolean {
+  if (!v) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+}
 import { socialEvents } from '../lib/events';
+import { normalizeEventType } from '../lib/activityEvents';
 
 // Throttle anti-spam pour activity_events (évite inserts multiples < 400ms)
 const activityEventsThrottle = new Map<string, number>();
@@ -13,8 +21,8 @@ const ACTIVITY_EVENTS_THROTTLE_MS = 400;
  * Helper function to upsert book into books_cache
  * Extracts title, author, cover_url, isbn, source from book object
  */
-async function upsertBookCache(bookKey: string, book: any) {
-  if (!bookKey || bookKey === 'unknown' || !book) return;
+async function upsertBookCache(stableBookKey: string, book: any) {
+  if (!stableBookKey || stableBookKey === 'unknown' || !book) return;
 
   try {
     const title = book.title || 'Titre inconnu';
@@ -26,7 +34,7 @@ async function upsertBookCache(bookKey: string, book: any) {
     await supabase
       .from('books_cache')
       .upsert({
-        book_key: bookKey,
+        book_key: stableBookKey,
         title,
         author,
         cover_url: coverUrl,
@@ -73,12 +81,6 @@ interface Comment {
   } | null;
 }
 
-interface BookSocialProps {
-  bookId?: string; // book.id (OpenLibrary id 'ol:/works/...') ou book.key
-  book?: any; // Objet book complet (optionnel, pour utiliser getBookKey)
-  focusComment?: boolean; // Auto-focus comment input when true
-}
-
 export function BookSocial({ bookId, book, focusComment = false }: BookSocialProps) {
   const { user } = useAuth();
   const [likes, setLikes] = useState<Like[]>([]);
@@ -89,9 +91,34 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
   const [submittingComment, setSubmittingComment] = useState(false);
   const commentInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Calculer bookKey: utiliser book si fourni, sinon bookId
-  // bookKey = book.id || book.key || `isbn:${isbn13||isbn10||isbn}` || `t:${title}|a:${author}` (always non-empty)
-  const bookKey = book ? getBookKey(book) : (bookId ? getBookKey(bookId) : null);
+  // UNE SEULE variable stable pour toutes les opérations (likes, comments, activity_events)
+  // Calculée UNE SEULE FOIS avec canonicalBookKey pour éviter les doubles calculs
+  const stableBookKey = useMemo(() => {
+    if (book) {
+      return canonicalBookKey(book);
+    }
+    if (bookId) {
+      return canonicalBookKey({ id: bookId });
+    }
+    return 'unknown';
+  }, [book, bookId]);
+  
+  // Alias pour compatibilité (bookKey = stableBookKey)
+  const bookKey = stableBookKey;
+
+  // Helper function to dispatch global event for Explorer synchronization
+  const dispatchCountsChanged = useCallback((likesCount: number, commentsCount: number, isLikedByMe: boolean) => {
+    if (bookKey && bookKey !== 'unknown') {
+      window.dispatchEvent(new CustomEvent('book-social-counts-changed', {
+        detail: {
+          bookKey,
+          likes: likesCount,
+          comments: commentsCount,
+          isLiked: isLikedByMe,
+        },
+      }));
+    }
+  }, [bookKey]);
 
   // Si bookKey est absent ou 'unknown', ne rien afficher
   if (!bookKey || bookKey === 'unknown') {
@@ -109,20 +136,34 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
 
     const loadAll = async () => {
       try {
-        await Promise.all([loadLikes(), loadComments()]);
+        // Charger likes et comments en parallèle et récupérer les résultats
+        const [likesResult, commentsResult] = await Promise.all([
+          loadLikes(),
+          loadComments(),
+        ]);
+
+        // Dispatch UNE SEULE FOIS avec les vraies valeurs (pas stale)
+        if (likesResult && commentsResult) {
+          dispatchCountsChanged(
+            likesResult.likesCount,
+            commentsResult.commentsCount,
+            likesResult.isLikedByMe
+          );
+        }
       } catch (error) {
         console.error('Error loading social data:', error);
         // En cas d'erreur, arrêter le loading quand même
         setLikes([]);
         setComments([]);
         setIsLiked(false);
+        dispatchCountsChanged(0, 0, false);
       } finally {
         setLoading(false);
       }
     };
 
     loadAll();
-  }, [bookKey, user?.id]);
+  }, [bookKey, user?.id, dispatchCountsChanged]);
 
   // Auto-focus comment input if focusComment is true
   useEffect(() => {
@@ -133,15 +174,16 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
     }
   }, [focusComment, loading]);
 
-  const loadLikes = async () => {
-    if (!bookKey || bookKey === 'unknown') return;
+  const loadLikes = async (): Promise<{ likesCount: number; isLikedByMe: boolean } | null> => {
+    if (!bookKey || bookKey === 'unknown') return null;
 
     try {
-      // Charger likes: filter on book_key (NO book_id)
+      // Charger likes: filter on book_key with candidate keys (supports legacy format)
+      const candidateKeys = candidateBookKeysFromBook(book ?? bookKey, bookId);
       const { data: likesData, error: likesError } = await supabase
         .from('book_likes')
         .select('*')
-        .eq('book_key', bookKey)
+        .in('book_key', candidateKeys)
         .order('created_at', { ascending: false });
 
       if (likesError) {
@@ -154,13 +196,13 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
         });
         setLikes([]);
         setIsLiked(false);
-        return;
+        return { likesCount: 0, isLikedByMe: false };
       }
 
       if (!likesData || likesData.length === 0) {
         setLikes([]);
         setIsLiked(false);
-        return;
+        return { likesCount: 0, isLikedByMe: false };
       }
 
       // Extraire user_ids et charger profils
@@ -186,13 +228,16 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
 
       setLikes(combinedLikes as any);
       // Vérifier si l'utilisateur actuel a liké
-      if (user) {
-        setIsLiked(likesData.some(like => like.user_id === user.id));
-      }
+      const isLikedByMe = user ? likesData.some(like => like.user_id === user.id) : false;
+      setIsLiked(isLikedByMe);
+      
+      // Retourner les valeurs pour dispatch unique dans loadAll
+      return { likesCount: likesData.length, isLikedByMe };
     } catch (error) {
       console.error('Exception loading likes:', error);
       setLikes([]);
       setIsLiked(false);
+      return { likesCount: 0, isLikedByMe: false };
     }
   };
 
@@ -200,11 +245,12 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
     if (!bookKey || bookKey === 'unknown') return;
 
     try {
-      // Charger comments: filter on book_key (NO book_id)
+      // Charger comments: filter on book_key with candidate keys (supports legacy format)
+      const candidateKeys = candidateBookKeysFromBook(book ?? bookKey, bookId);
       const { data: commentsData, error: commentsError } = await supabase
         .from('book_comments')
         .select('*')
-        .eq('book_key', bookKey)
+        .in('book_key', candidateKeys)
         .order('created_at', { ascending: false });
 
       if (commentsError) {
@@ -245,14 +291,35 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
       }));
 
       setComments(combinedComments as any);
+      
+      // Dispatch global event for Explorer synchronization
+      dispatchCountsChanged(likes.length, commentsData.length, isLiked);
     } catch (error) {
       console.error('Exception loading comments:', error);
       setComments([]);
+      // Dispatch event with zero comments on error
+      dispatchCountsChanged(likes.length, 0, isLiked);
     }
   };
 
   const handleToggleLike = async () => {
-    if (!user || !bookKey || bookKey === 'unknown') return;
+    if (!book) return;
+
+    // RÈGLE ABSOLUE: Calculer la clé canonique
+    const bookKey = canonicalBookKey(book);
+    if (!bookKey || bookKey === 'unknown') {
+      console.error('[book_likes] Invalid bookKey');
+      return;
+    }
+
+    // RÈGLE ABSOLUE: S'assurer que le livre existe en DB
+    let bookUuid: string;
+    try {
+      bookUuid = await ensureBookInDB(supabase, book);
+    } catch (error) {
+      console.error('[book_likes] Error ensuring book in DB:', error);
+      return;
+    }
 
     // OPTIMISTIC UPDATE: Mettre à jour l'UI immédiatement
     const wasLiked = isLiked;
@@ -276,31 +343,13 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
     }
 
     try {
-      // Vérifier d'abord si le like existe pour éviter 409 conflict
-      // Filter on book_key (NO book_id)
-      const { data: existingLike, error: checkError } = await supabase
-        .from('book_likes')
-        .select('id')
-        .eq('book_key', bookKey)
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (checkError) {
-        console.error('Error checking like:', checkError);
-        // Rollback en cas d'erreur
-        setIsLiked(wasLiked);
-        setLikes(previousLikes);
-        return;
-      }
-
-      if (existingLike) {
-        // Le like existe -> le supprimer (unlike)
-        // Delete by book_key + user_id (NO book_id)
+      if (wasLiked) {
+        // UNLIKE: Delete from book_likes using book_uuid
         const { error: deleteError } = await supabase
           .from('book_likes')
           .delete()
-          .eq('book_key', bookKey)
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .eq('book_id', bookUuid); // Using book_id as book_uuid
 
         if (deleteError) {
           console.error('Error removing like:', deleteError);
@@ -310,47 +359,49 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
           return;
         }
 
-        // Mise à jour déjà faite (optimistic), juste s'assurer que c'est correct
-        // Le profil n'est pas nécessaire pour unlike
-        
-        // Emit event to refresh counts in Explorer
-        socialEvents.emitSocialChanged(bookKey);
-        
-        // Delete activity event for unlike (fire and forget)
+        // Delete activity_events for this like (using stableBookKey)
+        // Fire and forget - don't block UI
         (async () => {
           try {
-            const { data: { user: currentUser } } = await supabase.auth.getUser();
-            if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
-            
             await supabase
               .from('activity_events')
               .delete()
-              .eq('actor_id', currentUser.id)
-              .eq('event_type', 'like')
-              .eq('book_key', bookKey);
+              .eq('actor_id', user.id)
+              .eq('event_type', normalizeEventType('like'))
+              .eq('book_key', stableBookKey);
           } catch (err: any) {
-            console.warn('[activity_events] delete failed', {
+            console.warn('[activity_events] delete failed on unlike:', {
               message: err?.message,
               code: err?.code,
-              details: err?.details,
-              hint: err?.hint,
+              book_key: stableBookKey,
             });
           }
         })();
+
+        // Emit event to refresh counts in Explorer
+        socialEvents.emitSocialChanged(bookKey);
+        
+        // Dispatch global event for Explorer synchronization
+        dispatchCountsChanged(likes.length - 1, comments.length, false);
       } else {
-        // Le like n'existe pas -> l'ajouter (like)
-        // Insert: { book_key: bookKey, user_id: user.id } (DO NOT send book_id)
-        const { data: newLike, error: insertError } = await supabase
+        // LIKE: UPSERT (never INSERT)
+        // RÈGLE ABSOLUE: Like = UPSERT, jamais INSERT
+        const { data: newLike, error: upsertError } = await supabase
           .from('book_likes')
-          .insert({
-            book_key: bookKey,
-            user_id: user.id,
-          })
+          .upsert(
+            {
+              user_id: user.id,
+              book_key: bookKey,
+              book_id: bookUuid, // Using book_id as book_uuid
+            },
+            { onConflict: 'user_id,book_id' } // Assuming unique constraint on (user_id, book_id)
+          )
           .select('user_id, created_at')
           .single();
 
-        if (insertError) {
-          console.error('Error adding like:', insertError);
+        // Handle upsert errors
+        if (upsertError) {
+          console.error('Error upserting like:', upsertError);
           // Rollback en cas d'erreur
           setIsLiked(wasLiked);
           setLikes(previousLikes);
@@ -381,46 +432,74 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
           // Emit event to refresh counts in Explorer
           socialEvents.emitSocialChanged(bookKey);
           
-          // Upsert books_cache and insert activity event (fire and forget)
+          // Dispatch global event for Explorer synchronization
+          dispatchCountsChanged(likes.length + 1, comments.length, true);
+          
+          // Create activity_events ONLY when like is newly created
+          // Fire and forget - don't block UI
           (async () => {
             try {
-              const { data: { user: currentUser } } = await supabase.auth.getUser();
-              if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
+              const eventType = normalizeEventType('like'); // Returns 'book_like'
               
-              // Throttle anti-spam : vérifier si dernier insert < 400ms
-              const throttleKey = `${bookKey}:like`;
-              const lastInsert = activityEventsThrottle.get(throttleKey);
-              const now = Date.now();
-              if (lastInsert && (now - lastInsert) < ACTIVITY_EVENTS_THROTTLE_MS) {
-                return; // Skip insert si trop récent
+              console.log('[activity_events] Creating event for NEW like:', {
+                event_type: eventType,
+                book_key: bookKey,
+                actor_id: user.id,
+              });
+              
+              const { error: eventError } = await supabase
+                .from('activity_events')
+                .insert({
+                  actor_id: user.id,
+                  event_type: eventType,
+                  book_key: bookKey, // Use canonical bookKey
+                  comment_id: null, // Likes don't have comment_id
+                });
+              
+              // Handle unique constraint violation (idempotent: ignore duplicate errors)
+              if (eventError) {
+                if (eventError.code === '23505' || eventError.message?.includes('unique') || eventError.message?.includes('duplicate')) {
+                  console.log('[activity_events] Event already exists (idempotent), ignoring duplicate');
+                  return; // Success: event already exists, no action needed
+                }
+                // Other errors: log warning
+                console.warn('[activity_events] insert failed on like:', {
+                  message: eventError.message,
+                  code: eventError.code,
+                  details: eventError.details,
+                  hint: eventError.hint,
+                  book_key: bookKey,
+                });
+              } else {
+                console.log('[activity_events] Event created successfully');
               }
-              activityEventsThrottle.set(throttleKey, now);
-              
-              await Promise.all([
-                upsertBookCache(bookKey, book),
-                supabase
-                  .from('activity_events')
-                  .insert({
-                    actor_id: currentUser.id,
-                    event_type: 'like',
-                    book_key: bookKey,
-                    comment_id: null,
-                  }),
-              ]);
             } catch (err: any) {
-              console.warn('[activity_events] insert failed', {
+              // Handle unexpected errors (network, etc.)
+              if (err?.code === '23505' || err?.message?.includes('unique') || err?.message?.includes('duplicate')) {
+                console.log('[activity_events] Event already exists (idempotent), ignoring duplicate');
+                return; // Success: event already exists
+              }
+              console.warn('[activity_events] insert failed on like:', {
                 message: err?.message,
                 code: err?.code,
                 details: err?.details,
                 hint: err?.hint,
+                book_key: bookKey,
               });
             }
           })();
+          
+          // Upsert books_cache (fire and forget)
+          if (book) {
+            upsertBookCache(bookKey, book).catch(err => {
+              console.warn('[books_cache] upsert failed:', err);
+            });
+          }
         }
       }
     } catch (error) {
       console.error('Exception in handleToggleLike:', error);
-      // Rollback en cas d'exception
+      // Rollback en cas d'erreur
       setIsLiked(wasLiked);
       setLikes(previousLikes);
     }
@@ -428,7 +507,23 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
 
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !bookKey || bookKey === 'unknown' || !commentText.trim()) return;
+    if (!user || !book || !commentText.trim()) return;
+
+    // RÈGLE ABSOLUE: Calculer la clé canonique
+    const bookKey = canonicalBookKey(book);
+    if (!bookKey || bookKey === 'unknown') {
+      console.error('[book_comments] Invalid bookKey');
+      return;
+    }
+
+    // RÈGLE ABSOLUE: S'assurer que le livre existe en DB
+    let bookUuid: string;
+    try {
+      bookUuid = await ensureBookInDB(supabase, book);
+    } catch (error) {
+      console.error('[book_comments] Error ensuring book in DB:', error);
+      return;
+    }
 
     const commentContent = commentText.trim();
     
@@ -448,11 +543,18 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
     setSubmittingComment(true);
 
     try {
-      // Insert comment: { book_key: bookKey, user_id: user.id, content } (DO NOT send book_id)
+      console.debug('[book_comments] Inserting comment:', {
+        book_key: bookKey,
+        book_id: bookUuid,
+        user_id: user.id,
+        content_length: commentContent.length,
+      });
+      
       const { data: newComment, error } = await supabase
         .from('book_comments')
         .insert({
-          book_key: bookKey,
+          book_key: bookKey, // CRITICAL: Use canonical bookKey
+          book_id: bookUuid, // Using book_id as book_uuid
           user_id: user.id,
           content: commentContent,
         })
@@ -491,14 +593,19 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
         // Emit event to refresh counts in Explorer
         socialEvents.emitSocialChanged(bookKey);
         
+        // Dispatch global event for Explorer synchronization
+        dispatchCountsChanged(likes.length, comments.length + 1, isLiked);
+        
         // Upsert books_cache and insert activity event (fire and forget)
         (async () => {
           try {
             const { data: { user: currentUser } } = await supabase.auth.getUser();
             if (!currentUser?.id || !bookKey || bookKey === 'unknown' || !newComment?.id) return;
             
+            if (!stableBookKey) return;
+            
             // Throttle anti-spam : vérifier si dernier insert < 400ms
-            const throttleKey = `${bookKey}:comment`;
+            const throttleKey = `${stableBookKey}:comment`;
             const lastInsert = activityEventsThrottle.get(throttleKey);
             const now = Date.now();
             if (lastInsert && (now - lastInsert) < ACTIVITY_EVENTS_THROTTLE_MS) {
@@ -506,14 +613,23 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
             }
             activityEventsThrottle.set(throttleKey, now);
             
+            const eventType = normalizeEventType('comment');
+            
+            console.log('[activity_events] Inserting event:', {
+              event_type: eventType,
+              book_key: stableBookKey,
+              actor_id: currentUser.id,
+              comment_id: newComment.id,
+            });
+            
             await Promise.all([
-              upsertBookCache(bookKey, book),
+              upsertBookCache(stableBookKey, book),
               supabase
                 .from('activity_events')
                 .insert({
                   actor_id: currentUser.id,
-                  event_type: 'comment',
-                  book_key: bookKey,
+                  event_type: eventType,
+                  book_key: stableBookKey,
                   comment_id: newComment.id,
                 }),
             ]);

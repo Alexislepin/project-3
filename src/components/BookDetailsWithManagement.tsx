@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { ensureBookInDB } from '../lib/booksUpsert';
 import { ManageBookModal } from './ManageBookModal';
 import { AddBookStatusModal } from './AddBookStatusModal';
 import { BookCover } from './BookCover';
@@ -10,10 +11,12 @@ import { debugLog, fatalError } from '../utils/logger';
 
 interface BookDetailsWithManagementProps {
   bookId: string;
+  userBookId?: string;
+  currentPage?: number;
   onClose: () => void;
 }
 
-export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithManagementProps) {
+export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onClose }: BookDetailsWithManagementProps) {
   const { user } = useAuth();
   const [book, setBook] = useState<any>(null);
   const [userBook, setUserBook] = useState<any>(null);
@@ -121,12 +124,35 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
       }
       const userId = authData.user.id;
 
-      // Check if already in user_books
+      // Step 1: Ensure book exists in DB and get UUID (CRITICAL: never use external book.id as book_id)
+      let bookUuid: string;
+      try {
+        // Convert book to format expected by ensureBookInDB
+        const bookForUpsert: any = {
+          title: book.title,
+          author: book.author || book.authors,
+          pageCount: book.total_pages || book.pageCount,
+          description: book.description,
+          cover_url: book.cover_url || book.thumbnail,
+          isbn: book.isbn,
+          isbn13: book.isbn13,
+          isbn10: book.isbn10,
+          google_books_id: book.google_books_id,
+          openLibraryKey: book.openLibraryKey,
+        };
+        bookUuid = await ensureBookInDB(supabase, bookForUpsert);
+      } catch (error: any) {
+        console.error('[BookDetailsWithManagement handleAddComplete] Error ensuring book in DB:', error);
+        fatalError('Error ensuring book in DB:', error);
+        return;
+      }
+
+      // Step 2: Check if already in user_books with the UUID
       const { data: existingUserBook, error: checkError } = await supabase
         .from('user_books')
         .select('id')
         .eq('user_id', userId)
-        .eq('book_id', book.id)
+        .eq('book_id', bookUuid)
         .maybeSingle();
 
       if (checkError) {
@@ -141,13 +167,12 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
         return;
       }
 
-      // Insert into user_books (book already exists in global catalog)
-      // Handle UNIQUE constraint violation gracefully
+      // Step 3: Insert into user_books with UUID (Handle UNIQUE constraint violation gracefully)
       const { data: insertedData, error: insertError } = await supabase
         .from('user_books')
         .insert({
           user_id: userId,
-          book_id: book.id,
+          book_id: bookUuid, // Use UUID from ensureBookInDB, not external book.id
           status: status,
           current_page: 0,
         })
@@ -177,7 +202,7 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center">
         <div className="bg-background-light rounded-2xl p-8">
           <div className="text-text-sub-light">Chargement...</div>
         </div>
@@ -188,7 +213,7 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
   // Si pas de livre après le chargement, afficher un message d'erreur mais permettre de fermer
   if (!book) {
     return (
-      <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center" onClick={onClose}>
+      <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center" onClick={onClose}>
         <div className="bg-background-light rounded-2xl p-8 max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
           <h3 className="text-lg font-bold text-text-main-light mb-2">Erreur</h3>
           <p className="text-text-sub-light mb-4">Impossible de charger les détails du livre.</p>
@@ -206,12 +231,13 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
   return (
     <>
       <div
-        className={`fixed inset-0 bg-black/60 z-[100] flex items-end ${showAddModal ? 'hidden' : ''}`}
+        className={`fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 ${showAddModal ? 'hidden' : ''}`}
         onClick={onClose}
       >
         <div
-          className="bg-background-light rounded-t-3xl w-full max-w-lg mx-auto max-h-[85vh] overflow-y-auto animate-slide-up"
+          className="bg-background-light rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
           onClick={(e) => e.stopPropagation()}
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
         >
           <div className="sticky top-0 bg-background-light/95 backdrop-blur-sm z-10 px-6 pt-4 pb-3 border-b border-gray-200">
             <div className="flex items-center justify-between">
@@ -264,6 +290,23 @@ export function BookDetailsWithManagement({ bookId, onClose }: BookDetailsWithMa
                     </span>
                   )}
                 </div>
+
+                {typeof currentPage === 'number' && book?.total_pages ? (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-xs text-text-sub-light font-medium mb-2">
+                      <span>Progression</span>
+                      <span>
+                        {currentPage} / {book.total_pages} ({Math.round((currentPage / book.total_pages) * 100)}%)
+                      </span>
+                    </div>
+                    <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{ width: `${Math.min(100, Math.round((currentPage / book.total_pages) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 

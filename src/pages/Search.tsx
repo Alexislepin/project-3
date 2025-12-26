@@ -1,16 +1,23 @@
 import { useState } from 'react';
 import { Search as SearchIcon, Book as BookIcon } from 'lucide-react';
 import type { Book } from '../lib/googleBooks';
-import { BookDetail } from '../components/BookDetail';
+import { searchBooks as searchGoogleBooks } from '../lib/googleBooks';
+import { searchBooks as searchOpenLibraryBooks, fetchByIsbn as fetchOpenLibraryByIsbn, fetchWorkDescription, fetchEditionDescription, generateFallbackSummary } from '../services/openLibrary';
+import { ensureBookInDB } from '../lib/booksUpsert';
+import { getTranslatedDescription } from '../lib/translate';
+import { useTranslation } from 'react-i18next';
+import { BookDetailsModal } from '../components/BookDetailsModal';
 import { BookCover } from '../components/BookCover';
 import { supabase } from '../lib/supabase';
 import { debugLog, fatalError } from '../utils/logger';
 
 export function Search() {
+  const { t, i18n } = useTranslation();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Book[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const [selectedDbBook, setSelectedDbBook] = useState<any>(null);
+  const [loadingSelected, setLoadingSelected] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
 
   const handleSearch = async (searchQuery: string) => {
@@ -26,44 +33,252 @@ export function Search() {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from('books')
-        .select('id, title, author, description, total_pages, isbn, openlibrary_cover_id')
-        .or(`title.ilike.%${trimmedQuery}%,author.ilike.%${trimmedQuery}%`)
-        .limit(20);
+      let results: Book[] = [];
 
-      if (error) {
-        fatalError('Error searching books in Supabase (Search page):', error);
-        setResults([]);
-      } else {
-        const mapped: Book[] = (data || []).map((row: any) => {
-          const coverId = row.openlibrary_cover_id;
-          const thumbnail =
-            typeof coverId === 'number'
-              ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg?default=false`
-              : undefined;
-
-          return {
-            id: row.id,
-            title: row.title || '',
-            authors: row.author || '',
-            category: undefined,
-            pageCount: row.total_pages || undefined,
-            publisher: undefined,
-            isbn: row.isbn || undefined,
-            description: row.description || undefined,
-            thumbnail,
-            isbn13: null,
-            isbn10: null,
-          };
-        });
-        setResults(mapped);
+      // Priority 1: Try Google Books API (if API key available)
+      try {
+        const googleResults = await searchGoogleBooks(trimmedQuery, undefined, 0, 20);
+        if (googleResults && googleResults.length > 0) {
+          results = googleResults;
+          debugLog(`[Search] Found ${googleResults.length} results from Google Books`);
+        }
+      } catch (googleError: any) {
+        // If API key missing or error, continue to OpenLibrary
+        if (googleError?.message?.includes('API key')) {
+          debugLog('[Search] Google Books API key missing, trying OpenLibrary');
+        } else {
+          debugLog('[Search] Google Books error, trying OpenLibrary:', googleError);
+        }
       }
+
+      // Priority 2: Fallback to OpenLibrary if Google returned 0 results or error
+      if (results.length === 0) {
+        try {
+          const olResults = await searchOpenLibraryBooks(trimmedQuery, 1);
+          if (olResults && olResults.length > 0) {
+            // Convert OpenLibraryBook to Book format
+            results = olResults.map((olBook) => ({
+              id: olBook.openLibraryKey || olBook.isbn || `ol-${olBook.title}`,
+              title: olBook.title,
+              authors: olBook.author,
+              category: undefined,
+              pageCount: olBook.pages || undefined,
+              publisher: undefined,
+              isbn: olBook.isbn || undefined,
+              isbn13: olBook.isbn13 || undefined,
+              isbn10: olBook.isbn10 || undefined,
+              description: undefined,
+              thumbnail: olBook.coverUrl || undefined,
+              cover_i: olBook.cover_i,
+            }));
+            debugLog(`[Search] Found ${olResults.length} results from OpenLibrary`);
+          }
+        } catch (olError) {
+          debugLog('[Search] OpenLibrary error:', olError);
+        }
+      }
+
+      setResults(results);
     } catch (error) {
-      fatalError('Unexpected error searching books in Supabase (Search page):', error);
+      fatalError('Unexpected error searching books:', error);
       setResults([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openDetails = async (book: Book) => {
+    console.log('[Search] openDetails click', book.title);
+    setLoadingSelected(true);
+    try {
+      // Step 1: Ensure book exists in DB and get UUID
+      const dbBookId = await ensureBookInDB(supabase, book);
+
+      // Step 2: Fetch the book row from books table
+      const { data: dbBook, error: fetchError } = await supabase
+        .from('books')
+        .select('id, title, author, isbn, cover_url, total_pages, description, google_books_id, openlibrary_work_key, openlibrary_edition_key')
+        .eq('id', dbBookId)
+        .single();
+
+      if (fetchError) {
+        console.error('[Search openDetails] Error fetching book from DB:', fetchError);
+        fatalError('Error fetching book from DB:', fetchError);
+        setLoadingSelected(false);
+        return;
+      }
+
+      if (!dbBook) {
+        console.error('[Search openDetails] Book not found in DB after ensureBookInDB');
+        setLoadingSelected(false);
+        return;
+      }
+
+      // BONUS: If description is null/empty, try to fetch fallback description from multiple sources
+      if (!dbBook.description || dbBook.description.trim().length === 0) {
+        let foundDescription: string | null = null;
+
+        // Priority 1: Try to get description from original book object (Google Books)
+        if (book.description && book.description.trim().length > 0) {
+          foundDescription = book.description.trim();
+        }
+        
+        // Priority 2: Try OpenLibrary Work API if we have work key
+        if (!foundDescription && dbBook.openlibrary_work_key) {
+          try {
+            const olDesc = await fetchWorkDescription(dbBook.openlibrary_work_key);
+            if (olDesc && olDesc.length > 0) {
+              foundDescription = olDesc;
+            }
+          } catch (error) {
+            console.log('[Search openDetails] Could not fetch OpenLibrary work description:', error);
+          }
+        }
+
+        // Priority 3: Try OpenLibrary Edition API if we have edition key
+        if (!foundDescription && dbBook.openlibrary_edition_key) {
+          try {
+            const olDesc = await fetchEditionDescription(dbBook.openlibrary_edition_key);
+            if (olDesc && olDesc.length > 0) {
+              foundDescription = olDesc;
+            }
+          } catch (error) {
+            console.log('[Search openDetails] Could not fetch OpenLibrary edition description:', error);
+          }
+        }
+
+        // Priority 4: Try to fetch from Google Books API if we have google_books_id
+        if (!foundDescription && dbBook.google_books_id) {
+          try {
+            const googleBook = await searchGoogleBooks(dbBook.title, undefined, 0, 1);
+            if (googleBook && googleBook.length > 0 && googleBook[0].description) {
+              const desc = googleBook[0].description.trim();
+              if (desc.length > 0) {
+                foundDescription = desc;
+              }
+            }
+          } catch (error) {
+            console.log('[Search openDetails] Could not fetch Google Books description:', error);
+          }
+        }
+
+        // Priority 5: Try OpenLibrary by ISBN if we have ISBN but no work key
+        if (!foundDescription && dbBook.isbn && !dbBook.openlibrary_work_key) {
+          try {
+            const olBook = await fetchOpenLibraryByIsbn(dbBook.isbn);
+            if (olBook?.openLibraryWorkKey) {
+              // Save work key for future use
+              await supabase
+                .from('books')
+                .update({ openlibrary_work_key: olBook.openLibraryWorkKey.startsWith('/') ? olBook.openLibraryWorkKey : `/works/${olBook.openLibraryWorkKey}` })
+                .eq('id', dbBookId);
+              
+              // Try to fetch description from work
+              if (olBook.openLibraryWorkKey) {
+                const olDesc = await fetchWorkDescription(olBook.openLibraryWorkKey);
+                if (olDesc && olDesc.length > 0) {
+                  foundDescription = olDesc;
+                }
+              }
+            }
+          } catch (error) {
+            console.log('[Search openDetails] Could not fetch OpenLibrary by ISBN:', error);
+          }
+        }
+
+        // Update DB if we found a description
+        if (foundDescription && foundDescription.length > 0) {
+          await supabase
+            .from('books')
+            .update({ description: foundDescription })
+            .eq('id', dbBookId);
+          dbBook.description = foundDescription;
+        } else {
+          // Fallback: Generate mini-summary
+          const fallback = generateFallbackSummary({
+            title: dbBook.title,
+            author: dbBook.author,
+            total_pages: dbBook.total_pages,
+            category: (book as any).category,
+            genre: (book as any).genre,
+          });
+          dbBook.description = fallback;
+        }
+      }
+
+      // Step 3: Translate description if needed
+      if (dbBook.description && dbBook.description.trim().length > 0) {
+        // Pass the full dbBook object to getTranslatedDescription so it can extract stable book_key
+        const translated = await getTranslatedDescription(dbBook, dbBook.description);
+        if (translated) {
+          dbBook.description = translated;
+        }
+      }
+
+      // Step 4: Open BookDetailsModal with DB book data
+      setSelectedDbBook(dbBook);
+      setLoadingSelected(false);
+    } catch (error: any) {
+      console.error('[Search openDetails] Unexpected error:', error);
+      fatalError('Error opening book details:', error);
+      setLoadingSelected(false);
+    }
+  };
+
+  const addDbBookToLibrary = async (bookId: string) => {
+    try {
+      // Get user_id from auth
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user) {
+        fatalError('Error getting user:', authError);
+        return;
+      }
+      const userId = authData.user.id;
+
+      // Check if already in user_books
+      const { data: existingUserBook, error: checkError } = await supabase
+        .from('user_books')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('book_id', bookId)
+        .maybeSingle();
+
+      if (checkError) {
+        fatalError('Error checking user_books:', checkError);
+        return;
+      }
+
+      if (existingUserBook) {
+        debugLog('Book already in user library');
+        return;
+      }
+
+      // Insert into user_books with UUID
+      const { data: insertedData, error: insertError } = await supabase
+        .from('user_books')
+        .insert({
+          user_id: userId,
+          book_id: bookId, // Use UUID directly
+          status: 'want_to_read',
+          current_page: 0,
+          progress_pct: 0,
+        })
+        .select();
+
+      if (insertError) {
+        // Handle UNIQUE constraint violation (23505) gracefully
+        if (insertError.code === '23505') {
+          debugLog('Book already in user library (23505)');
+          return;
+        }
+        
+        fatalError('Error inserting into user_books:', insertError);
+        return;
+      }
+
+      debugLog('Book successfully added to library:', insertedData);
+    } catch (error) {
+      fatalError('Unexpected error in addDbBookToLibrary:', error);
     }
   };
 
@@ -80,14 +295,23 @@ export function Search() {
       }
       const userId = authData.user.id;
 
-      const bookId = book.id;
+      // Step 1: Ensure book exists in DB and get UUID (CRITICAL: never use external book.id as book_id)
+      let bookUuid: string;
+      try {
+        bookUuid = await ensureBookInDB(supabase, book);
+      } catch (error: any) {
+        console.error('[Search handleAddBook] Error ensuring book in DB:', error);
+        fatalError('Error ensuring book in DB:', error);
+        setAdding(null);
+        return;
+      }
 
-      // Check if already in user_books for this user and book
+      // Step 2: Check if already in user_books with the UUID
       const { data: existingUserBook, error: checkError } = await supabase
         .from('user_books')
         .select('id')
         .eq('user_id', userId)
-        .eq('book_id', bookId)
+        .eq('book_id', bookUuid)
         .maybeSingle();
 
       if (checkError) {
@@ -102,12 +326,12 @@ export function Search() {
         return;
       }
 
-      // Insert into user_books (handle UNIQUE constraint violation gracefully)
+      // Step 3: Insert into user_books with UUID (handle UNIQUE constraint violation gracefully)
       const { data: insertedData, error: insertError } = await supabase
         .from('user_books')
         .insert({
           user_id: userId,
-          book_id: bookId,
+          book_id: bookUuid, // Use UUID from ensureBookInDB, not external book.id
           status: 'want_to_read',
           current_page: 0,
           progress_pct: 0,
@@ -117,7 +341,8 @@ export function Search() {
       if (insertError) {
         // Handle UNIQUE constraint violation (23505) gracefully
         if (insertError.code === '23505') {
-          // Book already exists - silently ignore
+          // Book already exists - silently ignore (no UI feedback needed)
+          debugLog('Book already in user library (23505)');
           setAdding(null);
           return;
         }
@@ -182,9 +407,10 @@ export function Search() {
                 key={book.id}
                 className="flex gap-4 p-4 bg-card-light rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
               >
-                <div
-                  className="cursor-pointer hover:scale-105 transition-transform"
-                  onClick={() => setSelectedBook(book)}
+                <button
+                  type="button"
+                  className="cursor-pointer hover:scale-105 transition-transform pointer-events-auto"
+                  onClick={() => openDetails(book)}
                 >
                   <BookCover
                     coverUrl={book.thumbnail}
@@ -192,15 +418,16 @@ export function Search() {
                     author={book.authors || 'Auteur inconnu'}
                     className="w-20 shrink-0 aspect-[2/3] rounded-lg overflow-hidden shadow-md"
                   />
-                </div>
+                </button>
 
                 <div className="flex-1 min-w-0">
-                  <h3
-                    className="font-bold text-text-main-light mb-1 line-clamp-2 cursor-pointer hover:text-primary"
-                    onClick={() => setSelectedBook(book)}
+                  <button
+                    type="button"
+                    className="font-bold text-text-main-light mb-1 line-clamp-2 cursor-pointer hover:text-primary text-left w-full pointer-events-auto"
+                    onClick={() => openDetails(book)}
                   >
                     {book.title}
-                  </h3>
+                  </button>
                   <p className="text-sm text-text-sub-light mb-2 truncate">{book.authors}</p>
 
                   <div className="flex flex-wrap gap-2">
@@ -242,8 +469,24 @@ export function Search() {
         )}
       </div>
 
-      {selectedBook && (
-        <BookDetail book={selectedBook} onClose={() => setSelectedBook(null)} onAdd={handleAddBook} />
+      {loadingSelected && (
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center">
+          <div className="bg-background-light rounded-2xl p-8">
+            <div className="text-text-sub-light">{t('common.loading')}</div>
+          </div>
+        </div>
+      )}
+
+      {selectedDbBook && (
+        <BookDetailsModal
+          book={selectedDbBook}
+          onClose={() => setSelectedDbBook(null)}
+          showAddButton={true}
+          onAddToLibrary={async (dbBook) => {
+            await addDbBookToLibrary(dbBook.id);
+            setSelectedDbBook(null);
+          }}
+        />
       )}
     </div>
   );

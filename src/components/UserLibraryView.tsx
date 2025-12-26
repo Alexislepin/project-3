@@ -85,7 +85,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
       .from('activity_events')
       .select('book_key, created_at')
       .eq('actor_id', userId)
-      .eq('event_type', 'like')
+      .eq('event_type', 'book_like')
       .order('created_at', { ascending: false });
 
     if (eventsError) {
