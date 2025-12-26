@@ -139,26 +139,20 @@ export function Library({}: LibraryProps) {
         id,
         status,
         current_page,
-        custom_title,
-        custom_author,
-        custom_total_pages,
-        custom_description,
-        custom_cover_url,
         book_id,
         created_at,
         updated_at,
         book:books (
           id,
-          book_key,
           title,
           author,
           total_pages,
           cover_url,
-          description_clean,
-          source,
-          source_id,
-          openlibrary_key,
-          google_books_id
+          description,
+          isbn,
+          google_books_id,
+          edition,
+          openlibrary_cover_id
         )
       `)
       .eq('user_id', user.id)
@@ -791,11 +785,10 @@ export function Library({}: LibraryProps) {
             cover_url,
             total_pages,
             description,
-            description_clean,
             isbn,
             google_books_id,
-            openlibrary_key,
-            edition
+            edition,
+            openlibrary_cover_id
           )
         `)
         .eq('id', inserted.id)
@@ -806,7 +799,7 @@ export function Library({}: LibraryProps) {
       if (finalRow && !finalRow.book && finalRow.book_id) {
         const { data: b } = await supabase
           .from('books')
-          .select('id, title, author, cover_url, total_pages, description, description_clean, isbn, google_books_id, openlibrary_key, edition')
+          .select('id, title, author, cover_url, total_pages, description, isbn, google_books_id, edition, openlibrary_cover_id')
           .eq('id', finalRow.book_id)
           .single();
         
@@ -1376,19 +1369,12 @@ export function Library({}: LibraryProps) {
                 );
               }
               const progress = getProgress(userBook.current_page, book.total_pages || 0);
-              const displayTitle = userBook.custom_title || book.title;
-              const displayAuthor = userBook.custom_author || book.author;
-              const displayPages =
-                (typeof userBook.custom_total_pages === 'number' && userBook.custom_total_pages > 0
-                  ? userBook.custom_total_pages
-                  : book.total_pages) || 0;
+              const displayTitle = book.title;
+              const displayAuthor = book.author;
+              const displayPages = book.total_pages || 0;
 
-              // Fix #3: Prefer user custom cover URL, then book.cover_url, then thumbnail fallback
-              const displayCover: string | null =
-                userBook.custom_cover_url ||
-                book.cover_url ||
-                (book as any).thumbnail ||
-                null;
+              // Use book.cover_url
+              const displayCover: string | null = book.cover_url || null;
 
                 return (
                   <div
@@ -1615,15 +1601,11 @@ export function Library({}: LibraryProps) {
       {bookToEdit && (
         <EditBookModal
           userBookId={bookToEdit.id}
-          initialTitle={bookToEdit.custom_title || bookToEdit.book?.title || ''}
-          initialAuthor={bookToEdit.custom_author || bookToEdit.book?.author || ''}
-          initialTotalPages={
-            typeof bookToEdit.custom_total_pages === 'number' && bookToEdit.custom_total_pages > 0
-              ? bookToEdit.custom_total_pages
-              : bookToEdit.book?.total_pages || null
-          }
-          initialDescription={bookToEdit.custom_description || bookToEdit.book?.description || ''}
-          initialCoverUrl={bookToEdit.custom_cover_url || bookToEdit.book?.cover_url || ''}
+          initialTitle={bookToEdit.book?.title || ''}
+          initialAuthor={bookToEdit.book?.author || ''}
+          initialTotalPages={bookToEdit.book?.total_pages || null}
+          initialDescription={bookToEdit.book?.description || ''}
+          initialCoverUrl={bookToEdit.book?.cover_url || ''}
           onClose={() => setBookToEdit(null)}
           onSaved={() => {
             loadUserBooks();

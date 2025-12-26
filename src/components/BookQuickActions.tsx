@@ -125,7 +125,7 @@ export function BookQuickActions({
               .from('activity_events')
               .delete()
               .eq('actor_id', currentUser.id)
-              .eq('event_type', 'book_like')
+              .eq('event_type', 'like')
               .eq('book_key', bookKey);
           } catch (err: any) {
             console.warn('[activity_events] delete failed', {
@@ -200,7 +200,7 @@ export function BookQuickActions({
                 .from('activity_events')
                 .insert({
                   actor_id: currentUser.id,
-                  event_type: 'book_like',
+                  event_type: 'like',
                   book_key: bookKey,
                   comment_id: null,
                 }),

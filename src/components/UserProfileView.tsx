@@ -131,7 +131,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     // On compte les book_key uniques si la colonne existe, sinon on compte les rows
     const { data: userBooks, error: booksError } = await supabase
       .from('user_books')
-      .select('book_id, book:books(book_key)')
+      .select('book_id, book:books(id, isbn)')
       .eq('user_id', userId);
 
     console.log('=== DEBUG User Books ===');
@@ -148,18 +148,16 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       });
     }
 
-    // Compter les book_key uniques si disponibles, sinon compter les book_id uniques
+    // Compter les book_id uniques
     let booksCount = 0;
     if (userBooks && userBooks.length > 0) {
-      const uniqueBookKeys = new Set<string>();
+      const uniqueBookIds = new Set<string>();
       userBooks.forEach((ub: any) => {
-        if (ub.book?.book_key) {
-          uniqueBookKeys.add(ub.book.book_key);
-        } else if (ub.book_id) {
-          uniqueBookKeys.add(String(ub.book_id));
+        if (ub.book_id) {
+          uniqueBookIds.add(String(ub.book_id));
         }
       });
-      booksCount = uniqueBookKeys.size;
+      booksCount = uniqueBookIds.size;
     }
 
     // Compter les livres likés depuis activity_events
@@ -167,7 +165,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       .from('activity_events')
       .select('book_key')
       .eq('actor_id', userId)
-      .eq('event_type', 'book_like');
+      .eq('event_type', 'like');
 
     let likedCount = 0;
     if (likedEvents && likedEvents.length > 0) {
@@ -192,19 +190,21 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     // Load reading preview (max 8)
     const { data: readingBooks } = await supabase
       .from('user_books')
-      .select('book_id, book:books(book_key, title, author, cover_url)')
+      .select('book_id, book:books(id, title, author, cover_url, isbn)')
       .eq('user_id', userId)
       .eq('status', 'reading')
       .order('updated_at', { ascending: false })
       .limit(8);
 
     if (readingBooks && readingBooks.length > 0) {
-      // Use book data directly if available, otherwise fetch from books_cache
+      // Use book data directly - construct book_key from id or isbn
       const previewData = readingBooks
         .map((ub: any) => {
-          if (ub.book?.book_key) {
+          if (ub.book) {
+            // Construct book_key: prefer isbn, else use id
+            const bookKey = ub.book.isbn ? `isbn:${ub.book.isbn}` : ub.book.id;
             return {
-              book_key: ub.book.book_key,
+              book_key: bookKey,
               title: ub.book.title,
               author: ub.book.author,
               cover_url: ub.book.cover_url,
@@ -225,7 +225,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       .from('activity_events')
       .select('book_key')
       .eq('actor_id', userId)
-      .eq('event_type', 'book_like')
+      .eq('event_type', 'like')
       .order('created_at', { ascending: false })
       .limit(8);
 

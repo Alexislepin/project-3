@@ -106,9 +106,9 @@ export function BookDetailsModal({
           return;
         }
 
-        // Fallback: use description_clean if available
-        if (book.description_clean) {
-          setSummary(book.description_clean);
+        // Fallback: use description if available
+        if (book.description) {
+          setSummary(book.description);
           setLoadingSummary(false);
           return;
         }
@@ -118,10 +118,10 @@ export function BookDetailsModal({
         setLoadingSummary(false);
       }
     })();
-  }, [book?.book_key, book?.id, book?.description_clean]);
+  }, [book?.book_key, book?.id, book?.description]);
 
   // Determine display description
-  const displayDescription = summary || (book.description_clean ? book.description_clean : buildQuickSummary(book));
+  const displayDescription = summary || (book.description ? book.description : buildQuickSummary(book));
 
   // Scroll to comments section if initialTab is 'comments'
   useEffect(() => {

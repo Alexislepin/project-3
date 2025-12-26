@@ -69,25 +69,12 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
     book?.volumeInfo?.description ||
     null;
 
-  const description_clean = cleanOpenLibraryDescription(description);
-
-  const source = book?.source || (book?.openlibrary_key || book?.openLibraryKey ? "openlibrary" : book?.google_books_id || book?.googleBooksId ? "google" : null);
-  const source_id = book?.source_id || book?.openlibrary_key || book?.openLibraryKey || book?.google_books_id || book?.googleBooksId || book?.volumeInfo?.id || null;
-
-  const openlibrary_key = book?.openlibrary_key || book?.openLibraryKey || (typeof book?.key === "string" && book.key.startsWith("/works/") ? book.key : null);
   const google_books_id = book?.google_books_id || book?.googleBooksId || book?.volumeInfo?.id || null;
 
   const total_pages = book?.total_pages || book?.pageCount || book?.volumeInfo?.pageCount || null;
 
-  // Fix #2: OpenLibrary cover fallback if cover_url is missing
+  // Use cover_url as-is (no OpenLibrary fallback since we don't have openlibrary_key in DB)
   let finalCoverUrl = cover_url;
-  if (!finalCoverUrl && openlibrary_key) {
-    // OpenLibrary cover fallback (avec ?default=false pour éviter redirection archive.org)
-    const olid = openlibrary_key.replace('/works/', '').replace('/', '');
-    if (olid) {
-      finalCoverUrl = `https://covers.openlibrary.org/b/olid/${olid}-L.jpg?default=false`;
-    }
-  }
 
   // Extract ISBN (clean)
   const isbn = book?.isbn13 || book?.isbn10 || book?.isbn;
@@ -97,7 +84,7 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
   if (cleanIsbn) {
     const { data: existingByIsbn } = await supabase
       .from("books")
-      .select("id, cover_url, description_clean, book_key")
+      .select("id, cover_url, description")
       .eq("isbn", cleanIsbn)
       .maybeSingle();
 
@@ -107,9 +94,6 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
         title,
         author,
         total_pages,
-        source,
-        source_id,
-        openlibrary_key,
         google_books_id,
       };
 
@@ -123,16 +107,6 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
         updateData.description = description;
       }
 
-      // IMPORTANT: n'écrase jamais description_clean par null si on n'a pas de nouvelle description_clean
-      if (description_clean) {
-        updateData.description_clean = description_clean;
-      }
-
-      // Update book_key if we have a better one
-      if (book_key && book_key !== existingByIsbn.book_key) {
-        updateData.book_key = book_key;
-      }
-
       const { error: updateError } = await supabase
         .from("books")
         .update(updateData)
@@ -143,11 +117,14 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
     }
   }
 
-  // Step 2: Check if book already exists by book_key (fallback)
+  // Step 2: Check if book already exists by title+author (fallback)
+  // Note: We can't use book_key since it doesn't exist in books table
+  // Instead, we'll try to match by title and author if available
   const { data: existingByKey } = await supabase
     .from("books")
-    .select("id, cover_url, description_clean")
-    .eq("book_key", book_key)
+    .select("id, cover_url, description")
+    .eq("title", title)
+    .eq("author", author || "")
     .maybeSingle();
 
   if (existingByKey) {
@@ -156,9 +133,6 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
       title,
       author,
       total_pages,
-      source,
-      source_id,
-      openlibrary_key,
       google_books_id,
     };
 
@@ -168,10 +142,6 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
 
     if (description) {
       updateData.description = description;
-    }
-
-    if (description_clean) {
-      updateData.description_clean = description_clean;
     }
 
     if (cleanIsbn) {
@@ -193,21 +163,16 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
       .from("books")
       .upsert(
         {
-          book_key,
           title,
           author,
           total_pages,
-          source,
-          source_id,
-          openlibrary_key,
           google_books_id,
           cover_url: finalCoverUrl,
           description,
-          description_clean,
           isbn: cleanIsbn || null,
         },
         {
-          onConflict: cleanIsbn ? 'isbn' : 'book_key',
+          onConflict: cleanIsbn ? 'isbn' : undefined,
           ignoreDuplicates: false,
         }
       )
@@ -217,18 +182,17 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
     if (error) {
       // If 23505 (duplicate key) or 409, try to fetch existing book
       if ((error as any).code === '23505' || (error as any).code === 'PGRST116' || (error as any).status === 409) {
-        // Try to find existing book by ISBN or book_key
-        const searchKey = cleanIsbn ? 'isbn' : 'book_key';
-        const searchValue = cleanIsbn || book_key;
-        
-        const { data: existingBook } = await supabase
-          .from("books")
-          .select("id")
-          .eq(searchKey, searchValue)
-          .maybeSingle();
+        // Try to find existing book by ISBN
+        if (cleanIsbn) {
+          const { data: existingBook } = await supabase
+            .from("books")
+            .select("id")
+            .eq("isbn", cleanIsbn)
+            .maybeSingle();
 
-        if (existingBook) {
-          return existingBook.id as string;
+          if (existingBook) {
+            return existingBook.id as string;
+          }
         }
       }
       throw error;

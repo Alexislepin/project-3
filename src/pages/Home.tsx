@@ -465,8 +465,8 @@ export function Home() {
                           thumbnail: event.book?.cover_url || null,
                         };
                         setSelectedBook(bookObj);
-                        setSelectedBookInitialTab(event.event_type === 'book_comment' ? 'comments' : 'summary');
-                        setSelectedBookFocusComment(event.event_type === 'book_comment');
+                        setSelectedBookInitialTab(event.event_type === 'comment' ? 'comments' : 'summary');
+                        setSelectedBookFocusComment(event.event_type === 'comment');
                       }}
                       className="flex items-center gap-3 p-3 bg-white rounded-xl border border-stone-200 hover:bg-stone-50 transition-colors cursor-pointer"
                     >
@@ -495,7 +495,7 @@ export function Home() {
                       {/* Text */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start gap-2 mb-1">
-                          {event.event_type === 'book_like' ? (
+                          {event.event_type === 'like' ? (
                             <Heart className="w-4 h-4 text-red-500 fill-current shrink-0 mt-0.5" />
                           ) : (
                             <MessageCircle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
@@ -512,12 +512,12 @@ export function Home() {
                               >
                                 {actorName}
                               </button>{' '}
-                              {event.event_type === 'book_like' ? 'a aimé' : 'a commenté'}{' '}
+                              {event.event_type === 'like' ? 'a aimé' : 'a commenté'}{' '}
                               <span className="font-semibold">
                                 {event.book?.title || 'ce livre'}
                               </span>
                             </p>
-                            {event.event_type === 'book_comment' && (
+                            {event.event_type === 'comment' && (
                               <p className="text-xs text-stone-700 mt-1 line-clamp-2">
                                 {event.comment_content && event.comment_content.trim() ? (
                                   <span className="font-normal">"{event.comment_content}"</span>
