@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LUXUS - Carousel Instagram</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 40px;
+      align-items: center;
+    }
+
+    .slide {
+      width: 1080px;
+      height: 1080px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 80px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .slide-1 {
+      background: linear-gradient(135deg, #1c1917 0%, #292524 100%);
+    }
+
+    .slide-2 {
+      background: #fafaf9;
+    }
+
+    .slide-3 {
+      background: #1c1917;
+    }
+
+    .slide-4 {
+      background: #a3e635;
+    }
+
+    .slide-5 {
+      background: #fafaf9;
+    }
+
+    .logo {
+      font-size: 120px;
+      font-weight: 800;
+      letter-spacing: -4px;
+      margin-bottom: 40px;
+    }
+
+    .slide-1 .logo {
+      color: #a3e635;
+      text-transform: uppercase;
+    }
+
+    .title {
+      font-size: 72px;
+      font-weight: 800;
+      line-height: 1.1;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .slide-1 .title {
+      color: #fafaf9;
+    }
+
+    .slide-2 .title {
+      color: #1c1917;
+    }
+
+    .slide-3 .title {
+      color: #fafaf9;
+    }
+
+    .slide-4 .title {
+      color: #1c1917;
+    }
+
+    .slide-5 .title {
+      color: #1c1917;
+    }
+
+    .subtitle {
+      font-size: 32px;
+      font-weight: 400;
+      text-align: center;
+      line-height: 1.5;
+      max-width: 800px;
+    }
+
+    .slide-1 .subtitle {
+      color: #a8a29e;
+    }
+
+    .slide-2 .subtitle {
+      color: #57534e;
+    }
+
+    .slide-3 .subtitle {
+      color: #a8a29e;
+    }
+
+    .slide-4 .subtitle {
+      color: #292524;
+    }
+
+    .slide-5 .subtitle {
+      color: #57534e;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 40px;
+      max-width: 900px;
+      margin-top: 60px;
+    }
+
+    .feature {
+      text-align: center;
+    }
+
+    .feature-icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+    }
+
+    .feature-text {
+      font-size: 28px;
+      font-weight: 600;
+      color: #1c1917;
+    }
+
+    .slide-3 .feature-text {
+      color: #fafaf9;
+    }
+
+    .big-number {
+      font-size: 180px;
+      font-weight: 900;
+      color: #1c1917;
+      line-height: 1;
+      margin-bottom: 20px;
+    }
+
+    .accent {
+      color: #a3e635;
+    }
+
+    .cta {
+      font-size: 36px;
+      font-weight: 700;
+      color: #1c1917;
+      background: #a3e635;
+      padding: 32px 64px;
+      border-radius: 100px;
+      margin-top: 60px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .slide-1 .cta {
+      background: #a3e635;
+      color: #1c1917;
+    }
+
+    .slide-5 .cta {
+      background: #1c1917;
+      color: #a3e635;
+    }
+
+    .corner-accent {
+      position: absolute;
+      width: 300px;
+      height: 300px;
+      border-radius: 50%;
+      opacity: 0.1;
+    }
+
+    .top-right {
+      top: -150px;
+      right: -150px;
+      background: #a3e635;
+    }
+
+    .bottom-left {
+      bottom: -150px;
+      left: -150px;
+      background: #a3e635;
+    }
+
+    .list {
+      list-style: none;
+      margin-top: 60px;
+      text-align: left;
+    }
+
+    .list li {
+      font-size: 36px;
+      color: #1c1917;
+      margin-bottom: 32px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .slide-3 .list li {
+      color: #fafaf9;
+    }
+
+    .list li::before {
+      content: '→';
+      color: #a3e635;
+      font-size: 48px;
+      font-weight: 900;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- SLIDE 1: INTRO -->
+  <div class="slide slide-1">
+    <div class="corner-accent top-right"></div>
+    <div class="logo">LUXUS</div>
+    <div class="title">Suivez vos activités.<br>Partagez vos progrès.</div>
+    <div class="subtitle">L'app minimaliste qui transforme vos habitudes quotidiennes en momentum.</div>
+  </div>
+
+  <!-- SLIDE 2: BIBLIOTHÈQUE -->
+  <div class="slide slide-2">
+    <div class="title">Votre bibliothèque<br>intelligente 📚</div>
+    <div class="subtitle">Scannez un livre, suivez votre progression, ne perdez jamais le fil.</div>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">📖</div>
+        <div class="feature-text">Suivi de lecture</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <div class="feature-text">Progression visuelle</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📷</div>
+        <div class="feature-text">Scanner ISBN</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🎯</div>
+        <div class="feature-text">Objectifs persos</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 3: SOCIAL -->
+  <div class="slide slide-3">
+    <div class="corner-accent bottom-left"></div>
+    <div class="title">Feed social<br>intelligent</div>
+    <ul class="list">
+      <li>Suivez vos amis</li>
+      <li>Partagez vos sessions</li>
+      <li>Réagissez aux activités</li>
+      <li>Construisez des séries</li>
+    </ul>
+    <div class="subtitle" style="margin-top: 40px;">Restez motivé grâce à votre communauté.</div>
+  </div>
+
+  <!-- SLIDE 4: ACTIVITÉS -->
+  <div class="slide slide-4">
+    <div class="big-number">4</div>
+    <div class="title">types d'activités</div>
+    <div class="features" style="margin-top: 80px;">
+      <div class="feature">
+        <div class="feature-icon">📖</div>
+        <div class="feature-text">Lecture</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">💪</div>
+        <div class="feature-text">Sport</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🧠</div>
+        <div class="feature-text">Apprentissage</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">✅</div>
+        <div class="feature-text">Habitudes</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 5: CTA -->
+  <div class="slide slide-5">
+    <div class="title">Simple.<br>Minimaliste.<br><span class="accent">Puissant.</span></div>
+    <div class="subtitle">LUXUS — Tracez vos activités, pas votre attention.</div>
+    <div class="cta">Commencer</div>
+  </div>
+
+</body>
+</html>

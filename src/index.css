@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --sat: env(safe-area-inset-top);
+    --sar: env(safe-area-inset-right);
+    --sab: env(safe-area-inset-bottom);
+    --sal: env(safe-area-inset-left);
+  }
+  
+  body {
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    @apply bg-background-light text-text-main-light antialiased;
+    /* Safe area padding only on sides and bottom, NOT top (handled by sticky headers) */
+    padding-bottom: var(--sab);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+    /* Désactiver zoom double-tap et pinch */
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  /* Désactiver zoom sur tous les éléments interactifs */
+  button, a, input, textarea, select {
+    touch-action: manipulation;
+  }
+  
+  /* Empêcher le zoom sur double-tap */
+  * {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  
+  /* Exception: permettre sélection de texte dans inputs/textarea */
+  input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  
+  #root {
+    /* Safe area padding only on sides and bottom, NOT top (handled by sticky headers) */
+    padding-bottom: var(--sab);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  
+  /* Classe no-scrollbar pour masquer les scrollbars partout */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  
+  /* Safe Area for iOS notch/Dynamic Island */
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  /* Safe top avec padding minimal */
+  .safe-top {
+    padding-top: calc(var(--sat) + 8px);
+  }
+  
+  /* Safe bottom avec padding minimal */
+  .safe-bottom {
+    padding-bottom: calc(var(--sab) + 12px);
+  }
+  
+  /* Sticky header avec safe-area intégrée */
+  .sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background-color: rgba(250, 250, 249, 0.95);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgb(229, 231, 235);
+  }
+}
+
+/* Améliorer le rendu des images de couvertures de livres */
+img[alt*="book"],
+img[alt*="Book"],
+.book-cover img {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  -webkit-backface-visibility: hidden;
+  -moz-backface-visibility: hidden;
+  -webkit-transform: translateZ(0);
+  -moz-transform: translateZ(0);
+  transform: translateZ(0);
+}
