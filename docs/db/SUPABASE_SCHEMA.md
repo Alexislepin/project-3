@@ -77,6 +77,8 @@
 | `edition` | `text` | ✅ YES | `NULL` | Edition information |
 | `google_books_id` | `text` | ✅ YES | `NULL` | Google Books API ID |
 | `openlibrary_cover_id` | `integer` | ✅ YES | `NULL` | OpenLibrary cover ID (from migration) |
+| `openlibrary_work_key` | `text` | ✅ YES | `NULL` | OpenLibrary work key (e.g., "/works/OL123456W") for fetching descriptions |
+| `openlibrary_edition_key` | `text` | ✅ YES | `NULL` | OpenLibrary edition key (e.g., "/books/OL123456M") for fetching descriptions |
 | `created_at` | `timestamptz` | ✅ YES | `now()` | Creation timestamp |
 
 **Primary Key:** `id`  

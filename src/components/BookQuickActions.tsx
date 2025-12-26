@@ -2,8 +2,16 @@ import { useState, useEffect, useMemo } from 'react';
 import { Heart, MessageCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { getBookKey } from '../lib/bookSocial';
+import { canonicalBookKey } from '../lib/bookSocial';
+import { ensureBookInDB } from '../lib/booksUpsert';
 import { socialEvents } from '../lib/events';
+import { normalizeEventType } from '../lib/activityEvents';
+
+// Helper to check if a string is a UUID
+function isUuid(v?: string | null): boolean {
+  if (!v) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+}
 
 // Throttle anti-spam pour activity_events (évite inserts multiples < 400ms)
 const activityEventsThrottle = new Map<string, number>();
@@ -29,7 +37,8 @@ export function BookQuickActions({
   onShowToast,
 }: BookQuickActionsProps) {
   const { user } = useAuth();
-  const bookKey = useMemo(() => getBookKey(book), [book]);
+  // UNE SEULE variable stable calculée UNE SEULE FOIS avec canonicalBookKey
+  const stableBookKey = useMemo(() => canonicalBookKey(book), [book]);
   const [currentLikesCount, setCurrentLikesCount] = useState(likesCount);
   const [currentCommentsCount, setCurrentCommentsCount] = useState(commentsCount);
   const [likedByMe, setLikedByMe] = useState(initiallyLiked);
@@ -46,7 +55,7 @@ export function BookQuickActions({
     let cancelled = false;
 
     (async () => {
-      if (!user || !bookKey) {
+      if (!user || !stableBookKey || stableBookKey === 'unknown') {
         setLikedByMe(false);
         return;
       }
@@ -55,7 +64,7 @@ export function BookQuickActions({
         .from('book_likes')
         .select('id')
         .eq('user_id', user.id)
-        .eq('book_key', bookKey)
+        .eq('book_key', stableBookKey)
         .maybeSingle();
 
       if (cancelled) return;
@@ -71,7 +80,7 @@ export function BookQuickActions({
     return () => {
       cancelled = true;
     };
-  }, [bookKey, user?.id]);
+  }, [stableBookKey, user?.id]);
 
   // 2) Toggle LIKE robuste (vérifie en DB avant d'agir)
   const handleLikeClick = async (e: React.MouseEvent) => {
@@ -88,24 +97,35 @@ export function BookQuickActions({
     setIsTogglingLike(true);
 
     try {
-      if (!bookKey) throw new Error('Missing bookKey');
+      if (!book) throw new Error('Missing book');
+
+      // RÈGLE ABSOLUE: Utiliser la clé stable déjà calculée
+      const bookKey = stableBookKey;
+      if (!bookKey || bookKey === 'unknown') {
+        throw new Error('Invalid bookKey');
+      }
+
+      // RÈGLE ABSOLUE: S'assurer que le livre existe en DB
+      const bookUuid = await ensureBookInDB(supabase, book);
 
       // Re-check en DB (évite les états désync)
       const { data: existing, error: checkErr } = await supabase
         .from('book_likes')
         .select('id')
         .eq('user_id', user.id)
-        .eq('book_key', bookKey)
+        .eq('book_id', bookUuid)
         .maybeSingle();
 
       if (checkErr) throw checkErr;
 
       if (existing?.id) {
-        // UNLIKE: supprimer le like existant
+        // UNLIKE: Delete from book_likes using book_uuid
+        // RÈGLE ABSOLUE: Unlike = delete
         const { error: delErr } = await supabase
           .from('book_likes')
           .delete()
-          .eq('id', existing.id);
+          .eq('user_id', user.id)
+          .eq('book_id', bookUuid);
 
         if (delErr) throw delErr;
 
@@ -119,13 +139,13 @@ export function BookQuickActions({
         (async () => {
           try {
             const { data: { user: currentUser } } = await supabase.auth.getUser();
-            if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
+            if (!currentUser?.id || !bookKey) return;
             
             await supabase
               .from('activity_events')
               .delete()
               .eq('actor_id', currentUser.id)
-              .eq('event_type', 'like')
+              .eq('event_type', normalizeEventType('like'))
               .eq('book_key', bookKey);
           } catch (err: any) {
             console.warn('[activity_events] delete failed', {
@@ -137,22 +157,22 @@ export function BookQuickActions({
           }
         })();
       } else {
-        // LIKE: insérer un nouveau like
-        const { error: insErr } = await supabase
+        // LIKE: UPSERT (never INSERT)
+        // RÈGLE ABSOLUE: Like = UPSERT, jamais INSERT
+        const { error: upsertErr } = await supabase
           .from('book_likes')
-          .insert({ user_id: user.id, book_key: bookKey });
+          .upsert(
+            {
+              user_id: user.id,
+              book_key: bookKey,
+              book_id: bookUuid,
+            },
+            { onConflict: 'user_id,book_id' }
+          );
 
-        // Gérer les erreurs 409 (duplicate key) comme "déjà liké"
-        if (insErr) {
-          const msg = String((insErr as any)?.message || '');
-          const code = String((insErr as any)?.code || '');
-          if (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')) {
-            // Déjà liké, on met juste à jour l'état
-            setLikedByMe(true);
-            setIsTogglingLike(false);
-            return;
-          }
-          throw insErr;
+        // Handle upsert errors
+        if (upsertErr) {
+          throw upsertErr;
         }
 
         // Update UI
@@ -165,10 +185,10 @@ export function BookQuickActions({
         (async () => {
           try {
             const { data: { user: currentUser } } = await supabase.auth.getUser();
-            if (!currentUser?.id || !bookKey || bookKey === 'unknown') return;
+            if (!currentUser?.id || !stableBookKey) return;
             
             // Throttle anti-spam : vérifier si dernier insert < 400ms
-            const throttleKey = `${bookKey}:like`;
+            const throttleKey = `${stableBookKey}:like`;
             const lastInsert = activityEventsThrottle.get(throttleKey);
             const now = Date.now();
             if (lastInsert && (now - lastInsert) < ACTIVITY_EVENTS_THROTTLE_MS) {
@@ -182,46 +202,86 @@ export function BookQuickActions({
             const isbn = book.isbn13 || book.isbn10 || book.isbn || null;
             const source = book.google_books_id ? 'google' : book.openLibraryKey ? 'openlibrary' : 'unknown';
 
-            await Promise.all([
-              supabase
-                .from('books_cache')
-                .upsert({
-                  book_key: bookKey,
-                  title,
-                  author,
-                  cover_url: coverUrl,
-                  isbn,
-                  source,
-                  updated_at: new Date().toISOString(),
-                }, {
-                  onConflict: 'book_key',
-                }),
-              supabase
-                .from('activity_events')
-                .insert({
-                  actor_id: currentUser.id,
-                  event_type: 'like',
-                  book_key: bookKey,
-                  comment_id: null,
-                }),
-            ]);
+            // Upsert books_cache
+            const { error: cacheError } = await supabase
+              .from('books_cache')
+              .upsert({
+                book_key: stableBookKey,
+                title,
+                author,
+                cover_url: coverUrl,
+                isbn,
+                source,
+                updated_at: new Date().toISOString(),
+              }, {
+                onConflict: 'book_key',
+              });
+
+            if (cacheError) {
+              console.warn('[books_cache] upsert failed', {
+                message: cacheError.message,
+                code: cacheError.code,
+                details: (cacheError as any).details,
+                hint: (cacheError as any).hint,
+              });
+            }
+
+            // Insert activity_events with comprehensive error logging
+            const eventType = normalizeEventType('like');
+            const activityEventPayload = {
+              actor_id: currentUser.id,
+              event_type: eventType,
+              book_key: stableBookKey,
+              comment_id: null,
+            };
+
+            console.log('[activity_events] Inserting event:', {
+              event_type: eventType,
+              book_key: stableBookKey,
+              actor_id: currentUser.id,
+            });
+
+            const { error: activityError, data: activityData } = await supabase
+              .from('activity_events')
+              .insert(activityEventPayload)
+              .select();
+
+            if (activityError) {
+              console.error('[activity_events] INSERT FAILED - Full error details:', {
+                message: activityError.message,
+                code: activityError.code,
+                details: (activityError as any).details,
+                hint: (activityError as any).hint,
+                status: (activityError as any).status,
+                payload: activityEventPayload,
+                userId: currentUser.id,
+                userIdType: typeof currentUser.id,
+                bookKeyType: typeof stableBookKey,
+              });
+            } else {
+              console.debug('[activity_events] Insert successful', {
+                insertedId: activityData?.[0]?.id,
+                bookKey: stableBookKey,
+              });
+            }
           } catch (err: any) {
-            console.warn('[activity_events] insert failed', {
+            console.error('[activity_events] Exception during insert', {
               message: err?.message,
               code: err?.code,
               details: err?.details,
               hint: err?.hint,
+              stack: err?.stack,
             });
           }
         })();
       }
 
       // Emit event to refresh counts in Explorer
-      socialEvents.emitSocialChanged(bookKey);
+      socialEvents.emitSocialChanged(stableBookKey);
       
       // Emit global event for Profile to refresh liked books
       window.dispatchEvent(new CustomEvent('book-like-changed', { 
-        detail: { bookKey, liked: !existing?.id } 
+        detail: { bookKey: stableBookKey, liked: !existing?.id } 
       }));
     } catch (error: any) {
       console.error('[QuickActions] toggleLike error:', error);

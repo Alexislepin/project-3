@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { X } from 'lucide-react';
 import { BookCover } from './BookCover';
 import { BookSocial } from './BookSocial';
 import { supabase } from '../lib/supabase';
+import { getTranslatedDescription } from '../lib/translate';
+import { generateFallbackSummary } from '../services/openLibrary';
+import { getCurrentLang } from '../lib/appLanguage';
 
 interface BookDetailsModalProps {
   book: any;
@@ -13,18 +18,6 @@ interface BookDetailsModalProps {
   focusComment?: boolean;
 }
 
-// Résumé rapide fixe (2 lignes) en français, instantané
-function buildQuickSummary(book: any): string {
-  const pages = book.total_pages || book.pageCount;
-  const hasGenre = !!(book.genre || book.category);
-  const kind = hasGenre ? 'Roman' : 'Livre';
-  const pagesText = pages ? `${pages} pages` : 'Pages inconnues';
-
-  const line1 = `${kind} • ${pagesText}`;
-  const line2 = 'Aperçu : résumé non détaillé disponible';
-  return `${line1}\n${line2}`;
-}
-
 export function BookDetailsModal({ 
   book, 
   onClose, 
@@ -33,27 +26,21 @@ export function BookDetailsModal({
   initialTab = 'summary',
   focusComment = false,
 }: BookDetailsModalProps) {
+  const { t } = useTranslation();
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
-  
-  // Helper: Check if string is a valid UUID
-  const isUuid = (str: string): boolean => {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(str);
-  };
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
 
   // Log book object when modal opens
   useEffect(() => {
     console.log('[BookDetailsModal] book:', book);
   }, [book]);
 
-  // Load summary from book_summaries using book_key
+  // Load summary from book_summaries using current language (not hardcoded 'fr')
   useEffect(() => {
-    // Use book_key if available, otherwise fallback to book.id (if not UUID)
-    const bookKey = book?.book_key || (book?.id && !isUuid(book.id) ? book.id : null);
-    
-    if (!bookKey) {
+    if (!book) {
       setSummary(null);
       return;
     }
@@ -61,67 +48,153 @@ export function BookDetailsModal({
     setLoadingSummary(true);
     (async () => {
       try {
-        // First, check if book_summaries has book_key column by trying it
-        let summaryData = null;
-        let summaryError = null;
+        // Get current language (normalized to 'fr' or 'en')
+        const currentLang = getCurrentLang();
+        console.debug('[BookDetailsModal] Loading summary - currentLang:', currentLang, 'i18n.resolvedLanguage:', i18n.resolvedLanguage, 'i18n.language:', i18n.language);
 
-        // Try with book_key first (preferred)
-        const { data: dataByKey, error: errorByKey } = await supabase
-          .from('book_summaries')
-          .select('summary')
-          .eq('book_key', bookKey)
-          .maybeSingle();
-
-        if (!errorByKey && dataByKey) {
-          summaryData = dataByKey;
-        } else {
-          // If book_key doesn't work, try book_id (for UUIDs)
-          if (book?.id && isUuid(book.id)) {
-            const { data: dataById, error: errorById } = await supabase
-              .from('book_summaries')
-              .select('summary')
-              .eq('book_id', book.id)
-              .maybeSingle();
-            
-            if (!errorById) {
-              summaryData = dataById;
-              summaryError = errorById;
-            } else {
-              summaryError = errorById;
-            }
-          } else {
-            summaryError = errorByKey;
+        // Build book_key according to convention: isbn:${isbn} or uuid:${id}
+        let bookKey: string | null = null;
+        if (book.isbn) {
+          const cleanIsbn = String(book.isbn).replace(/[-\s]/g, '');
+          if (cleanIsbn.length >= 10) {
+            bookKey = `isbn:${cleanIsbn}`;
           }
         }
+        if (!bookKey && book.id) {
+          bookKey = `uuid:${book.id}`;
+        }
+
+        if (!bookKey) {
+          console.debug('[BookDetailsModal] No bookKey found, skipping summary query');
+          setLoadingSummary(false);
+          return;
+        }
+
+        // Query book_summaries: source='isbn' or 'uuid', source_id=isbn or id, lang=currentLang (not hardcoded 'fr')
+        const source = book.isbn ? 'isbn' : 'uuid';
+        const sourceId = book.isbn ? String(book.isbn).replace(/[-\s]/g, '') : book.id;
+
+        const { data: summaryData, error: summaryError } = await supabase
+          .from('book_summaries')
+          .select('summary, lang')
+          .eq('source', source)
+          .eq('source_id', sourceId)
+          .eq('lang', currentLang) // Use normalized current language ('fr' or 'en')
+          .maybeSingle();
 
         if (summaryError) {
-          console.error('[BookDetailsModal] Error loading summary:', summaryError);
+          console.error('[BookDetailsModal] Error loading summary:', {
+            error: summaryError,
+            message: summaryError.message,
+            code: summaryError.code,
+            details: summaryError.details,
+            hint: summaryError.hint,
+            source,
+            sourceId,
+            lang: currentLang,
+          });
           setLoadingSummary(false);
           return;
         }
 
         if (summaryData?.summary) {
+          console.debug('[BookDetailsModal] Summary found - lang:', summaryData.lang, 'summary length:', summaryData.summary.length);
           setSummary(summaryData.summary);
           setLoadingSummary(false);
           return;
         }
 
-        // Fallback: use description if available
-        if (book.description) {
-          setSummary(book.description);
-          setLoadingSummary(false);
-          return;
-        }
+        // No summary found in current language
+        console.debug('[BookDetailsModal] No summary found for lang:', currentLang, 'source:', source, 'sourceId:', sourceId);
+        setSummary(null);
+        setLoadingSummary(false);
       } catch (error) {
         console.error('[BookDetailsModal] Unexpected error loading summary:', error);
-      } finally {
         setLoadingSummary(false);
       }
     })();
-  }, [book?.book_key, book?.id, book?.description]);
+  }, [book?.id, book?.isbn, i18n.resolvedLanguage]); // Re-run when book or language changes
 
-  // Determine display description
-  const displayDescription = summary || (book.description ? book.description : buildQuickSummary(book));
+  // Load and translate description (re-runs when language changes)
+  useEffect(() => {
+    if (!book) {
+      setTranslatedDescription(null);
+      return;
+    }
+
+    const loadTranslatedDescription = async () => {
+      setTranslating(true);
+      try {
+        // Get current language (normalized 'fr' or 'en')
+        const currentLang = getCurrentLang();
+        console.debug('[BookDetailsModal] Loading translated description - currentLang:', currentLang);
+
+        // Priority 1: summary from book_summaries (already in correct language from query)
+        if (summary) {
+          // ⚠️ detectLanguage est peu fiable, on laisse getTranslatedDescription gérer
+          // Elle vérifiera le cache et traduira si nécessaire
+          console.debug('[BookDetailsModal] Summary found - translating to', currentLang);
+          const translated = await getTranslatedDescription(book, summary, currentLang);
+          setTranslatedDescription(translated);
+          setTranslating(false);
+          return;
+        }
+
+        // Priority 2: Try to get summary in other language as fallback, then translate
+        if (book.isbn || book.id) {
+          const source = book.isbn ? 'isbn' : 'uuid';
+          const sourceId = book.isbn ? String(book.isbn).replace(/[-\s]/g, '') : book.id;
+          const otherLang = currentLang === 'fr' ? 'en' : 'fr';
+          
+          const { data: otherSummaryData } = await supabase
+            .from('book_summaries')
+            .select('summary, lang')
+            .eq('source', source)
+            .eq('source_id', sourceId)
+            .eq('lang', otherLang)
+            .maybeSingle();
+          
+          if (otherSummaryData?.summary) {
+            console.debug('[BookDetailsModal] Found summary in other lang:', otherSummaryData.lang, 'translating to', currentLang);
+            const translated = await getTranslatedDescription(book, otherSummaryData.summary, currentLang);
+            setTranslatedDescription(translated);
+            setTranslating(false);
+            return;
+          }
+        }
+
+        // Priority 3: description from books table
+        if (book.description && book.description.trim().length > 0) {
+          console.debug('[BookDetailsModal] Using book.description, translating to', currentLang);
+          const translated = await getTranslatedDescription(book, book.description.trim(), currentLang);
+          setTranslatedDescription(translated);
+          setTranslating(false);
+          return;
+        }
+
+        // Priority 4: Generate fallback summary in current language
+        console.debug('[BookDetailsModal] No summary/description found, generating fallback');
+        const fallback = generateFallbackSummary({
+          title: book.title,
+          author: book.author,
+          total_pages: book.total_pages,
+          category: book.genre,
+          genre: book.genre,
+        });
+        setTranslatedDescription(fallback);
+        setTranslating(false);
+      } catch (error) {
+        console.error('[BookDetailsModal] Error translating description:', error);
+        setTranslatedDescription(null);
+        setTranslating(false);
+      }
+    };
+
+    loadTranslatedDescription();
+  }, [book, summary, i18n.resolvedLanguage]); // Re-run when book, summary, or language changes
+
+  // Determine display description: translated description or fallback
+  const displayDescription = translatedDescription;
 
   // Scroll to comments section if initialTab is 'comments'
   useEffect(() => {
@@ -164,18 +237,22 @@ export function BookDetailsModal({
     });
   }, [book.id, book.title]);
   return (
-    <div className="fixed inset-0 bg-black/60 z-[100] flex items-end" onClick={onClose}>
+    <div 
+      className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" 
+      onClick={onClose}
+    >
       <div
-        className="bg-background-light rounded-t-3xl w-full max-w-lg mx-auto max-h-[85vh] overflow-y-auto animate-slide-up"
+        className="bg-background-light rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
       >
         <div className="sticky top-0 bg-background-light/95 backdrop-blur-sm z-10 px-6 pt-4 pb-3 border-b border-gray-200">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold text-text-main-light">Détails du livre</h2>
+            <h2 className="text-xl font-bold text-text-main-light">{t('book.details')}</h2>
             <button
               onClick={onClose}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
-              aria-label="Fermer"
+              aria-label={t('common.close')}
             >
               <X className="w-5 h-5 text-text-sub-light" />
             </button>
@@ -183,15 +260,17 @@ export function BookDetailsModal({
         </div>
 
         <div className="px-6 py-6">
-          <div className="flex gap-4 mb-6">
-            <BookCover
-              coverUrl={book.cover_url}
-              title={book.title}
-              author={book.author || 'Auteur inconnu'}
-              className="w-28 shrink-0 aspect-[2/3] rounded-xl overflow-hidden shadow-lg"
-            />
+          <div className="flex gap-4 mb-6 items-start">
+            <div className="w-20 h-28 shrink-0">
+              <BookCover
+                coverUrl={book.cover_url}
+                title={book.title}
+                author={book.author || 'Auteur inconnu'}
+                className="w-full h-full rounded-lg overflow-hidden shadow-sm border border-gray-200"
+              />
+            </div>
 
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <h3 className="text-2xl font-bold text-text-main-light mb-2 leading-tight">
                 {book.title}
               </h3>
@@ -205,9 +284,13 @@ export function BookDetailsModal({
                     {book.genre}
                   </span>
                 )}
-                {book.total_pages > 0 && (
+                {book.total_pages ? (
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-700">
-                    {book.total_pages} pages
+                    {book.total_pages} {t('book.pages')}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-500">
+                    {t('book.unknownPages')}
                   </span>
                 )}
                 {book.edition && book.edition !== 'Standard Edition' && (
@@ -238,22 +321,22 @@ export function BookDetailsModal({
             </div>
           )}
 
-          {(displayDescription || loadingSummary) && (
-            <div className="mb-6">
-              <h4 className="text-sm font-bold text-text-main-light mb-3 uppercase tracking-wide">
-                Résumé
-              </h4>
-              {loadingSummary ? (
-                <p className="text-sm text-black/50 italic">Chargement du résumé...</p>
-              ) : displayDescription ? (
-                <p className="text-sm text-black/70 leading-relaxed whitespace-pre-line">
-                  {displayDescription}
-                </p>
-              ) : (
-                <p className="text-sm text-black/50 italic">Résumé indisponible</p>
-              )}
-            </div>
-          )}
+          <div className="mb-6">
+            <h4 className="text-sm font-bold text-text-main-light mb-3 uppercase tracking-wide">
+              {t('book.summary')}
+            </h4>
+            {loadingSummary || translating ? (
+              <p className="text-sm text-black/50 italic">
+                {translating ? t('book.translating') : t('common.loading')}
+              </p>
+            ) : displayDescription && displayDescription.trim().length > 0 ? (
+              <p className="text-sm text-black/70 leading-relaxed whitespace-pre-line line-clamp-6">
+                {displayDescription}
+              </p>
+            ) : (
+              <p className="text-sm text-black/50 italic">{t('book.summaryUnavailable')}</p>
+            )}
+          </div>
 
           {/* Section sociale : likes et commentaires */}
           <div ref={commentsSectionRef}>
@@ -265,7 +348,7 @@ export function BookDetailsModal({
               onClick={() => onAddToLibrary(book)}
               className="w-full bg-primary text-black py-4 rounded-xl font-bold hover:brightness-95 transition-all shadow-sm"
             >
-              Ajouter à ma bibliothèque
+              {t('book.addToLibrary')}
             </button>
           )}
         </div>

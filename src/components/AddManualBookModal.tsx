@@ -43,7 +43,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
       const bookData: any = {
         title: title.trim(),
         author: author.trim(),
-        total_pages: totalPages ? parseInt(totalPages, 10) || 0 : 0,
+        total_pages: totalPages ? (parseInt(totalPages, 10) > 0 ? parseInt(totalPages, 10) : null) : null,
         isbn: isbnValue,
         description: description.trim() || null,
         source: 'manual',

@@ -85,7 +85,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
       .from('activity_events')
       .select('book_key, created_at')
       .eq('actor_id', userId)
-      .eq('event_type', 'like')
+      .eq('event_type', 'book_like')
       .order('created_at', { ascending: false });
 
     if (eventsError) {
@@ -148,8 +148,8 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
     setLoading(false);
   };
 
-  const getProgress = (currentPage: number, totalPages: number) => {
-    if (!totalPages) return 0;
+  const getProgress = (currentPage: number, totalPages: number | null) => {
+    if (!totalPages || totalPages === 0) return 0;
     return Math.round((currentPage / totalPages) * 100);
   };
 
@@ -227,7 +227,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
                 console.warn('UserBook without book data:', userBook);
                 return null;
               }
-              const progress = getProgress(userBook.current_page, book.total_pages || 0);
+              const progress = getProgress(userBook.current_page, book.total_pages ?? null);
 
               return (
                 <div
@@ -246,7 +246,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
                     <h3 className="font-bold text-text-main-light mb-1 line-clamp-2">{book.title}</h3>
                     <p className="text-sm text-text-sub-light mb-2 truncate">{book.author}</p>
 
-                    {filter === 'reading' && book.total_pages > 0 && (
+                    {filter === 'reading' && book.total_pages && (
                       <div className="mb-2">
                         <div className="flex items-center justify-between text-xs text-text-sub-light mb-1">
                           <span>
@@ -269,9 +269,13 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
                           {book.genre}
                         </span>
                       )}
-                      {book.total_pages > 0 && (
+                      {book.total_pages ? (
                         <span className="inline-block text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
                           {book.total_pages} pages
+                        </span>
+                      ) : (
+                        <span className="inline-block text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-medium">
+                          Pages inconnues
                         </span>
                       )}
                     </div>

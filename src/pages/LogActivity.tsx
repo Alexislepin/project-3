@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, BookOpen, Dumbbell, Brain, Target } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { updateStreakAfterActivity } from '../utils/streak';
 
 type ActivityType = 'reading' | 'workout' | 'learning' | 'habit';
 
@@ -123,6 +124,9 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
           })
           .eq('id', user.id);
       }
+
+      // Update streak after activity is created
+      await updateStreakAfterActivity(user.id);
 
       onComplete();
     }

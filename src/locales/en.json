@@ -1,0 +1,126 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "loadingProfile": "Loading profile...",
+    "error": "Error",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "add": "Add",
+    "search": "Search",
+    "back": "Back",
+    "backToProfile": "Back to profile",
+    "settings": "Settings",
+    "notifications": "Notifications",
+    "signOut": "Sign out",
+    "viewMore": "View more"
+  },
+  "nav": {
+    "home": "Home",
+    "stats": "Stats",
+    "session": "Session",
+    "library": "Library",
+    "profile": "Profile"
+  },
+  "home": {
+    "title": "Activity Feed",
+    "all": "All",
+    "following": "Following",
+    "me": "Me",
+    "noActivities": "No activities",
+    "startReading": "Start reading"
+  },
+  "library": {
+    "title": "My Library",
+    "reading": "Reading",
+    "wantToRead": "Want to Read",
+    "completed": "Completed",
+    "explore": "Explore",
+    "addBook": "Add book",
+    "noBooks": "No books",
+    "pages": "pages",
+    "unknownPages": "Unknown pages",
+    "searching": "Searching for book..."
+  },
+  "search": {
+    "placeholder": "Type a title, author or ISBN"
+  },
+  "profile": {
+    "title": "Profile",
+    "edit": "Edit profile",
+    "stats": "Statistics",
+    "booksShort": "Books",
+    "likedBooks": "Liked",
+    "followers": "Followers",
+    "following": "Following",
+    "streak": "Streak",
+    "weeklyActivity": "Weekly activity",
+    "pages": "Pages",
+    "hours": "Hours",
+    "totalRead": "Total read",
+    "timeSpent": "Time spent",
+    "currentlyReading": "Currently reading",
+    "likedBooksTitle": "Liked books",
+    "allLikedBooks": "All liked books",
+    "noLikedBooksYet": "No liked books yet",
+    "noLikedBooks": "No liked books",
+    "startLikingBooks": "Start liking books to see them here",
+    "interests": "Interests",
+    "myClubs": "My clubs",
+    "joinReadingClubs": "Join reading clubs"
+  },
+  "insights": {
+    "title": "Statistics",
+    "weekly": "Weekly",
+    "streak": "Streak",
+    "currentStreak": "Current streak",
+    "longestStreak": "Longest streak",
+    "goals": "Goals",
+    "dailyTime": "Daily time",
+    "dailyPages": "Daily pages",
+    "weeklyWorkouts": "Weekly workouts",
+    "weeklyPages": "Weekly pages"
+  },
+  "book": {
+    "details": "Details",
+    "addToLibrary": "Add to library",
+    "alreadyAdded": "Already added",
+    "pages": "pages",
+    "unknownPages": "Unknown pages",
+    "summary": "Summary",
+    "summaryUnavailable": "Summary unavailable",
+    "translating": "Translating...",
+    "comments": "Comments",
+    "likes": "Likes",
+    "noDescription": "No description available"
+  },
+  "session": {
+    "title": "Reading session",
+    "currentPage": "Current page",
+    "pagesRead": "Pages read",
+    "duration": "Duration",
+    "finish": "Finish",
+    "cancel": "Cancel"
+  },
+  "onboarding": {
+    "language": {
+      "title": "Choose your language",
+      "subtitle": "Select the interface language",
+      "french": "Français",
+      "english": "English",
+      "continue": "Continue"
+    }
+  },
+  "days": {
+    "sunday": "S",
+    "monday": "M",
+    "tuesday": "T",
+    "wednesday": "W",
+    "thursday": "T",
+    "friday": "F",
+    "saturday": "S"
+  }
+}
+

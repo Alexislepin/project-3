@@ -4,7 +4,7 @@ import { BookQuickActions } from "./BookQuickActions";
 // Cache mémoire global pour les covers (évite de retenter les URLs qui ont échoué)
 const coverCache = new Map<string, { valid: boolean; expiresAt: number }>();
 const COVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 heures
-const COVER_TIMEOUT_MS = 8000; // 8 secondes pour tester une URL cover (augmenté pour 4G lente)
+const COVER_TIMEOUT_MS = 15000; // 15 secondes pour tester une URL cover (augmenté pour 4G lente)
 
 type BookCoverProps = {
   title: string;

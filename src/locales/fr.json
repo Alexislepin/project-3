@@ -1,0 +1,126 @@
+{
+  "common": {
+    "loading": "Chargement...",
+    "loadingProfile": "Chargement du profil...",
+    "error": "Erreur",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "edit": "Modifier",
+    "close": "Fermer",
+    "add": "Ajouter",
+    "search": "Rechercher",
+    "back": "Retour",
+    "backToProfile": "Retour au profil",
+    "settings": "Paramètres",
+    "notifications": "Notifications",
+    "signOut": "Se déconnecter",
+    "viewMore": "Voir plus"
+  },
+  "nav": {
+    "home": "Accueil",
+    "stats": "Stats",
+    "session": "Session",
+    "library": "Bibliothèque",
+    "profile": "Profil"
+  },
+  "home": {
+    "title": "Fil d'actualité",
+    "all": "Tous",
+    "following": "Suivis",
+    "me": "Moi",
+    "noActivities": "Aucune activité",
+    "startReading": "Commencer à lire"
+  },
+  "library": {
+    "title": "Ma Bibliothèque",
+    "reading": "En cours",
+    "wantToRead": "À lire",
+    "completed": "Terminé",
+    "explore": "Explorer",
+    "addBook": "Ajouter un livre",
+    "noBooks": "Aucun livre",
+    "pages": "pages",
+    "unknownPages": "Pages inconnues",
+    "searching": "Recherche du livre..."
+  },
+  "search": {
+    "placeholder": "Tapez un titre, un auteur ou un ISBN"
+  },
+  "profile": {
+    "title": "Profil",
+    "edit": "Modifier le profil",
+    "stats": "Statistiques",
+    "booksShort": "Livres",
+    "likedBooks": "Aimés",
+    "followers": "Abonnés",
+    "following": "Suivis",
+    "streak": "Série",
+    "weeklyActivity": "Activité hebdomadaire",
+    "pages": "Pages",
+    "hours": "Heures",
+    "totalRead": "Total lues",
+    "timeSpent": "Temps passé",
+    "currentlyReading": "En cours de lecture",
+    "likedBooksTitle": "Livres aimés",
+    "allLikedBooks": "Tous les livres aimés",
+    "noLikedBooksYet": "Aucun livre aimé pour l'instant",
+    "noLikedBooks": "Aucun livre aimé",
+    "startLikingBooks": "Commencez à liker des livres pour les voir ici",
+    "interests": "Centres d'intérêt",
+    "myClubs": "Mes clubs",
+    "joinReadingClubs": "Rejoignez des clubs de lecture"
+  },
+  "insights": {
+    "title": "Statistiques",
+    "weekly": "Hebdomadaire",
+    "streak": "Série",
+    "currentStreak": "Série actuelle",
+    "longestStreak": "Plus longue série",
+    "goals": "Objectifs",
+    "dailyTime": "Temps quotidien",
+    "dailyPages": "Pages quotidiennes",
+    "weeklyWorkouts": "Entraînements hebdomadaires",
+    "weeklyPages": "Pages hebdomadaires"
+  },
+  "book": {
+    "details": "Détails",
+    "addToLibrary": "Ajouter à la bibliothèque",
+    "alreadyAdded": "Déjà ajouté",
+    "pages": "pages",
+    "unknownPages": "Pages inconnues",
+    "summary": "Résumé",
+    "summaryUnavailable": "Résumé indisponible",
+    "translating": "Traduction...",
+    "comments": "Commentaires",
+    "likes": "J'aime",
+    "noDescription": "Aucune description disponible"
+  },
+  "session": {
+    "title": "Session de lecture",
+    "currentPage": "Page actuelle",
+    "pagesRead": "Pages lues",
+    "duration": "Durée",
+    "finish": "Terminer",
+    "cancel": "Annuler"
+  },
+  "onboarding": {
+    "language": {
+      "title": "Choisissez votre langue",
+      "subtitle": "Sélectionnez la langue de l'interface",
+      "french": "Français",
+      "english": "English",
+      "continue": "Continuer"
+    }
+  },
+  "days": {
+    "sunday": "D",
+    "monday": "L",
+    "tuesday": "M",
+    "wednesday": "M",
+    "thursday": "J",
+    "friday": "V",
+    "saturday": "S"
+  }
+}
+
