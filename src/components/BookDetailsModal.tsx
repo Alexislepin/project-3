@@ -1,21 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
-import { X } from 'lucide-react';
+import { X, Sparkles } from 'lucide-react';
+import { useScrollLock } from '../hooks/useScrollLock';
 import { BookCover } from './BookCover';
 import { BookSocial } from './BookSocial';
+import { AddCoverModal } from './AddCoverModal';
 import { supabase } from '../lib/supabase';
 import { getTranslatedDescription } from '../lib/translate';
 import { generateFallbackSummary } from '../services/openLibrary';
 import { getCurrentLang } from '../lib/appLanguage';
+import { LibraryAIModal } from './LibraryAIModal';
+import { canonicalBookKey } from '../lib/bookSocial';
+import { useAuth } from '../contexts/AuthContext';
 
 interface BookDetailsModalProps {
   book: any;
   onClose: () => void;
   onAddToLibrary?: (book: any) => void;
   showAddButton?: boolean;
+  showAiButton?: boolean; // Show/hide AI button (default: true, false for Explorer context)
   initialTab?: 'summary' | 'comments';
   focusComment?: boolean;
+  userBookId?: string; // For edit functionality
+  currentPage?: number; // For recap functionality
+  onEditRequested?: () => void; // Callback to open EditBookModal
+  onOpenRecap?: () => void; // Callback to open BookRecapModal
 }
 
 export function BookDetailsModal({ 
@@ -23,20 +33,47 @@ export function BookDetailsModal({
   onClose, 
   onAddToLibrary, 
   showAddButton = false,
+  showAiButton = true, // Default: show AI button, hide for Explorer context
   initialTab = 'summary',
   focusComment = false,
+  userBookId,
+  currentPage,
+  onEditRequested,
+  onOpenRecap,
 }: BookDetailsModalProps) {
   const { t } = useTranslation();
+  const { user } = useAuth();
   const commentsSectionRef = useRef<HTMLDivElement>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
+  const [showAIModal, setShowAIModal] = useState(false);
+  const [userBook, setUserBook] = useState<any>(null);
+  const [showAddCover, setShowAddCover] = useState(false);
 
   // Log book object when modal opens
   useEffect(() => {
     console.log('[BookDetailsModal] book:', book);
   }, [book]);
+
+  // Load user_book to get current_page and custom_cover_url
+  useEffect(() => {
+    if (!user || !book?.id) return;
+
+    (async () => {
+      const { data } = await supabase
+        .from('user_books')
+        .select('current_page, custom_cover_url')
+        .eq('user_id', user.id)
+        .eq('book_id', book.id)
+        .maybeSingle();
+
+      if (data) {
+        setUserBook(data);
+      }
+    })();
+  }, [user, book?.id]);
 
   // Load summary from book_summaries using current language (not hardcoded 'fr')
   useEffect(() => {
@@ -236,15 +273,31 @@ export function BookDetailsModal({
       // Ignore silencieusement les erreurs
     });
   }, [book.id, book.title]);
+
+  // Lock scroll when modal is open
+  useScrollLock(true);
+
   return (
     <div 
-      className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" 
+      className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4"
+      data-modal-overlay
       onClick={onClose}
+      onTouchMove={(e) => {
+        // Prevent scroll on overlay
+        const target = e.target as HTMLElement;
+        if (!target.closest('[data-modal-content]')) {
+          e.preventDefault();
+        }
+      }}
     >
       <div
+        data-modal-content
         className="bg-background-light rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
-        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+        style={{ 
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+          maxHeight: 'calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))'
+        }}
       >
         <div className="sticky top-0 bg-background-light/95 backdrop-blur-sm z-10 px-6 pt-4 pb-3 border-b border-gray-200">
           <div className="flex items-center justify-between">
@@ -259,14 +312,24 @@ export function BookDetailsModal({
           </div>
         </div>
 
-        <div className="px-6 py-6">
+        <div className="px-6 py-6" style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom) + 88px)' }}>
           <div className="flex gap-4 mb-6 items-start">
             <div className="w-20 h-28 shrink-0">
               <BookCover
-                coverUrl={book.cover_url}
+                custom_cover_url={userBook?.custom_cover_url || null}
+                coverUrl={book.cover_url || null}
                 title={book.title}
                 author={book.author || 'Auteur inconnu'}
+                isbn={book.isbn || null}
+                isbn13={book.isbn13 || null}
+                isbn10={book.isbn10 || null}
+                cover_i={book.openlibrary_cover_id || null}
+                openlibrary_cover_id={book.openlibrary_cover_id || null}
+                googleCoverUrl={book.google_books_id ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                 className="w-full h-full rounded-lg overflow-hidden shadow-sm border border-gray-200"
+                bookId={book.id}
+                showAddCoverButton={!!user && !!userBook && !userBook.custom_cover_url}
+                onAddCover={() => setShowAddCover(true)}
               />
             </div>
 
@@ -343,6 +406,32 @@ export function BookDetailsModal({
             <BookSocial book={book} focusComment={focusComment} />
           </div>
 
+          {/* Bouton Voir sur Lireka (si pages ou cover manquants) */}
+          {(!book.total_pages || !book.cover_url) && book.isbn && (
+            <button
+              onClick={() => {
+                const cleanIsbn = String(book.isbn).replace(/[-\s]/g, '');
+                const lirekaUrl = `https://www.lireka.com/fr/search?query=${cleanIsbn}`;
+                window.open(lirekaUrl, '_blank');
+              }}
+              className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:brightness-95 transition-all shadow-sm flex items-center justify-center gap-2 mb-3 text-sm"
+            >
+              <span>Voir sur Lireka</span>
+            </button>
+          )}
+
+          {/* Bouton Rappel IA - Only show if showAiButton is true and not using onOpenRecap */}
+          {showAiButton && !onOpenRecap && (
+            <button
+              onClick={() => {
+                setShowAIModal(true);
+              }}
+              className="w-full bg-stone-900 text-white py-4 rounded-xl font-semibold hover:brightness-95 transition-all shadow-sm mb-3"
+            >
+              IA
+            </button>
+          )}
+
           {showAddButton && onAddToLibrary && (
             <button
               onClick={() => onAddToLibrary(book)}
@@ -352,7 +441,66 @@ export function BookDetailsModal({
             </button>
           )}
         </div>
+
+        {/* Footer with actions */}
+        {(userBookId || onOpenRecap) && (
+          <div className="sticky bottom-0 bg-background-light border-t border-gray-200 px-6 py-4" style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}>
+            <div className="flex gap-3">
+              {userBookId && onEditRequested && (
+                <button
+                  onClick={onEditRequested}
+                  className="flex-1 py-3 px-4 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors"
+                >
+                  Modifier
+                </button>
+              )}
+              {onOpenRecap && (
+                <button
+                  onClick={onOpenRecap}
+                  className="flex-1 py-3 px-4 bg-stone-900 text-white rounded-xl font-semibold hover:brightness-95 transition-all"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  IA
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+
+      {showAIModal && (
+        <LibraryAIModal
+          onClose={() => setShowAIModal(false)}
+          bookKey={canonicalBookKey(book)}
+          bookTitle={book.title}
+          bookAuthor={book.author}
+          currentPage={userBook?.current_page || undefined}
+          totalPages={book.total_pages || undefined}
+        />
+      )}
+
+      {showAddCover && user && book.id && (
+        <AddCoverModal
+          open={showAddCover}
+          bookId={book.id}
+          bookTitle={book.title}
+          onClose={() => setShowAddCover(false)}
+          onUploaded={async (newUrl) => {
+            // Reload userBook to refresh custom cover
+            const { data } = await supabase
+              .from('user_books')
+              .select('current_page, custom_cover_url')
+              .eq('user_id', user.id)
+              .eq('book_id', book.id)
+              .maybeSingle();
+            
+            if (data) {
+              setUserBook(data);
+            }
+            setShowAddCover(false);
+          }}
+        />
+      )}
     </div>
   );
 }

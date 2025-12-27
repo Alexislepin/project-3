@@ -1,13 +1,66 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { TrendingUp, Target, Calendar, Flame, Plus, X } from 'lucide-react';
-import { checkDailyGoals, checkWeeklyGoals, type DailyGoalStatus } from '../utils/goalNotifications';
+import { Target, Calendar, Flame, Plus, X, BookOpen, Clock, Trophy } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
+import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+
+// Date helpers (local timezone)
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function toLocalDateKey(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function startOfLocalDay(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// Monday-start week
+function startOfLocalWeek(date = new Date()) {
+  const d = startOfLocalDay(date);
+  const day = d.getDay(); // 0=Sun ... 6=Sat
+  const diffToMonday = (day + 6) % 7; // Mon=0, Tue=1 ... Sun=6
+  d.setDate(d.getDate() - diffToMonday);
+  return d;
+}
+
+
+// Get last 7 days range
+function getLast7DaysRange() {
+  const now = new Date();
+  const since = new Date(now);
+  since.setDate(since.getDate() - 7);
+  return { since, now };
+}
+
+// Build weekly bars data (Mon..Sun)
+function buildWeeklyBarsData(activities: any[]): number[] {
+  const weekData = [0, 0, 0, 0, 0, 0, 0]; // Mon..Sun
+
+  for (const a of activities) {
+    if (!a.created_at) continue;
+    const d = new Date(a.created_at);
+    const js = d.getDay(); // Sun=0..Sat=6
+    const idx = (js + 6) % 7; // Mon=0..Sun=6
+    weekData[idx] += Number(a.pages_read) || 0;
+  }
+
+  return weekData;
+}
+
+import { computeReadingStats, formatStatValue, formatDuration } from '../lib/readingStats';
+import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LeaderboardModal } from '../components/LeaderboardModal';
+import { computeStreakFromActivities } from '../lib/readingStreak';
 
 export function Insights() {
   const [goals, setGoals] = useState<any[]>([]);
-  const [weeklyStats, setWeeklyStats] = useState({ pages: 0, activities: 0, hours: 0 });
+  const [weeklyStats, setWeeklyStats] = useState({ pages: 0, activities: 0, totalMinutes: 0 });
   const [todayStats, setTodayStats] = useState({ pages: 0, minutes: 0 });
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
@@ -15,62 +68,298 @@ export function Insights() {
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [newGoalType, setNewGoalType] = useState<string>('daily_15min');
   const [newGoalValue, setNewGoalValue] = useState<string>('15');
+  
+  // Stats 7 jours
+  const [stats7d, setStats7d] = useState({
+    totalMinutes: 0,
+    totalPages: 0,
+    speedPph: null as number | null,
+    paceMinPerPage: null as number | null,
+    hasSessions: false, // Track if there are any reading sessions in 7d
+  });
+  
+  // PR (record)
+  const [pr, setPr] = useState({
+    speedPph: null as number | null,
+    paceMinPerPage: null as number | null,
+    hasAnySessions: false, // Track if user has ever had a reading session
+  });
+  
+  // Weekly activity bars (Mon..Sun)
+  const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [streakDays, setStreakDays] = useState(0);
+  
   const { user } = useAuth();
 
+  const openLeaderboard = () => setShowLeaderboard(true);
+  const closeLeaderboard = () => setShowLeaderboard(false);
+
+  // 1) Load data when user changes
   useEffect(() => {
-    loadGoals();
-    loadWeeklyStats();
-    loadTodayStats();
-    loadProfile();
-    loadCalendarData();
-  }, [user]);
+    if (!user?.id) return;
+    loadInsightsData();
+    loadStreak();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
-  const loadGoals = async () => {
-    if (!user) return;
+  // 2) Listener XP (separate effect, no profile dependency)
+  useEffect(() => {
+    const handleXpUpdated = (event: any) => {
+      const xp = event?.detail?.xp_total;
+      if (typeof xp === 'number') {
+        setProfile((p: any) => (p ? { ...p, xp_total: xp } : { xp_total: xp }));
+      } else {
+        loadInsightsData();
+      }
+    };
 
-    // Load goals from user_goals table
-    const { data: dbGoals, error } = await supabase
+    window.addEventListener('xp-updated', handleXpUpdated as EventListener);
+    return () => window.removeEventListener('xp-updated', handleXpUpdated as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  const loadStreak = async () => {
+    if (!user) {
+      setStreakDays(0);
+      return;
+    }
+
+    try {
+      // Load last 200 reading activities (wide range, we'll filter in local timezone)
+      const { data: activities, error } = await supabase
+        .from('activities')
+        .select('created_at, pages_read, duration_minutes, type, photos')
+        .eq('user_id', user.id)
+        .eq('type', 'reading')
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      if (error) {
+        console.error('[loadStreak] Error:', error);
+        setStreakDays(0);
+        return;
+      }
+
+      // Compute streak from activities (local timezone)
+      const streak = computeStreakFromActivities(activities || []);
+      setStreakDays(streak);
+
+      // Update profile's current_streak
+      await supabase
+        .from('user_profiles')
+        .update({ current_streak: streak })
+        .eq('id', user.id);
+
+      // Synchronize local profile state
+      setProfile((p: any) => p ? { ...p, current_streak: streak } : { current_streak: streak });
+    } catch (error) {
+      console.error('[loadStreak] Exception:', error);
+      setStreakDays(0);
+    }
+  };
+
+  const loadInsightsData = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Calculate date boundaries in local timezone
+      const today = startOfLocalDay();
+      const weekStart = startOfLocalWeek();
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const { since: last7dStart } = getLast7DaysRange();
+
+      const todayKey = toLocalDateKey(today);
+
+      // Fetch all data in parallel
+      const [goalsResult, profileResult, weekActivitiesResult, monthActivitiesResult, allReadingActivitiesResult] = await Promise.all([
+        supabase
       .from('user_goals')
       .select('*')
       .eq('user_id', user.id)
       .eq('active', true)
-      .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('user_profiles')
+          .select('longest_streak, xp_total, current_streak')
+          .eq('id', user.id)
+          .maybeSingle(),
+        supabase
+          .from('activities')
+          .select('created_at, pages_read, duration_minutes, type, reading_speed_pph, reading_pace_min_per_page, photos')
+          .eq('user_id', user.id)
+          .gte('created_at', weekStart.toISOString()),
+        supabase
+          .from('activities')
+          .select('created_at, photos')
+          .eq('user_id', user.id)
+          .gte('created_at', monthStart.toISOString()),
+        supabase
+          .from('activities')
+          .select('pages_read, duration_minutes, reading_speed_pph, reading_pace_min_per_page, created_at, photos')
+          .eq('user_id', user.id)
+          .eq('type', 'reading')
+          .order('created_at', { ascending: false })
+          .limit(100), // For PR calculation
+      ]);
 
-    if (error) {
-      console.error('[loadGoals] Error:', error);
+      if (goalsResult.error) {
+        console.error('[loadInsightsData] Goals error:', goalsResult.error);
+      }
+      if (profileResult.error) {
+        console.error('[loadInsightsData] Profile error:', profileResult.error);
+      }
+      if (weekActivitiesResult.error) {
+        console.error('[loadInsightsData] Week activities error:', weekActivitiesResult.error);
+        setLoading(false);
       return;
     }
 
-    // Calculate current values for each goal
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const todayStart = today.toISOString();
+      const allWeekActivities = weekActivitiesResult.data || [];
+      const allMonthActivities = monthActivitiesResult.data || [];
+      const allReadingActivities = allReadingActivitiesResult.data || [];
+      const dbGoals = goalsResult.data || [];
+      const profileData = profileResult.data;
 
-    const startOfWeek = new Date();
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
-    const weekStart = startOfWeek.toISOString();
+      // Derive todayStats from fetched activities
+      const todayActivities = allWeekActivities.filter(a => {
+        const activityDate = new Date(a.created_at);
+        return toLocalDateKey(activityDate) === todayKey;
+      });
 
-    // Get today's and week's activities
-    const { data: todayActivities } = await supabase
-      .from('activities')
-      .select('pages_read, duration_minutes, type')
-      .eq('user_id', user.id)
-      .gte('created_at', todayStart);
+      const todayPages = todayActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
+      const todayMinutes = todayActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+      setTodayStats({ pages: todayPages, minutes: todayMinutes });
 
-    const { data: weekActivities } = await supabase
-      .from('activities')
-      .select('pages_read, duration_minutes, type')
-      .eq('user_id', user.id)
-      .gte('created_at', weekStart);
+      // Build weekly activity bars (Mon..Sun)
+      const weekBars = buildWeeklyBarsData(allWeekActivities);
+      setWeeklyActivity(weekBars);
 
-    const todayPages = todayActivities?.reduce((sum, a) => sum + (a.pages_read || 0), 0) || 0;
-    const todayMinutes = todayActivities?.reduce((sum, a) => sum + (a.duration_minutes || 0), 0) || 0;
-    const weekPages = weekActivities?.reduce((sum, a) => sum + (a.pages_read || 0), 0) || 0;
-    const weekWorkouts = weekActivities?.filter(a => a.type === 'workout').length || 0;
-    const weekBooks = weekActivities?.filter(a => a.type === 'reading' && a.pages_read > 0).length || 0;
+      // Derive weekStats from fetched activities
+      const weekPages = allWeekActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
+      const weekMinutes = allWeekActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+      setWeeklyStats({
+        pages: weekPages,
+        activities: allWeekActivities.length,
+        totalMinutes: weekMinutes,
+      });
 
-    const goalsWithProgress = (dbGoals || []).map((goal) => {
+      // Calculate 7d stats (last 7 days, not week)
+      const last7dActivities = allWeekActivities.filter(a => {
+        if (!a.created_at) return false;
+        const activityDate = new Date(a.created_at);
+        return activityDate >= last7dStart;
+      });
+
+      // Check if there are any reading sessions in 7d
+      const last7dReadingSessions = last7dActivities.filter(a => 
+        a.type === 'reading' && (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0)
+      );
+      const hasSessions7d = last7dReadingSessions.length > 0;
+
+      const totalPages7d = last7dActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
+      const totalMinutes7d = last7dActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+
+      // Compute stats with strict validation
+      const stats7dComputed = computeReadingStats(totalPages7d, totalMinutes7d);
+
+      setStats7d({
+        totalMinutes: totalMinutes7d,
+        totalPages: totalPages7d,
+        speedPph: stats7dComputed.speed.type === 'value' ? stats7dComputed.speed.value : null,
+        paceMinPerPage: stats7dComputed.pace.type === 'value' ? stats7dComputed.pace.value : null,
+        hasSessions: hasSessions7d,
+      });
+
+      // Calculate PR (best session from last 30 days or all-time) with strict validation
+      let bestPPH: number | null = null;
+      let bestPace: number | null = null;
+      let bestSessionPages: number = 0;
+      let bestSessionMinutes: number = 0;
+
+      // Check if user has ever had a reading session
+      const hasAnyReadingSessions = allReadingActivities.some(a => 
+        (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0)
+      );
+
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const recentActivities = allReadingActivities.filter(a => {
+        if (!a.created_at) return false;
+        return new Date(a.created_at) >= thirtyDaysAgo;
+      });
+
+      for (const a of recentActivities) {
+        const pages = Number(a.pages_read) || 0;
+        const mins = Number(a.duration_minutes) || 0;
+
+        // Strict validation: record requires min 1 minute and min 5 pages
+        if (mins < 1 || pages < 5) continue;
+
+        // Validate stored values first
+        if (a.reading_speed_pph != null) {
+          const pph = Number(a.reading_speed_pph);
+          if (pph > 0 && (bestPPH == null || pph > bestPPH)) {
+            bestPPH = pph;
+            bestSessionPages = pages;
+            bestSessionMinutes = mins;
+          }
+        }
+        if (a.reading_pace_min_per_page != null) {
+          const pace = Number(a.reading_pace_min_per_page);
+          if (pace > 0 && (bestPace == null || pace < bestPace)) {
+            bestPace = pace;
+            // Update best session if this is better
+            if (bestSessionPages === 0 || bestSessionMinutes === 0) {
+              bestSessionPages = pages;
+              bestSessionMinutes = mins;
+            }
+          }
+        }
+        
+        // Fallback: calculate from pages_read and duration_minutes
+        // Only if stored values are not available or this session is better
+        if (bestPPH == null || bestPace == null) {
+          const calcPph = pages / (mins / 60);
+          const calcPace = mins / pages;
+          
+          if (bestPPH == null || calcPph > bestPPH) {
+            bestPPH = calcPph;
+            bestSessionPages = pages;
+            bestSessionMinutes = mins;
+          }
+          if (bestPace == null || calcPace < bestPace) {
+            bestPace = calcPace;
+            if (bestSessionPages === 0 || bestSessionMinutes === 0) {
+              bestSessionPages = pages;
+              bestSessionMinutes = mins;
+            }
+          }
+        }
+      }
+
+      // Final validation: ensure the best session meets record criteria
+      const prComputed = computeReadingStats(bestSessionPages, bestSessionMinutes);
+      const hasValidRecord = prComputed.isValidForRecord && bestPPH != null && bestPace != null;
+
+      setPr({
+        speedPph: hasValidRecord && bestPPH != null ? Number(bestPPH.toFixed(1)) : null,
+        paceMinPerPage: hasValidRecord && bestPace != null ? Number(bestPace.toFixed(1)) : null,
+        hasAnySessions: hasAnyReadingSessions,
+      });
+
+      // Calculate goal progress from same activities
+      const weekWorkouts = allWeekActivities.filter(a => a.type === 'workout').length;
+      const weekBooks = allWeekActivities.filter(a => a.type === 'reading' && a.pages_read > 0).length;
+
+      const goalsWithProgress = dbGoals.map((goal) => {
       let current_value = 0;
       if (goal.period === 'daily') {
         if (goal.type === 'daily_pages') {
@@ -94,90 +383,26 @@ export function Insights() {
     });
 
     setGoals(goalsWithProgress);
-  };
 
-  const loadWeeklyStats = async () => {
-    if (!user) return;
+      // Set profile
+      if (profileData) {
+        setProfile(profileData);
+      }
 
-    const startOfWeek = new Date();
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    const { data: activities } = await supabase
-      .from('activities')
-      .select('pages_read, duration_minutes')
-      .eq('user_id', user.id)
-      .gte('created_at', startOfWeek.toISOString());
-
-    if (activities) {
-      const totalPages = activities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
-      const totalMinutes = activities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
-
-      setWeeklyStats({
-        pages: totalPages,
-        activities: activities.length,
-        hours: Math.floor(totalMinutes / 60),
-      });
-    }
-
-    setLoading(false);
-  };
-
-  const loadTodayStats = async () => {
-    if (!user) return;
-
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const todayStart = today.toISOString();
-
-    const { data: activities } = await supabase
-      .from('activities')
-      .select('pages_read, duration_minutes')
-      .eq('user_id', user.id)
-      .gte('created_at', todayStart);
-
-    if (activities) {
-      const totalPages = activities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
-      const totalMinutes = activities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
-      setTodayStats({ pages: totalPages, minutes: totalMinutes });
-    }
-  };
-
-  const loadProfile = async () => {
-    if (!user) return;
-
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('current_streak, longest_streak')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (data) {
-      setProfile(data);
-    }
-  };
-
-  const loadCalendarData = async () => {
-    if (!user) return;
-
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const { data: activities } = await supabase
-      .from('activities')
-      .select('created_at')
-      .eq('user_id', user.id)
-      .gte('created_at', startOfMonth.toISOString());
-
+      // Build calendar data from month activities
     const activityMap: { [key: string]: boolean } = {};
-    activities?.forEach((activity) => {
-      const date = new Date(activity.created_at);
-      const dateKey = date.toISOString().split('T')[0];
+      allMonthActivities.forEach((activity) => {
+        const activityDate = new Date(activity.created_at);
+        const dateKey = toLocalDateKey(activityDate);
       activityMap[dateKey] = true;
     });
 
     setCalendarData(activityMap);
+    } catch (error) {
+      console.error('[loadInsightsData] Unexpected error:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleAddGoal = async () => {
@@ -225,7 +450,7 @@ export function Insights() {
     setShowAddGoal(false);
     setNewGoalType('daily_15min');
     setNewGoalValue('15');
-    loadGoals();
+    loadInsightsData();
   };
 
   const handleToggleGoal = async (goalId: string, currentActive: boolean) => {
@@ -242,7 +467,7 @@ export function Insights() {
       return;
     }
 
-    loadGoals();
+    loadInsightsData();
   };
 
   const getGoalLabel = (type: string) => {
@@ -272,10 +497,16 @@ export function Insights() {
     const month = now.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
-    const startingDayOfWeek = firstDay.getDay();
+    
+    // Get day of week for first day (0=Sun, 1=Mon, ...)
+    const firstDayOfWeek = firstDay.getDay();
+    // Convert to Monday-start (0=Mon, 1=Tue, ... 6=Sun)
+    const startingDayOfWeek = (firstDayOfWeek + 6) % 7;
+    
     const daysInMonth = lastDay.getDate();
 
     const days = [];
+    // Add empty cells for days before the first day of the month (Monday-start)
     for (let i = 0; i < startingDayOfWeek; i++) {
       days.push(null);
     }
@@ -288,32 +519,86 @@ export function Insights() {
   const isActivityDay = (day: number | null) => {
     if (!day) return false;
     const now = new Date();
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return calendarData[dateStr] || false;
+    const date = new Date(now.getFullYear(), now.getMonth(), day);
+    const dateKey = toLocalDateKey(date);
+    return calendarData[dateKey] || false;
+  };
+
+  // Helper: check if a dateKey is today
+  const isTodayKey = (key: string): boolean => {
+    return key === toLocalDateKey(new Date());
   };
 
   const isToday = (day: number | null) => {
     if (!day) return false;
     const now = new Date();
-    return day === now.getDate();
+    const date = new Date(now.getFullYear(), now.getMonth(), day);
+    const dateKey = toLocalDateKey(date);
+    return isTodayKey(dateKey);
   };
 
   const isFutureDay = (day: number | null) => {
     if (!day) return false;
     const now = new Date();
-    return day > now.getDate();
+    const checkDate = new Date(now.getFullYear(), now.getMonth(), day);
+    // compare à la journée (pas à l'heure)
+    return startOfLocalDay(checkDate) > startOfLocalDay(now);
   };
 
   const monthName = new Date().toLocaleString('default', { month: 'long' });
 
-  return (
-    <div className="min-h-screen bg-white">
-      <div className="max-w-2xl mx-auto">
-        <AppHeader title="Votre élan" />
-        
-        <div className="px-4 py-6" style={{ paddingBottom: 'calc(16px + var(--sab))' }}>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background-light">
+        <div className="max-w-2xl mx-auto">
+          <AppHeader title="Votre élan" />
+          <div className="px-4 py-6">
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-32 bg-gray-200 rounded-xl animate-pulse" />
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-        <div className="relative overflow-hidden rounded-2xl bg-card-light border border-gray-200 shadow-sm p-6 mb-8">
+  return (
+    <div className="h-screen bg-background-light overflow-hidden">
+      <div className="max-w-2xl mx-auto w-full h-full">
+        {/* Fixed Header - now truly fixed via AppHeader component */}
+        <AppHeader title="Votre élan" />
+
+        {/* ✅ SCROLL ICI - Single scrollable container with proper padding */}
+        <div
+          className="h-full overflow-y-auto"
+          style={{
+            paddingTop: getScrollTopOffset(),
+            paddingBottom: getScrollBottomPadding(),
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehaviorY: 'contain',
+            overscrollBehaviorX: 'none',
+            touchAction: 'pan-y', // Allow vertical panning only
+          }}
+        >
+          <div className="px-4 py-6">
+            {/* Level Progress Bar */}
+            {profile?.xp_total !== undefined && (
+              <div className="mb-6">
+                <LevelProgressBar xpTotal={profile.xp_total || 0} variant="compact" />
+                {/* Leaderboard Button */}
+                <button
+                  onClick={openLeaderboard}
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
+                >
+                  <Trophy className="w-4 h-4" />
+                  Classement
+                </button>
+              </div>
+            )}
+
+        <div className="relative overflow-hidden rounded-2xl bg-card-light border border-gray-200 shadow-sm p-6 mb-6">
           <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10 blur-3xl"></div>
           <div className="flex flex-col items-center justify-center gap-4 text-center">
             <div className="relative">
@@ -322,7 +607,7 @@ export function Insights() {
             </div>
             <div className="space-y-1">
               <h1 className="text-5xl font-bold tracking-tighter text-text-main-light">
-                {profile?.current_streak || 0}
+                {streakDays}
               </h1>
               <p className="text-sm font-bold uppercase tracking-wider text-text-sub-light">
                 Jours de série
@@ -335,8 +620,185 @@ export function Insights() {
             </div>
             <div className="mt-2 rounded-full bg-primary/20 px-4 py-1.5">
               <p className="text-xs font-semibold text-text-main-light">
-                {profile?.current_streak > 0 ? 'Continuez comme ça !' : 'Commencez votre série aujourd\'hui'}
+                {streakDays > 0 ? 'Continuez comme ça !' : 'Commencez votre série aujourd\'hui'}
               </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Mini dashboard 7 jours */}
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 text-text-sub-light mb-1">
+              <Clock className="w-5 h-5" />
+              <p className="text-xs font-bold uppercase tracking-wide">Temps (7 jours)</p>
+            </div>
+            {stats7d.hasSessions ? (
+              <>
+                <p className="text-3xl font-bold leading-none text-text-main-light">
+                  {formatDuration(stats7d.totalMinutes)}
+                </p>
+                <p className="text-xs text-text-sub-light">Total</p>
+              </>
+            ) : (
+              <p className="text-sm text-text-sub-light leading-relaxed">
+                Aucune session sur cette période
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+            <div className="flex items-center gap-2 text-text-sub-light mb-1">
+              <BookOpen className="w-5 h-5" />
+              <p className="text-xs font-bold uppercase tracking-wide">Pages (7 jours)</p>
+            </div>
+            {stats7d.hasSessions ? (
+              <>
+                <p className="text-3xl font-bold leading-none text-text-main-light">
+                  {stats7d.totalPages}
+                </p>
+                <p className="text-xs text-text-sub-light">Total</p>
+              </>
+            ) : (
+              <p className="text-sm text-text-sub-light leading-relaxed">
+                Aucune session sur cette période
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Vitesse 7 jours + PR */}
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Vitesse (7 jours)</p>
+              <span className="text-[10px] font-bold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">p/h</span>
+            </div>
+            {(() => {
+              if (!stats7d.hasSessions) {
+                return (
+                  <p className="text-sm text-text-sub-light leading-relaxed">
+                    Aucune session sur cette période
+                  </p>
+                );
+              }
+              
+              const statsComputed = computeReadingStats(stats7d.totalPages, stats7d.totalMinutes);
+              
+              if (statsComputed.speed.type === 'value') {
+                return (
+                  <>
+                    <p className="text-3xl font-bold leading-none text-text-main-light">
+                      {statsComputed.speed.formattedValue}
+                    </p>
+                    {statsComputed.pace.type === 'value' && (
+                      <p className="text-xs text-text-sub-light">
+                        {statsComputed.pace.formattedValue} {statsComputed.pace.unit}
+                      </p>
+                    )}
+                    {statsComputed.speed.context && (
+                      <p className="text-[10px] text-text-sub-light/70 mt-1">
+                        {statsComputed.speed.context}
+                      </p>
+                    )}
+                  </>
+                );
+              }
+              
+              return (
+                <p className="text-sm text-text-sub-light leading-relaxed">
+                  {statsComputed.speed.message}
+                </p>
+              );
+            })()}
+          </div>
+
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Record (PR)</p>
+              <span className="text-[10px] font-bold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">p/h</span>
+            </div>
+            {(() => {
+              if (!pr.hasAnySessions) {
+                return (
+                  <p className="text-sm text-text-sub-light leading-relaxed">
+                    Commence une session pour établir ton premier record
+                  </p>
+                );
+              }
+              
+              if (pr.speedPph != null && pr.paceMinPerPage != null && pr.paceMinPerPage > 0) {
+                return (
+                  <>
+                    <p className="text-3xl font-bold leading-none text-text-main-light">
+                      {formatStatValue(pr.speedPph)}
+                    </p>
+                    <p className="text-xs text-text-sub-light">
+                      Meilleur pace: {pr.paceMinPerPage.toFixed(1)} min/page
+                    </p>
+                  </>
+                );
+              }
+              
+              return (
+                <p className="text-sm text-text-sub-light leading-relaxed">
+                  Pas encore de record personnel
+                </p>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* Graphique activité 7 jours */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-text-sub-light">
+              Activité sur 7 jours
+            </h4>
+            <span className="text-xs font-semibold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">
+              {weeklyActivity.reduce((a, b) => a + b, 0)} pages
+            </span>
+          </div>
+
+          <div className="bg-card-light px-4 py-4 rounded-2xl border border-gray-200 shadow-sm">
+            <div className="flex items-end justify-between gap-2">
+              {(() => {
+                const maxPages = Math.max(...weeklyActivity, 10);
+                const dayShort = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+
+                return weeklyActivity.map((pages, index) => {
+                  const height = Math.round((pages / maxPages) * 100);
+
+                  const isToday = (() => {
+                    const today = new Date();
+                    const todayIdx = (today.getDay() + 6) % 7;
+                    return index === todayIdx;
+                  })();
+
+                  return (
+                    <div key={index} className="flex flex-col items-center gap-2 flex-1">
+                      <div className="w-full h-24 bg-gray-100 rounded-xl flex items-end overflow-hidden">
+                        <div
+                          className={`w-full transition-all duration-500 ${isToday ? 'bg-primary' : 'bg-primary/50'}`}
+                          style={{
+                            height: pages > 0 ? `${Math.max(height, 10)}%` : '6px',
+                          }}
+                          title={`${pages} pages`}
+                        />
+                      </div>
+
+                      <div className="flex flex-col items-center leading-none">
+                        <span className={`text-[10px] font-bold uppercase ${isToday ? 'text-text-main-light' : 'text-gray-400'}`}>
+                          {dayShort[index]}
+                        </span>
+                        <span className="text-[10px] text-gray-400 font-medium mt-1">
+                          {pages || ''}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
         </div>
@@ -412,6 +874,9 @@ export function Insights() {
                       <div className="flex items-center gap-2">
                         <Target className="w-5 h-5 text-text-sub-light" />
                         <span className="font-medium">{getGoalLabel(goal.type)}</span>
+                        <span className="text-[10px] font-semibold bg-primary/20 text-text-main-light px-2 py-0.5 rounded-full">
+                          Aujourd'hui
+                        </span>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-text-sub-light">
@@ -426,14 +891,18 @@ export function Insights() {
                         </button>
                       </div>
                     </div>
-                    <div className="relative h-4 w-full overflow-hidden rounded-full bg-gray-100">
+                    <div className="relative h-3 w-full overflow-hidden rounded-full bg-gray-100">
                       <div
                         className="absolute left-0 top-0 h-full rounded-full bg-primary transition-all duration-500 ease-out"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
                     <p className="mt-2 text-right text-xs text-text-sub-light">
-                      {progress >= 100 ? 'Objectif atteint !' : `Encore ${remaining} ${unit}`}
+                      {progress >= 100 ? (
+                        <span className="font-semibold text-primary">Objectif validé ✅</span>
+                      ) : (
+                        `Encore ${remaining} ${unit}`
+                      )}
                     </p>
                   </div>
                 );
@@ -456,6 +925,9 @@ export function Insights() {
                     <div className="flex items-center gap-2">
                       <Target className="w-5 h-5 text-text-sub-light" />
                       <span className="font-medium">{getGoalLabel(goal.type)}</span>
+                      <span className="text-[10px] font-semibold bg-primary/20 text-text-main-light px-2 py-0.5 rounded-full">
+                        Semaine
+                      </span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold text-text-sub-light">
@@ -470,14 +942,18 @@ export function Insights() {
                       </button>
                     </div>
                   </div>
-                  <div className="relative h-4 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div className="relative h-3 w-full overflow-hidden rounded-full bg-gray-100">
                     <div
                       className="absolute left-0 top-0 h-full rounded-full bg-primary transition-all duration-500 ease-out"
                       style={{ width: `${progress}%` }}
                     />
                   </div>
                   <p className="mt-2 text-right text-xs text-text-sub-light">
-                    {progress >= 100 ? 'Objectif atteint !' : `Encore ${remaining} ${unit}`}
+                    {progress >= 100 ? (
+                      <span className="font-semibold text-primary">Objectif validé ✅</span>
+                    ) : (
+                      `Encore ${remaining} ${unit}`
+                    )}
                   </p>
                 </div>
               );
@@ -492,13 +968,13 @@ export function Insights() {
           </div>
           <div className="rounded-2xl bg-card-light border border-gray-200 p-5 shadow-sm">
             <div className="mb-4 grid grid-cols-7 gap-1 text-center text-xs font-semibold text-text-sub-light">
-              <div>S</div>
+              <div>L</div>
               <div>M</div>
-              <div>T</div>
-              <div>W</div>
-              <div>T</div>
-              <div>F</div>
+              <div>M</div>
+              <div>J</div>
+              <div>V</div>
               <div>S</div>
+              <div>D</div>
             </div>
             <div className="grid grid-cols-7 gap-y-3 gap-x-1 justify-items-center">
               {generateCalendarDays().map((day, index) => {
@@ -518,6 +994,8 @@ export function Insights() {
                         ? today
                           ? 'bg-primary text-black shadow-sm ring-2 ring-background-light ring-offset-2 ring-offset-primary'
                           : 'bg-primary text-black shadow-sm'
+                        : today
+                        ? 'bg-gray-100 text-text-sub-light ring-2 ring-gray-300'
                         : future
                         ? 'bg-gray-100 text-text-sub-light opacity-40'
                         : 'bg-gray-100 text-text-sub-light'
@@ -543,7 +1021,7 @@ export function Insights() {
           </p>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+        <div className="bg-card-light rounded-xl border border-gray-200 p-6 mb-6 shadow-sm">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
             <Calendar className="w-5 h-5" />
             Cette semaine
@@ -551,21 +1029,35 @@ export function Insights() {
 
           <div className="grid grid-cols-3 gap-4">
             <div className="text-center">
-              <div className="text-3xl font-bold text-stone-900 mb-1">{weeklyStats.activities}</div>
-              <div className="text-sm text-stone-600">Activités</div>
+              <div className="text-3xl font-bold text-text-main-light mb-1">{weeklyStats.activities}</div>
+              <div className="text-sm text-text-sub-light">Activités</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-stone-900 mb-1">{weeklyStats.pages}</div>
-              <div className="text-sm text-stone-600">Pages lues</div>
+              <div className="text-3xl font-bold text-text-main-light mb-1">{weeklyStats.pages}</div>
+              <div className="text-sm text-text-sub-light">Pages lues</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-stone-900 mb-1">{weeklyStats.hours}h</div>
-              <div className="text-sm text-stone-600">Temps total</div>
+              <div className="text-3xl font-bold text-text-main-light mb-1">
+                {weeklyStats.totalMinutes > 0 ? weeklyStats.totalMinutes : '—'}
+              </div>
+              <div className="text-sm text-text-sub-light">min</div>
             </div>
           </div>
         </div>
+          </div>
         </div>
       </div>
+
+      {/* Leaderboard Modal */}
+      {showLeaderboard && (
+        <LeaderboardModal
+          onClose={closeLeaderboard}
+          onUserClick={(userId) => {
+            // Optionally handle user click (e.g., navigate to profile)
+            closeLeaderboard();
+          }}
+        />
+      )}
     </div>
   );
 }

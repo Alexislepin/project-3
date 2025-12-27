@@ -4,17 +4,26 @@
 
 @layer base {
   :root {
-    --sat: env(safe-area-inset-top);
-    --sar: env(safe-area-inset-right);
-    --sab: env(safe-area-inset-bottom);
-    --sal: env(safe-area-inset-left);
+    --sat: env(safe-area-inset-top, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --header-height: 56px;
+  }
+  
+  html {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   
   body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
     font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     @apply bg-background-light text-text-main-light antialiased;
-    /* Safe area padding only on sides and bottom, NOT top (handled by sticky headers) */
-    padding-bottom: var(--sab);
+    /* Safe area padding only on sides, NOT top/bottom (handled by components) */
     padding-left: var(--sal);
     padding-right: var(--sar);
     /* Désactiver zoom double-tap et pinch */
@@ -42,10 +51,21 @@
   }
   
   #root {
-    /* Safe area padding only on sides and bottom, NOT top (handled by sticky headers) */
-    padding-bottom: var(--sab);
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    /* Safe area padding only on sides, NOT top/bottom (handled by components) */
     padding-left: var(--sal);
     padding-right: var(--sar);
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(251, 191, 36, 0.25);
   }
 }
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X, Search, UserPlus, UserCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useScrollLock } from '../hooks/useScrollLock';
 
 interface SearchUsersModalProps {
   onClose: () => void;
@@ -14,6 +15,8 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
   const [searching, setSearching] = useState(false);
   const [followingIds, setFollowingIds] = useState<string[]>([]);
   const { user } = useAuth();
+
+  useScrollLock(true);
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
@@ -77,14 +80,31 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-[150]" onClick={onClose}>
+    <div 
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4 py-6"
+      data-modal-overlay
+      style={{ 
+        paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))', 
+        paddingTop: 'calc(1.5rem + env(safe-area-inset-top))' 
+      }}
+      onClick={onClose}
+      onTouchMove={(e) => {
+        // Prevent scroll on overlay
+        const target = e.target as HTMLElement;
+        if (!target.closest('[data-modal-content]')) {
+          e.preventDefault();
+        }
+      }}
+    >
       <div
-        className="bg-white rounded-t-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+        data-modal-content
+        className="bg-white rounded-3xl w-full max-w-2xl max-h-[calc(100vh-7rem)] flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
           <h2 className="text-xl font-bold">Trouver des amis</h2>
           <button
+            type="button"
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
           >
@@ -92,7 +112,16 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div 
+          className="flex-1 overflow-y-auto min-h-0 px-4 pt-3"
+          style={{ 
+            paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))',
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehaviorY: 'contain',
+            overscrollBehavior: 'contain',
+            touchAction: 'pan-y',
+          }}
+        >
           <div className="mb-4 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-sub-light" />
             <input
@@ -136,7 +165,7 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
                 return (
                   <div
                     key={profile.id}
-                    className="flex items-center gap-3 p-4 rounded-xl hover:bg-stone-50 transition-colors"
+                    className="flex items-center gap-3 p-4 rounded-2xl hover:bg-stone-50 transition-colors"
                   >
                     <div
                       onClick={handleProfileClick}
@@ -166,6 +195,7 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
                     </div>
 
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleFollow(profile.id);
@@ -191,6 +221,8 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
                   </div>
                 );
               })}
+              {/* Spacer pour éviter que le dernier item soit caché par la tab bar */}
+              <div className="h-6" />
             </div>
           )}
 

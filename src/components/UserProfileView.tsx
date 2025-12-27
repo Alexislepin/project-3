@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Flame, BookOpen, Clock, UserPlus, UserCheck, Heart } from 'lucide-react';
+import { UserPlus, UserCheck } from 'lucide-react';
 import { FollowersModal } from './FollowersModal';
 import { FollowingModal } from './FollowingModal';
 import { UserLibraryView } from './UserLibraryView';
-import { BookCover } from './BookCover';
-import { BookDetailsModal } from './BookDetailsModal';
-import { BookDetailsWithManagement } from './BookDetailsWithManagement';
 import { AppHeader } from './AppHeader';
+import { ProfileLayout } from './ProfileLayout';
+import { computeReadingStats, computePR } from '../lib/readingStats';
+import { MyActivities } from '../pages/MyActivities';
+import { countRows } from '../lib/supabaseCounts';
 
 interface UserProfileViewProps {
   userId: string;
@@ -18,7 +19,7 @@ interface UserProfileViewProps {
 
 export function UserProfileView({ userId, onClose, onUserClick }: UserProfileViewProps) {
   const [profile, setProfile] = useState<any>(null);
-  const [stats, setStats] = useState({ followers: 0, following: 0, activities: 0, books: 0, likedBooks: 0 });
+  const [stats, setStats] = useState({ followers: 0, following: 0, activities: 0, books: 0, likes: 0 });
   const [loading, setLoading] = useState(true);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
@@ -26,17 +27,26 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
   const [showFollowingModal, setShowFollowingModal] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showLikedBooks, setShowLikedBooks] = useState(false);
-  const [readingPreviewBooks, setReadingPreviewBooks] = useState<any[]>([]);
-  const [likedPreviewBooks, setLikedPreviewBooks] = useState<any[]>([]);
-  const [selectedBook, setSelectedBook] = useState<any | null>(null);
-  const [selectedUserBook, setSelectedUserBook] = useState<any | null>(null);
+  const [showUserActivities, setShowUserActivities] = useState(false);
+  const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [totalMinutes, setTotalMinutes] = useState(0);
+  const [readingSpeed7d, setReadingSpeed7d] = useState<number | null>(null);
+  const [readingPace7d, setReadingPace7d] = useState<number | null>(null);
+  const [readingSpeedPR, setReadingSpeedPR] = useState<number | null>(null);
+  const [readingPacePR, setReadingPacePR] = useState<number | null>(null);
+  const [hasSessions7d, setHasSessions7d] = useState(false);
+  const [hasAnySessions, setHasAnySessions] = useState(false);
+  const [totalPages7d, setTotalPages7d] = useState(0);
+  const [totalPagesAllTime, setTotalPagesAllTime] = useState(0);
+  const [totalMinutes7d, setTotalMinutes7d] = useState(0);
+  const [currentlyReading, setCurrentlyReading] = useState<any[]>([]);
+  const [likedBooks, setLikedBooks] = useState<any[]>([]);
   const { user } = useAuth();
 
   const handleUserClick = (clickedUserId: string) => {
     if (onUserClick) {
       onUserClick(clickedUserId);
     }
-    // Si pas de callback, on ne fait rien (l'utilisateur reste sur le même profil)
   };
 
   useEffect(() => {
@@ -45,24 +55,18 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     const loadAll = async () => {
       if (!userId || !user) return;
 
-      console.log('UserProfileView useEffect triggered:', { userId, currentUserId: user.id });
       setLoading(true);
-      // Ne pas réinitialiser isFollowing ici pour éviter le flash
-      // checkFollowing() va mettre à jour la valeur correcte
 
-      // Chargement séquentiel pour éviter les race conditions
       try {
-        await loadProfile();
-        if (!mounted) return;
-
-        await loadStats();
-        if (!mounted) return;
-
-        await loadPreviewBooks();
-        if (!mounted) return;
-
-        await checkFollowing();
-        if (!mounted) return;
+        await Promise.all([
+          loadProfile(),
+          loadStats(),
+          loadWeeklyActivity(),
+          loadReadingStats(),
+          loadLikedBooks(),
+          loadCurrentlyReading(),
+          checkFollowing(),
+        ]);
       } catch (error) {
         console.error('Error loading profile data:', error);
       } finally {
@@ -92,156 +96,268 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
   };
 
   const loadStats = async () => {
-    const { count: followersCount, error: followersError } = await supabase
-      .from('follows')
-      .select('*', { count: 'exact', head: true })
-      .eq('following_id', userId);
+    try {
+      const [followers, following, activities, books, likes] = await Promise.all([
+        countRows('follows', q => q.eq('following_id', userId)), // followers = ceux qui suivent cet user
+        countRows('follows', q => q.eq('follower_id', userId)),  // following = ceux que cet user suit
+        countRows('activities', q => q.eq('user_id', userId).eq('visibility', 'public')),
+        countRows('user_books', q => q.eq('user_id', userId)),
+        countRows('book_likes', q => q.eq('user_id', userId)),
+      ]);
 
-    if (followersError) {
-      console.error('=== FOLLOWS ERROR (UserProfileView - followersCount) ===');
-      console.error('Full error:', followersError);
-      console.error('Message:', followersError.message);
-      console.error('Details:', followersError.details);
-      console.error('Hint:', followersError.hint);
-      console.error('Code:', followersError.code);
-      console.error('Query:', `follows?select=*&following_id=eq.${userId}`);
-    }
+      console.log('[loadStats counts]', { userId, followers, following, activities, books, likes });
 
-    const { count: followingCount, error: followingError } = await supabase
-      .from('follows')
-      .select('*', { count: 'exact', head: true })
-      .eq('follower_id', userId);
-
-    if (followingError) {
-      console.error('=== FOLLOWS ERROR (UserProfileView - followingCount) ===');
-      console.error('Full error:', followingError);
-      console.error('Message:', followingError.message);
-      console.error('Details:', followingError.details);
-      console.error('Hint:', followingError.hint);
-      console.error('Code:', followingError.code);
-      console.error('Query:', `follows?select=*&follower_id=eq.${userId}`);
-    }
-
-    const { count: activitiesCount } = await supabase
-      .from('activities')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('visibility', 'public');
-
-    // Pour les livres, on récupère les données au lieu d'utiliser count
-    // car les politiques RLS peuvent bloquer count mais permettre select
-    // On compte les book_key uniques si la colonne existe, sinon on compte les rows
-    const { data: userBooks, error: booksError } = await supabase
-      .from('user_books')
-      .select('book_id, book:books(id, isbn)')
-      .eq('user_id', userId);
-
-    console.log('=== DEBUG User Books ===');
-    console.log('UserId:', userId);
-    console.log('Current user:', user?.id);
-    console.log('Books data:', userBooks);
-    console.log('Books error:', booksError);
-    if (booksError) {
-      console.error('ERROR DETAILS:', {
-        message: booksError.message,
-        details: booksError.details,
-        hint: booksError.hint,
-        code: booksError.code
+      setStats({ followers, following, activities, books, likes });
+    } catch (e: any) {
+      console.error('[loadStats] FAILED', {
+        userId,
+        message: e?.message,
+        details: e?.details,
+        hint: e?.hint,
+        code: e?.code,
+        raw: e,
       });
+      // IMPORTANT: ne pas écraser avec 0 si tu veux voir le bug
+      // mais si tu veux fallback UI: garde l'ancien stats au lieu de tout reset
+      // setStats(prev => prev);
     }
-
-    // Compter les book_id uniques
-    let booksCount = 0;
-    if (userBooks && userBooks.length > 0) {
-      const uniqueBookIds = new Set<string>();
-      userBooks.forEach((ub: any) => {
-        if (ub.book_id) {
-          uniqueBookIds.add(String(ub.book_id));
-        }
-      });
-      booksCount = uniqueBookIds.size;
-    }
-
-    // Compter les livres likés depuis activity_events
-    const { data: likedEvents, error: likedError } = await supabase
-      .from('activity_events')
-      .select('book_key')
-      .eq('actor_id', userId)
-      .eq('event_type', 'book_like');
-
-    let likedCount = 0;
-    if (likedEvents && likedEvents.length > 0) {
-      const uniqueLikedKeys = new Set(likedEvents.map(e => e.book_key).filter(Boolean));
-      likedCount = uniqueLikedKeys.size;
-    }
-
-    if (likedError) {
-      console.error('[loadStats] Error fetching liked books:', likedError);
-    }
-
-    setStats({
-      followers: followersCount || 0,
-      following: followingCount || 0,
-      activities: activitiesCount || 0,
-      books: booksCount,
-      likedBooks: likedCount,
-    });
   };
 
-  const loadPreviewBooks = async () => {
-    // Load reading preview (max 8)
-    const { data: readingBooks } = await supabase
-      .from('user_books')
-      .select('id, book_id, current_page, book:books(id, title, author, cover_url, isbn, total_pages)')
-      .eq('user_id', userId)
-      .eq('status', 'reading')
-      .order('updated_at', { ascending: false })
-      .limit(8);
+  const loadWeeklyActivity = async () => {
+    try {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      const day = startOfWeek.getDay();
+      const diffToMonday = (day + 6) % 7;
+      startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
+      startOfWeek.setHours(0, 0, 0, 0);
 
-    if (readingBooks && readingBooks.length > 0) {
-      // Store full user_book data for modal
-      setReadingPreviewBooks(readingBooks);
-    } else {
-      setReadingPreviewBooks([]);
-    }
+      const startISO = startOfWeek.toISOString();
 
-    // Load liked preview (max 8)
-    const { data: likedEvents } = await supabase
-      .from('activity_events')
-      .select('book_key')
-      .eq('actor_id', userId)
-      .eq('event_type', 'book_like')
-      .order('created_at', { ascending: false })
-      .limit(8);
-
-    const likedBookKeys = likedEvents?.map(e => e.book_key).filter(Boolean) || [];
-
-    if (likedBookKeys.length > 0) {
-      const { data: booksData, error } = await supabase
-        .from('books_cache')
-        .select('book_key, title, author, cover_url')
-        .in('book_key', likedBookKeys);
+      const { data: activities, error } = await supabase
+        .from('activities')
+        .select('pages_read, created_at, photos')
+        .eq('user_id', userId)
+        .eq('type', 'reading')
+        .eq('visibility', 'public')
+        .gte('created_at', startISO)
+        .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('[loadPreviewBooks] Error fetching liked books from cache:', error);
-        setLikedPreviewBooks([]);
-      } else {
-        setLikedPreviewBooks(booksData?.slice(0, 8) || []);
+        console.error('[loadWeeklyActivity] Error:', error);
+        setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
+        return;
       }
+
+      const weekData = [0, 0, 0, 0, 0, 0, 0];
+
+      for (const a of activities ?? []) {
+        if (!a.created_at) continue;
+        const d = new Date(a.created_at);
+        const js = d.getDay();
+        const idx = (js + 6) % 7;
+        weekData[idx] += Number(a.pages_read) || 0;
+      }
+
+      setWeeklyActivity(weekData);
+    } catch (e) {
+      console.error('[loadWeeklyActivity] Unexpected:', e);
+      setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
+    }
+  };
+
+  const loadReadingStats = async () => {
+    const since = new Date();
+    since.setDate(since.getDate() - 7);
+    const sinceISO = since.toISOString();
+
+    const { data: allActivities, error: allErr } = await supabase
+      .from('activities')
+      .select('pages_read, duration_minutes, reading_speed_pph, reading_pace_min_per_page, created_at, photos')
+      .eq('user_id', userId)
+      .eq('type', 'reading')
+      .eq('visibility', 'public')
+      .order('created_at', { ascending: false });
+
+    if (allErr) {
+      console.error('[loadReadingStats] all activities error:', allErr);
+      setTotalMinutes(0);
+      setReadingSpeed7d(null);
+      setReadingPace7d(null);
+      setReadingSpeedPR(null);
+      setReadingPacePR(null);
+      return;
+    }
+
+    const all = allActivities ?? [];
+
+    // total pages all time (single source of truth: activities)
+    const totalPagesAll = all.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
+    setTotalPagesAllTime(totalPagesAll);
+
+    const totalMins = all.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
+    setTotalMinutes(totalMins);
+
+    // Check if user has any sessions
+    const hasAny = all.some(a => (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0));
+    setHasAnySessions(hasAny);
+
+    // Compute PR using centralized function
+    const prResult = computePR(all, 30);
+    setReadingSpeedPR(prResult.speedPph);
+    setReadingPacePR(prResult.paceMinPerPage);
+
+    // 7d stats using centralized function
+    const last7d = all.filter(a => a.created_at && new Date(a.created_at) >= new Date(sinceISO));
+
+    const sumPages7d = last7d.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
+    const sumMins7d = last7d.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
+
+    setTotalPages7d(sumPages7d);
+    setTotalMinutes7d(sumMins7d);
+
+    const stats7d = computeReadingStats(sumPages7d, sumMins7d);
+    setHasSessions7d(stats7d.hasSessions);
+    
+    if (stats7d.speed.type === 'value') {
+      setReadingSpeed7d(stats7d.speed.value);
     } else {
-      setLikedPreviewBooks([]);
+      setReadingSpeed7d(null);
+    }
+
+    if (stats7d.pace.type === 'value') {
+      setReadingPace7d(stats7d.pace.value);
+    } else {
+      setReadingPace7d(null);
+    }
+  };
+
+  const loadLikedBooks = async () => {
+    try {
+      const { data: likesData, error: likesError } = await supabase
+        .from('book_likes')
+        .select('book_key, created_at')
+        .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (likesError) {
+        console.error('[loadLikedBooks] book_likes error:', likesError);
+        setLikedBooks([]);
+        return;
+      }
+
+      if (!likesData || likesData.length === 0) {
+        setLikedBooks([]);
+        return;
+      }
+
+      const normalizeKey = (key: string): string[] => {
+        if (!key) return [];
+        const k = key.trim();
+        const out = new Set<string>();
+        out.add(k);
+        if (k.startsWith('ol:/works/')) out.add(k.replace(/^ol:/, ''));
+        if (k.startsWith('ol:') && !k.startsWith('ol:/works/')) out.add(`/works/${k.replace(/^ol:/, '')}`);
+        if (k.startsWith('/works/')) out.add(k);
+        if (k.startsWith('isbn:')) out.add(k);
+        return Array.from(out);
+      };
+
+      const rawKeys = likesData.map(l => l.book_key).filter(Boolean);
+      const candidateKeys = Array.from(new Set(rawKeys.flatMap(normalizeKey)));
+
+      if (candidateKeys.length === 0) {
+        setLikedBooks([]);
+        return;
+      }
+
+      const { data: booksData, error: booksError } = await supabase
+        .from('books_cache')
+        .select('book_key, title, author, cover_url, isbn')
+        .in('book_key', candidateKeys);
+
+      if (booksError) {
+        console.error('[loadLikedBooks] books_cache error:', booksError);
+        setLikedBooks([]);
+        return;
+      }
+
+      const booksMap = new Map((booksData ?? []).map(b => [b.book_key, b]));
+
+      const pickCached = (likeKey: string) => {
+        if (!likeKey) return null;
+        if (booksMap.has(likeKey)) return booksMap.get(likeKey);
+        const norms = normalizeKey(likeKey);
+        for (const nk of norms) {
+          if (booksMap.has(nk)) return booksMap.get(nk);
+        }
+        return null;
+      };
+
+      const combined = likesData.map(like => {
+        const cached = pickCached(like.book_key);
+        return {
+          book_key: like.book_key,
+          created_at: like.created_at,
+          book: cached ?? {
+            book_key: like.book_key,
+            title: 'Titre inconnu',
+            author: 'Auteur inconnu',
+            cover_url: null,
+            isbn: null,
+          },
+        };
+      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      setLikedBooks(combined);
+    } catch (error) {
+      console.error('[loadLikedBooks] Unexpected error:', error);
+      setLikedBooks([]);
+    }
+  };
+
+  const loadCurrentlyReading = async () => {
+    const { data } = await supabase
+      .from('user_books')
+      .select(`
+        id,
+        status,
+        current_page,
+        book_id,
+        created_at,
+        updated_at,
+        book:books (
+          id,
+          title,
+          author,
+          cover_url,
+          total_pages,
+          description,
+          isbn,
+          google_books_id,
+          edition
+        )
+      `)
+      .eq('user_id', userId)
+      .eq('status', 'reading')
+      .order('updated_at', { ascending: false });
+
+    if (data) {
+      setCurrentlyReading(data);
+    } else {
+      setCurrentlyReading([]);
     }
   };
 
   const checkFollowing = async () => {
     if (!user || userId === user.id) {
-      console.log('checkFollowing skipped:', { hasUser: !!user, userId, currentUserId: user?.id });
       return;
     }
 
     const { data, error } = await supabase
       .from('follows')
-      .select('follower_id, following_id') // ✅ pas de "id" car PK composite
+      .select('follower_id, following_id')
       .eq('follower_id', user.id)
       .eq('following_id', userId)
       .maybeSingle();
@@ -276,7 +392,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
 
         setIsFollowing(false);
       } else {
-        // ✅ upsert empêche le 409 si déjà existant
         const { error: followError } = await supabase
           .from('follows')
           .upsert(
@@ -284,7 +399,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
             { onConflict: 'follower_id,following_id', ignoreDuplicates: true }
           );
 
-        // Fallback si supabase renvoie quand même 409 dans certains cas
         if (followError && (followError as any).code !== '23505') {
           console.error('Erreur lors du follow:', followError);
           return;
@@ -293,7 +407,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
         setIsFollowing(true);
       }
 
-      // Refresh stats + status (safe)
       await Promise.all([loadStats(), checkFollowing()]);
     } finally {
       setFollowLoading(false);
@@ -310,7 +423,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
 
   const isOwnProfile = user?.id === userId;
 
-  // Si on affiche la bibliothèque, on montre UserLibraryView
   if (showLibrary) {
     return (
       <UserLibraryView
@@ -322,7 +434,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     );
   }
 
-  // Si on affiche les livres likés, on montre UserLibraryView en mode liked
   if (showLikedBooks) {
     return (
       <UserLibraryView
@@ -334,36 +445,57 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
     );
   }
 
+  if (showUserActivities) {
+    return (
+      <MyActivities
+        userId={userId}
+        title={`Activités de ${profile.display_name}`}
+        onClose={() => {
+          setShowUserActivities(false);
+          loadStats();
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="h-[100dvh] flex flex-col min-h-0 overflow-hidden max-w-2xl mx-auto">
+      {/* Sticky Header with safe-area top */}
       <AppHeader
         title="Profil"
         showBack
         onBack={onClose}
       />
 
-      <div className="px-4 pt-4 pb-6 no-scrollbar">
-        <div className="flex flex-col items-center text-center mb-6">
-          <div className="relative mb-4">
-            <div className="w-32 h-32 bg-gray-200 rounded-full flex items-center justify-center text-4xl font-bold text-text-main-light border-4 border-white shadow-lg overflow-hidden">
-              {profile.avatar_url ? (
-                <img src={profile.avatar_url} alt={profile.display_name} className="w-full h-full object-cover" />
-              ) : (
-                profile.display_name.charAt(0).toUpperCase()
-              )}
-            </div>
-            {profile.current_streak > 0 && (
-              <div className="absolute bottom-0 right-0 bg-primary text-black rounded-full p-1.5 border-4 border-background-light flex items-center justify-center">
-                <Flame className="w-5 h-5 fill-black" />
-              </div>
-            )}
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">{profile.display_name}</h1>
-          <p className="text-text-sub-light text-sm mb-3">@{profile.username}</p>
-          {profile.bio && (
-            <p className="text-text-sub-light text-sm max-w-md mb-4">{profile.bio}</p>
-          )}
-          {!isOwnProfile && (
+      {/* Scrollable content container */}
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+        style={{
+          paddingBottom: 'calc(12px + var(--sab))',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          overscrollBehaviorX: 'none',
+        }}
+      >
+        <ProfileLayout
+        profile={profile}
+        stats={stats}
+        weeklyActivity={weeklyActivity}
+        totalMinutes={totalMinutes}
+        readingSpeed7d={readingSpeed7d}
+        readingPace7d={readingPace7d}
+        readingSpeedPR={readingSpeedPR}
+        readingPacePR={readingPacePR}
+        hasSessions7d={hasSessions7d}
+        hasAnySessions={hasAnySessions}
+        totalPages7d={totalPages7d}
+        totalPagesAllTime={totalPagesAllTime}
+        totalMinutes7d={totalMinutes7d}
+        currentlyReading={currentlyReading}
+        likedBooks={likedBooks}
+        interests={profile.interests}
+        actionButtons={
+          !isOwnProfile ? (
             <button
               onClick={handleFollowToggle}
               disabled={followLoading}
@@ -385,182 +517,19 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
                 </>
               )}
             </button>
-          )}
-        </div>
+          ) : undefined
+        }
+        onNavigateToLibrary={() => setShowLibrary(true)}
+        onShowAllLikedBooks={() => setShowLikedBooks(true)}
+        onShowFollowers={() => setShowFollowersModal(true)}
+        onShowFollowing={() => setShowFollowingModal(true)}
+        onShowMyActivities={() => setShowUserActivities(true)}
+        mode="user"
+        viewedUserId={userId}
+        />
+      </div>
 
-        <div className="grid grid-cols-5 gap-2.5 mb-5">
-          {/* Abonnés */}
-          <button
-            onClick={() => setShowFollowersModal(true)}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
-          >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.followers}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Abonnés</p>
-          </button>
-
-          {/* Abonnements */}
-          <button
-            onClick={() => setShowFollowingModal(true)}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
-          >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.following}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap overflow-hidden text-ellipsis w-full">
-              Suivis
-            </p>
-          </button>
-
-          {/* Livres */}
-          <button
-            onClick={() => setShowLibrary(true)}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
-          >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.books}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Livres</p>
-          </button>
-
-          {/* Likés */}
-          <button
-            onClick={() => setShowLikedBooks(true)}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
-          >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.likedBooks ?? 0}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center">Likés</p>
-          </button>
-
-          {/* Série (avec flamme derrière) */}
-          <div className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-primary text-black border border-primary shadow-md relative overflow-hidden aspect-square">
-            <div className="absolute inset-0 opacity-10 flex items-center justify-center rotate-12">
-              <Flame className="w-16 h-16" />
-            </div>
-            <p className="text-2xl font-bold leading-none relative z-10">{profile.current_streak}</p>
-            <p className="text-[10px] text-black/70 font-bold relative z-10 text-center">Série</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
-            <div className="flex items-center gap-2 text-text-sub-light mb-1">
-              <BookOpen className="w-5 h-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Pages</p>
-            </div>
-            <p className="text-3xl font-bold leading-none text-text-main-light">
-              {profile.total_pages_read ? (profile.total_pages_read / 1000).toFixed(1) + 'k' : '0'}
-            </p>
-            <p className="text-xs text-text-sub-light">Total lues</p>
-          </div>
-
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
-            <div className="flex items-center gap-2 text-text-sub-light mb-1">
-              <Clock className="w-5 h-5" />
-              <p className="text-xs font-bold uppercase tracking-wide">Heures</p>
-            </div>
-            <p className="text-3xl font-bold leading-none text-text-main-light">
-              {profile.total_hours_logged || 0}
-            </p>
-            <p className="text-xs text-text-sub-light">Temps passé</p>
-          </div>
-        </div>
-
-        {/* Lectures en cours preview */}
-        {readingPreviewBooks.length > 0 && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">Lectures en cours</h2>
-              <button
-                onClick={() => setShowLibrary(true)}
-                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                Voir tout
-              </button>
-            </div>
-            <div className="grid grid-cols-4 gap-3">
-              {readingPreviewBooks.slice(0, 8).map((userBook) => {
-                const book = userBook.book;
-                if (!book) return null;
-                return (
-                  <button
-                    key={userBook.id}
-                    onClick={() => {
-                      setSelectedUserBook(userBook);
-                    }}
-                    className="flex flex-col items-center"
-                  >
-                    <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
-                      <BookCover
-                        coverUrl={book.cover_url}
-                        title={book.title || ''}
-                        author={book.author || ''}
-                        className="w-full h-full"
-                      />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Livres likés preview */}
-        {likedPreviewBooks.length > 0 && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light flex items-center gap-2">
-                <Heart className="w-4 h-4 text-red-500 fill-current" />
-                Livres likés
-              </h2>
-              <button
-                onClick={() => setShowLikedBooks(true)}
-                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                Voir tout
-              </button>
-            </div>
-            <div className="grid grid-cols-4 gap-3">
-              {likedPreviewBooks.slice(0, 8).map((book) => (
-                <button
-                  key={book.book_key}
-                  onClick={() => {
-                    setSelectedBook({
-                      id: book.book_key,
-                      title: book.title || 'Titre inconnu',
-                      author: book.author || 'Auteur inconnu',
-                      cover_url: book.cover_url || null,
-                      thumbnail: book.cover_url || null,
-                    });
-                  }}
-                  className="flex flex-col items-center"
-                >
-                  <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
-                    <BookCover
-                      coverUrl={book.cover_url}
-                      title={book.title || ''}
-                      author={book.author || ''}
-                      className="w-full h-full"
-                    />
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {profile.interests && profile.interests.length > 0 && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light mb-3">Centres d'intérêt</h2>
-            <div className="flex flex-wrap gap-2">
-              {profile.interests.map((interest: string) => (
-                <span
-                  key={interest}
-                  className="px-3 py-1.5 bg-gray-100 text-text-main-light rounded-lg text-sm font-medium"
-                >
-                  {interest}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {showFollowersModal && (
+      {showFollowersModal && (
           <FollowersModal
             userId={userId}
             onClose={() => setShowFollowersModal(false)}
@@ -581,27 +550,6 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
             }}
           />
         )}
-
-        {selectedBook && (
-          <BookDetailsModal
-            book={selectedBook}
-            onClose={() => setSelectedBook(null)}
-          />
-        )}
-
-        {selectedUserBook?.book?.id && (
-          <BookDetailsWithManagement
-            bookId={selectedUserBook.book.id}
-            userBookId={selectedUserBook.id}
-            currentPage={selectedUserBook.current_page || 0}
-            onClose={() => {
-              setSelectedUserBook(null);
-              loadPreviewBooks();
-            }}
-          />
-        )}
-      </div>
     </div>
   );
 }
-

@@ -14,11 +14,12 @@ interface AppHeaderProps {
 
 /**
  * Composant header standardisé pour toutes les pages
- * - Position sticky top-0 avec safe-area-inset-top
+ * - Position STICKY top-0 avec safe-area-inset-top (Option A: sticky dans le flow)
  * - Background opaque (blanc) + backdrop-blur
  * - Z-index élevé pour rester au-dessus du contenu
  * - Border-bottom pour séparation visuelle
  * - Support back button et close button
+ * - Hauteur totale : calc(56px + var(--sat))
  */
 export function AppHeader({ 
   children, 
@@ -32,9 +33,9 @@ export function AppHeader({
 }: AppHeaderProps) {
   return (
     <div
-      className={`sticky top-0 z-50 bg-theme-card backdrop-blur-sm border-b border-theme ${className}`}
+      className={`sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
       style={{
-        paddingTop: 'env(safe-area-inset-top)',
+        paddingTop: 'var(--sat)',
       }}
     >
       <div className="px-4 py-3">

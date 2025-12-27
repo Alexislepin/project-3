@@ -25,7 +25,7 @@ export async function checkDailyGoals(userId: string): Promise<DailyGoalStatus[]
 
   const { data: todayActivities } = await supabase
     .from('activities')
-    .select('pages_read, duration_minutes')
+    .select('pages_read, duration_minutes, photos')
     .eq('user_id', userId)
     .gte('created_at', today.toISOString());
 
@@ -88,7 +88,7 @@ export async function checkWeeklyGoals(userId: string): Promise<DailyGoalStatus[
 
   const { data: weekActivities } = await supabase
     .from('activities')
-    .select('pages_read, duration_minutes')
+    .select('pages_read, duration_minutes, photos')
     .eq('user_id', userId)
     .gte('created_at', startOfWeek.toISOString());
 

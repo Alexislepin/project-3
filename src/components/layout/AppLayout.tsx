@@ -1,19 +1,32 @@
 import { ReactNode } from 'react';
 import { BottomNav } from './BottomNav';
 
+type View = 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social';
+
 interface AppLayoutProps {
   children: ReactNode;
-  currentView: 'home' | 'search' | 'library' | 'profile' | 'insights';
-  onNavigate: (view: 'home' | 'search' | 'library' | 'profile' | 'insights') => void;
+  currentView: View;
+  onNavigate: (view: View) => void;
   onStartSession: () => void;
 }
 
 export function AppLayout({ children, currentView, onNavigate, onStartSession }: AppLayoutProps) {
   return (
-    <div className="min-h-screen bg-background-light pb-20">
+    <div 
+      className="h-screen bg-background-light overflow-hidden"
+      style={{
+        overscrollBehavior: 'none', // Prevent bounce/overscroll on this container
+      }}
+    >
+      {/* Children (pages) - each page manages its own scroll container with proper margins */}
       {children}
 
-      <BottomNav currentView={currentView} onNavigate={onNavigate} onStartSession={onStartSession} />
+      {/* Bottom nav - fixed position, outside scroll flow */}
+      <BottomNav
+        currentView={currentView}
+        onNavigate={onNavigate}
+        onStartSession={onStartSession}
+      />
     </div>
   );
 }

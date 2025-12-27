@@ -39,8 +39,19 @@ export function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="h-screen bg-background-light flex flex-col overflow-hidden">
+      {/* Scrollable content container */}
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          overscrollBehaviorX: 'none',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+        }}
+      >
+        <div className="flex items-center justify-center min-h-full p-4">
+          <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-5xl font-bold tracking-tight mb-2 text-text-main-light">Lexu</h1>
           <p className="text-text-sub-light">Commencez à construire votre élan</p>
@@ -133,6 +144,8 @@ export function SignupPage() {
             >
               Vous avez déjà un compte ? <span className="font-semibold">Se connecter</span>
             </a>
+          </div>
+        </div>
           </div>
         </div>
       </div>
