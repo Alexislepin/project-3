@@ -2,8 +2,8 @@ import { Home, BookOpen, User, Circle, TrendingUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface BottomNavProps {
-  currentView: 'home' | 'search' | 'library' | 'profile' | 'insights';
-  onNavigate: (view: 'home' | 'search' | 'library' | 'profile' | 'insights') => void;
+  currentView: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social';
+  onNavigate: (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void;
   onStartSession: () => void;
 }
 
@@ -21,7 +21,7 @@ export function BottomNav({ currentView, onNavigate, onStartSession }: BottomNav
     <nav 
       className="fixed bottom-0 left-0 right-0 bg-card-light border-t border-gray-200 z-50"
       style={{
-        paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
+        paddingBottom: 'env(safe-area-inset-bottom)', // Safe-area uniquement, pas de padding supplémentaire
       }}
     >
       <div className="max-w-lg mx-auto flex justify-around items-center h-16 relative">
@@ -48,7 +48,7 @@ export function BottomNav({ currentView, onNavigate, onStartSession }: BottomNav
               key={item.id}
               onClick={() => {
                 if (item.id !== 'record') {
-                  onNavigate(item.id as 'home' | 'search' | 'library' | 'profile' | 'insights');
+                  onNavigate(item.id as 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social');
                 }
               }}
               className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${

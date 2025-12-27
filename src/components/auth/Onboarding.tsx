@@ -102,7 +102,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   const handleSkipNotifications = () => {
-    setStep(6);
+    // Skip notifications: go directly to final step without requesting permission
+    setStep(7);
   };
 
   const handleComplete = async () => {
@@ -198,14 +199,25 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4 safe-area-top safe-area-bottom">
-      <div className="w-full max-w-2xl">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold tracking-tight mb-2">Lexu</h1>
-          <p className="text-stone-600">Bienvenue dans votre parcours de lecture</p>
-        </div>
+    <div className="h-screen bg-stone-50 flex flex-col overflow-hidden">
+      {/* Scrollable content container */}
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          overscrollBehaviorX: 'none',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+        }}
+      >
+        <div className="flex items-center justify-center min-h-full p-4 safe-area-top">
+          <div className="w-full max-w-2xl">
+            <div className="text-center mb-8">
+              <h1 className="text-4xl font-bold tracking-tight mb-2">Lexu</h1>
+              <p className="text-stone-600">Bienvenue dans votre parcours de lecture</p>
+            </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8">
+            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 relative">
           {/* Step 1: Objectif temps par jour */}
           {step === 1 && (
             <>
@@ -481,8 +493,9 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                     Les notifications ont été refusées. Pour les activer, ouvrez les Réglages de votre iPhone.
                   </p>
                   <button
+                    type="button"
                     onClick={handleOpenSettings}
-                    className="w-full bg-amber-600 text-white py-2 rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
+                    className="w-full bg-amber-600 text-white py-2 rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center justify-center gap-2 relative z-10"
                   >
                     <Settings className="w-4 h-4" />
                     Ouvrir Réglages
@@ -490,11 +503,12 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 </div>
               )}
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 relative">
                 {notificationPermission !== 'granted' && !showSettingsPrompt && (
                   <button
+                    type="button"
                     onClick={handleRequestNotifications}
-                    className="w-full bg-primary text-black py-3 rounded-lg font-medium hover:brightness-95 transition-all flex items-center justify-center gap-2"
+                    className="w-full bg-primary text-black py-3 rounded-lg font-medium hover:brightness-95 transition-all flex items-center justify-center gap-2 relative z-10"
                   >
                     <Bell className="w-5 h-5" />
                     Activer les notifications
@@ -506,20 +520,16 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                   </div>
                 )}
                 <button
-                  onClick={() => {
-                    if (notificationPermission === 'granted') {
-                      setStep(7);
-                    } else {
-                      handleSkipNotifications();
-                    }
-                  }}
-                  className="w-full border-2 border-stone-300 text-stone-700 py-3 rounded-lg font-medium hover:bg-stone-50 transition-colors"
+                  type="button"
+                  onClick={handleSkipNotifications}
+                  className="w-full border-2 border-stone-300 text-stone-700 py-3 rounded-lg font-medium hover:bg-stone-50 transition-colors relative z-10"
                 >
                   {notificationPermission === 'granted' ? 'Continuer' : 'Peut-être plus tard'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => setStep(5)}
-                  className="text-sm text-stone-500 hover:text-stone-700 transition-colors mt-2"
+                  className="text-sm text-stone-500 hover:text-stone-700 transition-colors mt-2 relative z-10"
                 >
                   Retour
                 </button>
@@ -557,6 +567,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
               </div>
             </>
           )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -30,6 +30,9 @@ export const ExploreGrid = memo(function ExploreGrid({
   // Memoize converted books and keys
   const booksWithKeys = useMemo(() => {
     return exploreBooks.map((book, index) => {
+      // Handle ISBN as string or array (OpenLibrary often returns array)
+      const isbn = Array.isArray(book.isbn) ? book.isbn[0] : book.isbn;
+      
       // Convert OpenLibraryDoc to GoogleBook for modals and actions
       const googleBookConverted = {
         id: book.key || book.id,
@@ -38,9 +41,9 @@ export const ExploreGrid = memo(function ExploreGrid({
         thumbnail: book.cover_i 
           ? `https://covers.openlibrary.org/b/id/${book.cover_i}-M.jpg?default=false` 
           : undefined,
-        isbn: book.isbn,
-        isbn13: book.isbn,
-        isbn10: book.isbn,
+        isbn: isbn,
+        isbn13: isbn,
+        isbn10: isbn,
         pageCount: book.number_of_pages_median || undefined,
         openLibraryKey: book.key,
         key: book.key,
@@ -50,9 +53,9 @@ export const ExploreGrid = memo(function ExploreGrid({
       const bookForActions = {
         id: book.key || book.id,
         key: book.key,
-        isbn13: book.isbn,
-        isbn10: book.isbn,
-        isbn: book.isbn,
+        isbn13: isbn,
+        isbn10: isbn,
+        isbn: isbn,
         title: book.title,
         author: book.authors,
         cover_url: googleBookConverted.thumbnail,
@@ -60,8 +63,16 @@ export const ExploreGrid = memo(function ExploreGrid({
       };
       
       // Use canonical book key for social counts (ensures consistency with BookSocial)
-      // This is the SINGLE source of truth for book_key across the app
-      const bookKey = canonicalBookKey(googleBookConverted);
+      // Pass openLibraryKey explicitly to ensure priority
+      const bookForCanonical = {
+        ...googleBookConverted,
+        openLibraryKey: book.key,
+        key: book.key,
+      };
+      const bookKey = canonicalBookKey(bookForCanonical);
+      
+      // Debug log (temporary)
+      console.debug('[ExploreGrid] key', book.title, bookKey, { key: book.key, isbn: book.isbn });
       
       // Use bookKey as stable key for React key (same as social counts)
       const stableKey = bookKey;
@@ -84,11 +95,11 @@ export const ExploreGrid = memo(function ExploreGrid({
 
   return (
     <div className="grid grid-cols-2 gap-3">
-      {booksWithKeys.map(({ book, stableKey, googleBookConverted, bookForActions, bookKey, alreadyAdded, socialCounts }) => (
+      {booksWithKeys.map(({ book, index, stableKey, googleBookConverted, bookForActions, bookKey, alreadyAdded, socialCounts }) => (
         <ExploreBookCard
           key={stableKey}
           book={book}
-          index={0} // Not used anymore
+          index={index}
           stableKey={stableKey}
           googleBookConverted={googleBookConverted}
           bookForActions={bookForActions}

@@ -31,8 +31,19 @@ export function LanguageOnboarding({ onComplete }: LanguageOnboardingProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background-light flex items-center justify-center p-6">
-      <div className="max-w-md w-full">
+    <div className="h-screen bg-background-light flex flex-col overflow-hidden">
+      {/* Scrollable content container */}
+      <div 
+        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          overscrollBehaviorX: 'none',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+        }}
+      >
+        <div className="flex items-center justify-center min-h-full p-6">
+          <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-text-primary mb-2">
             {selectedLang === 'fr' ? 'Choisissez votre langue' : 'Choose your language'}
@@ -85,6 +96,8 @@ export function LanguageOnboarding({ onComplete }: LanguageOnboardingProps) {
             {selectedLang === 'fr' ? 'Chargement...' : 'Loading...'}
           </div>
         )}
+          </div>
+        </div>
       </div>
     </div>
   );

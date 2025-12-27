@@ -7,12 +7,6 @@ import { ensureBookInDB } from '../lib/booksUpsert';
 import { socialEvents } from '../lib/events';
 import { normalizeEventType } from '../lib/activityEvents';
 
-// Helper to check if a string is a UUID
-function isUuid(v?: string | null): boolean {
-  if (!v) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
-}
-
 // Throttle anti-spam pour activity_events (évite inserts multiples < 400ms)
 const activityEventsThrottle = new Map<string, number>();
 const ACTIVITY_EVENTS_THROTTLE_MS = 400;
@@ -108,32 +102,50 @@ export function BookQuickActions({
       // RÈGLE ABSOLUE: S'assurer que le livre existe en DB
       const bookUuid = await ensureBookInDB(supabase, book);
 
-      // Re-check en DB (évite les états désync)
+      // IDEMPOTENT: Vérifier si le like existe déjà (avec book_key, pas book_id)
       const { data: existing, error: checkErr } = await supabase
         .from('book_likes')
         .select('id')
         .eq('user_id', user.id)
-        .eq('book_id', bookUuid)
+        .eq('book_key', bookKey)
         .maybeSingle();
 
       if (checkErr) throw checkErr;
 
-      if (existing?.id) {
-        // UNLIKE: Delete from book_likes using book_uuid
-        // RÈGLE ABSOLUE: Unlike = delete
+      // OPTIMISTIC UPDATE: Mettre à jour l'UI immédiatement
+      const wasLiked = !!existing?.id;
+      const prevLikesCount = currentLikesCount;
+      const prevCommentsCount = currentCommentsCount;
+
+      if (wasLiked) {
+        // UNLIKE: Update UI immediately
+        setLikedByMe(false);
+        const newCount = Math.max(0, prevLikesCount - 1);
+        setCurrentLikesCount(newCount);
+        onCountsChange?.(newCount, prevCommentsCount, false);
+      } else {
+        // LIKE: Update UI immediately
+        setLikedByMe(true);
+        const newCount = prevLikesCount + 1;
+        setCurrentLikesCount(newCount);
+        onCountsChange?.(newCount, prevCommentsCount, true);
+      }
+
+      if (wasLiked) {
+        // UNLIKE: Delete from book_likes using book_key (idempotent)
         const { error: delErr } = await supabase
           .from('book_likes')
           .delete()
           .eq('user_id', user.id)
-          .eq('book_id', bookUuid);
+          .eq('book_key', bookKey);
 
-        if (delErr) throw delErr;
-
-        // Update UI
-        setLikedByMe(false);
-        const newCount = Math.max(0, currentLikesCount - 1);
-        setCurrentLikesCount(newCount);
-        onCountsChange?.(newCount, currentCommentsCount, false);
+        if (delErr) {
+          // Rollback UI on error
+          setLikedByMe(true);
+          setCurrentLikesCount(prevLikesCount);
+          onCountsChange?.(prevLikesCount, prevCommentsCount, true);
+          throw delErr;
+        }
 
         // Delete activity event (fire and forget)
         (async () => {
@@ -157,29 +169,51 @@ export function BookQuickActions({
           }
         })();
       } else {
-        // LIKE: UPSERT (never INSERT)
-        // RÈGLE ABSOLUE: Like = UPSERT, jamais INSERT
-        const { error: upsertErr } = await supabase
+        // LIKE: IDEMPOTENT INSERT
+        // Vérifier à nouveau si le like existe (race condition protection)
+        const { data: doubleCheck, error: doubleCheckErr } = await supabase
           .from('book_likes')
-          .upsert(
-            {
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('book_key', bookKey)
+          .maybeSingle();
+
+        if (doubleCheckErr) {
+          // Rollback UI on error
+          setLikedByMe(false);
+          setCurrentLikesCount(prevLikesCount);
+          onCountsChange?.(prevLikesCount, prevCommentsCount, false);
+          throw doubleCheckErr;
+        }
+
+        // Si le like existe déjà, c'est OK (idempotent)
+        if (doubleCheck?.id) {
+          // Already liked, do nothing (idempotent success)
+          return;
+        }
+
+        // Insert new like
+        const { error: insertErr } = await supabase
+          .from('book_likes')
+          .insert({
               user_id: user.id,
               book_key: bookKey,
               book_id: bookUuid,
-            },
-            { onConflict: 'user_id,book_id' }
-          );
+          });
 
-        // Handle upsert errors
-        if (upsertErr) {
-          throw upsertErr;
+        // Handle insert errors (except unique constraint violation)
+        if (insertErr) {
+          // If it's a unique constraint violation, treat as success (idempotent)
+          if (insertErr.code === '23505' || insertErr.message?.includes('unique') || insertErr.message?.includes('duplicate')) {
+            // Already exists, that's OK
+            return;
         }
-
-        // Update UI
-        setLikedByMe(true);
-        const newCount = currentLikesCount + 1;
-        setCurrentLikesCount(newCount);
-        onCountsChange?.(newCount, currentCommentsCount, true);
+          // Other errors: rollback UI
+          setLikedByMe(false);
+          setCurrentLikesCount(prevLikesCount);
+          onCountsChange?.(prevLikesCount, prevCommentsCount, false);
+          throw insertErr;
+        }
 
         // Upsert books_cache and insert activity event (fire and forget)
         (async () => {
@@ -281,7 +315,7 @@ export function BookQuickActions({
       
       // Emit global event for Profile to refresh liked books
       window.dispatchEvent(new CustomEvent('book-like-changed', { 
-        detail: { bookKey: stableBookKey, liked: !existing?.id } 
+        detail: { bookKey: stableBookKey, liked: !wasLiked } 
       }));
     } catch (error: any) {
       console.error('[QuickActions] toggleLike error:', error);

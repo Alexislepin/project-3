@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { LevelBadge } from '../components/LevelProgressBar';
+import { useScrollLock } from '../hooks/useScrollLock';
 
 interface FollowersModalProps {
   userId: string;
@@ -43,7 +45,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
       // Récupérer les profils des followers
       const { data: profiles, error: profilesError } = await supabase
         .from('user_profiles')
-        .select('id, display_name, username, avatar_url, bio')
+        .select('id, display_name, username, avatar_url, bio, xp_total')
         .in('id', followerIds);
 
       if (profilesError) {
@@ -65,10 +67,24 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
     setLoading(false);
   };
 
+  useScrollLock(true);
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-[100]" onClick={onClose}>
+    <div 
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]" 
+      data-modal-overlay
+      onClick={onClose}
+      onTouchMove={(e) => {
+        // Prevent scroll on overlay
+        const target = e.target as HTMLElement;
+        if (!target.closest('[data-modal-content]')) {
+          e.preventDefault();
+        }
+      }}
+    >
       <div
-        className="bg-white rounded-t-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+        data-modal-content
+        className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
@@ -115,7 +131,12 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
                   </div>
 
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-stone-900">{profile.display_name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-stone-900">{profile.display_name}</h3>
+                      {profile.xp_total !== undefined && (
+                        <LevelBadge xpTotal={profile.xp_total || 0} />
+                      )}
+                    </div>
                     <p className="text-sm text-stone-500">@{profile.username}</p>
                     {profile.bio && (
                       <p className="text-sm text-stone-600 mt-1 line-clamp-1">{profile.bio}</p>

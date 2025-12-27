@@ -16,9 +16,23 @@ import { ActiveSession } from './pages/ActiveSession';
 import { Search } from './pages/Search';
 import { Debug } from './pages/Debug';
 import { ManageBook } from './pages/ManageBook';
+import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
 
-type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug';
+type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
+
+// Safe timer management to prevent double-invoke issues with React StrictMode
+const endedTimers = new Set<string>();
+
+function safeTimeEnd(name: string) {
+  if (endedTimers.has(name)) return;
+  try { 
+    console.timeEnd(name); 
+  } catch (e) {
+    // Timer doesn't exist, ignore
+  }
+  endedTimers.add(name);
+}
 
 function App() {
   // ============================================
@@ -28,15 +42,20 @@ function App() {
   
   // Instrumentation: Mesurer le premier render
   useEffect(() => {
-    console.time('FIRST_RENDER');
+    if (!(window as any).__firstRenderStarted) {
+      (window as any).__firstRenderStarted = true;
+      console.time('FIRST_RENDER');
+    }
     console.log('[APP] First render completed');
-    console.timeEnd('FIRST_RENDER');
+    // Use safeTimeEnd to prevent double-invoke issues
+    setTimeout(() => safeTimeEnd('FIRST_RENDER'), 0);
   }, []);
   
   // Hook 1: Auth context
   const { user, loading } = useAuth();
   
-  // Hook 2-7: State hooks (toujours dans le même ordre)
+  // Hook 2-8: State hooks (toujours dans le même ordre)
+  const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [needsLanguageOnboarding, setNeedsLanguageOnboarding] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('home');
@@ -44,7 +63,17 @@ function App() {
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Hook 7: Check language onboarding (first check)
+  // Hook 7: Check intro status (first check, before everything)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const seen = localStorage.getItem('lexu_seen_intro') === 'true';
+      setHasSeenIntro(seen);
+    } else {
+      setHasSeenIntro(true); // Default to true on server
+    }
+  }, []);
+
+  // Hook 8: Check language onboarding (first check)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const storedLang = localStorage.getItem('lexu_lang');
@@ -56,14 +85,17 @@ function App() {
     }
   }, []);
 
-  // Hook 8: Check onboarding status (NON-BLOQUANT)
+  // Hook 9: Check onboarding status (NON-BLOQUANT)
   useEffect(() => {
     // Condition dans le body du hook (OK), pas autour du hook (interdit)
     if (user && !needsLanguageOnboarding) {
       // FIX: Ne pas bloquer le render - vérifier onboarding en arrière-plan
       setCheckingOnboarding(true);
       const checkOnboardingStatus = async () => {
-        console.time('LOAD_INITIAL_DATA');
+        if (!(window as any).__loadInitialDataStarted) {
+          (window as any).__loadInitialDataStarted = true;
+          console.time('LOAD_INITIAL_DATA');
+        }
         console.log('[APP] Checking onboarding status...');
         
         try {
@@ -84,7 +116,8 @@ function App() {
           setNeedsOnboarding(false);
         } finally {
           setCheckingOnboarding(false);
-          console.timeEnd('LOAD_INITIAL_DATA');
+          // Use safeTimeEnd to prevent double-invoke issues
+          safeTimeEnd('LOAD_INITIAL_DATA');
         }
       };
 
@@ -94,23 +127,35 @@ function App() {
     }
   }, [user, needsLanguageOnboarding]);
 
-  // Hook 9: Routing basé sur l'URL
+  // Hook 10: Routing basé sur l'URL
   useEffect(() => {
-    const path = window.location.pathname;
-    if (path === '/login' || path === '/signup') {
-      // Les pages auth sont gérées séparément
-      return;
-    }
-    // Map paths to AppView
-    const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
-    if (['home', 'profile', 'library', 'insights', 'search', 'debug'].includes(viewFromPath)) {
-      setCurrentView(viewFromPath);
-    } else if (path === '/') {
-      setCurrentView('home');
-    }
+    const updateViewFromPath = () => {
+      const path = window.location.pathname;
+      if (path === '/login' || path === '/signup') {
+        // Les pages auth sont gérées séparément
+        return;
+      }
+      // Map paths to AppView
+      const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
+      if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
+        setCurrentView(viewFromPath);
+      } else if (path === '/') {
+        setCurrentView('home');
+      }
+    };
+
+    // Initial load
+    updateViewFromPath();
+
+    // Listen for popstate events (back/forward navigation and programmatic navigation)
+    window.addEventListener('popstate', updateViewFromPath);
+    
+    return () => {
+      window.removeEventListener('popstate', updateViewFromPath);
+    };
   }, []);
 
-  // Hook 10: Initialize iOS swipe back gesture
+  // Hook 11: Initialize iOS swipe back gesture
   useEffect(() => {
     initSwipeBack();
   }, []);
@@ -136,9 +181,30 @@ function App() {
     setRefreshKey(prev => prev + 1);
   };
 
+  const handleIntroDone = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lexu_seen_intro', 'true');
+    }
+    setHasSeenIntro(true);
+  };
+
   // ============================================
   // RENDER CONDITIONNEL (après tous les hooks)
   // ============================================
+  
+  // Early return: Intro (before everything)
+  if (hasSeenIntro === false) {
+    return <Intro onDone={handleIntroDone} />;
+  }
+
+  // Early return: Loading intro check
+  if (hasSeenIntro === null) {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <div className="text-white text-lg">Chargement...</div>
+      </div>
+    );
+  }
   
   // FIX: Afficher l'UI immédiatement avec un loader, ne pas bloquer complètement
   // Le loader s'affiche pendant que l'auth charge, mais l'UI est déjà montée
@@ -203,16 +269,22 @@ function App() {
       <ProtectedRoute>
         <>
           <AppLayout
-            currentView={currentView as 'home' | 'search' | 'library' | 'profile' | 'insights'}
-            onNavigate={handleNavigate as (view: 'home' | 'search' | 'library' | 'profile' | 'insights') => void}
+            currentView={currentView as 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social'}
+            onNavigate={handleNavigate as (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void}
             onStartSession={() => setShowActiveSession(true)}
           >
             {currentView === 'home' && <Home key={`home-${refreshKey}`} />}
             {currentView === 'profile' && <Profile key={`profile-${refreshKey}`} onNavigateToLibrary={() => handleNavigate('library')} />}
             {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} />}
             {currentView === 'insights' && <Insights key={`insights-${refreshKey}`} />}
-            {currentView === 'search' && <Search key={`search-${refreshKey}`} />}
           </AppLayout>
+
+          {/* Search page (not in pager, overlay) */}
+          {currentView === 'search' && (
+            <div className="fixed inset-0 bg-background-light z-[200] overflow-y-auto">
+              <Search key={`search-${refreshKey}`} />
+            </div>
+          )}
 
           {showActiveSession && (
             <ActiveSession

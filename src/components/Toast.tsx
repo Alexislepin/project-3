@@ -34,7 +34,13 @@ export function Toast({ message, type, onClose, duration = 3000 }: ToastProps) {
   const Icon = type === 'success' ? CheckCircle : Info;
 
   return (
-    <div className={`fixed top-4 right-4 z-[200] flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg ${bgColor} animate-in slide-in-from-top-5`}>
+    <div 
+      className={`fixed right-4 z-[200] flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg ${bgColor} animate-in slide-in-from-top-5`}
+      style={{
+        top: 'calc(env(safe-area-inset-top) + 12px)',
+        maxWidth: 'calc(100vw - 2rem - env(safe-area-inset-right) - env(safe-area-inset-left))',
+      }}
+    >
       <Icon className={`w-5 h-5 ${iconColor} flex-shrink-0`} />
       <p className="flex-1 text-sm font-medium">{message}</p>
       <button

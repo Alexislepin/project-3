@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X, Plus, Sparkles } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { ensureBookInDB } from '../lib/booksUpsert';
@@ -8,21 +8,26 @@ import { AddBookStatusModal } from './AddBookStatusModal';
 import { BookCover } from './BookCover';
 import { smartFormatDescription } from '../utils/descriptionFormatter';
 import { debugLog, fatalError } from '../utils/logger';
+import { ReadingSetupModal } from './ReadingSetupModal';
+import { normalizeReadingState } from '../lib/readingState';
 
 interface BookDetailsWithManagementProps {
   bookId: string;
   userBookId?: string;
   currentPage?: number;
   onClose: () => void;
+  onEditRequested?: () => void; // Callback to open EditBookModal
+  onOpenRecap?: () => void; // Callback to open BookRecapModal
 }
 
-export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onClose }: BookDetailsWithManagementProps) {
+export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onClose, onEditRequested, onOpenRecap }: BookDetailsWithManagementProps) {
   const { user } = useAuth();
   const [book, setBook] = useState<any>(null);
   const [userBook, setUserBook] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showManageModal, setShowManageModal] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [showReadingSetup, setShowReadingSetup] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<'reading' | 'completed' | 'want_to_read' | null>(null);
 
   useEffect(() => {
     loadBookDetails();
@@ -55,11 +60,11 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
 
       if (user) {
         const { data: userBookData, error: userBookError } = await supabase
-          .from('user_books')
-          .select('*')
-          .eq('user_id', user.id)
-          .eq('book_id', bookId)
-          .maybeSingle();
+        .from('user_books')
+        .select('*, custom_cover_url')
+        .eq('user_id', user.id)
+        .eq('book_id', bookId)
+        .maybeSingle();
 
         if (userBookError) {
           console.error('Error loading user_book:', {
@@ -85,7 +90,8 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
   };
 
   const handleAddToLibrary = () => {
-    setShowAddModal(true);
+    // This will be handled by AddBookStatusModal -> ReadingSetupModal flow
+    // The button triggers AddBookStatusModal which then calls handleAddComplete
   };
 
   const handleStatusChange = async (status: 'reading' | 'completed' | 'want_to_read') => {
@@ -112,7 +118,11 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
     onClose();
   };
 
-  const handleAddComplete = async (status: 'reading' | 'completed' | 'want_to_read') => {
+  const handleAddComplete = async (
+    status: 'reading' | 'completed' | 'want_to_read',
+    totalPages: number | null,
+    currentPage: number
+  ) => {
     if (!book) return;
 
     try {
@@ -162,20 +172,54 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
 
       if (existingUserBook) {
         debugLog('Book already in library');
-        setShowAddModal(false);
+        setShowReadingSetup(false);
+        setPendingStatus(null);
         onClose();
         return;
       }
 
-      // Step 3: Insert into user_books with UUID (Handle UNIQUE constraint violation gracefully)
+      // Step 3: Normalize reading state
+      const normalizedState = normalizeReadingState({
+        status,
+        total_pages: totalPages,
+        current_page: currentPage,
+      });
+
+      // Step 4: Update books.total_pages if provided
+      if (normalizedState.total_pages && normalizedState.total_pages > 0) {
+        const { data: bookData } = await supabase
+          .from('books')
+          .select('total_pages')
+          .eq('id', bookUuid)
+          .maybeSingle();
+        
+        if (!bookData?.total_pages) {
+          await supabase
+            .from('books')
+            .update({ total_pages: normalizedState.total_pages })
+            .eq('id', bookUuid);
+        }
+      }
+
+      // Step 5: Insert into user_books with normalized state
+      const insertData: any = {
+        user_id: userId,
+        book_id: bookUuid,
+        status: normalizedState.status,
+        current_page: normalizedState.current_page,
+      };
+
+      if (normalizedState.started_at) {
+        insertData.started_at = normalizedState.started_at;
+      }
+
+      if (normalizedState.completed_at) {
+        insertData.completed_at = normalizedState.completed_at;
+      }
+
       const { data: insertedData, error: insertError } = await supabase
         .from('user_books')
-        .insert({
-          user_id: userId,
-          book_id: bookUuid, // Use UUID from ensureBookInDB, not external book.id
-          status: status,
-          current_page: 0,
-        })
+        .insert(insertData)
         .select();
 
       if (insertError) {
@@ -183,7 +227,8 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
         if (insertError.code === '23505') {
           // Book already exists - treat as success
           debugLog('Book already in library');
-          setShowAddModal(false);
+          setShowReadingSetup(false);
+          setPendingStatus(null);
           onClose();
           return;
         }
@@ -193,7 +238,8 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
       }
 
       debugLog('Book successfully added to library:', insertedData);
-      setShowAddModal(false);
+      setShowReadingSetup(false);
+      setPendingStatus(null);
       onClose();
     } catch (error) {
       fatalError('Unexpected error in handleAddComplete:', error);
@@ -231,7 +277,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
   return (
     <>
       <div
-        className={`fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 ${showAddModal ? 'hidden' : ''}`}
+        className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4"
         onClick={onClose}
       >
         <div
@@ -255,9 +301,16 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
           <div className="px-6 py-6">
             <div className="flex gap-4 mb-6">
               <BookCover
-                coverUrl={book.cover_url}
+                custom_cover_url={userBook?.custom_cover_url || null}
+                coverUrl={book.cover_url || null}
                 title={book.title}
                 author={book.author || 'Auteur inconnu'}
+                isbn={book.isbn || null}
+                isbn13={book.isbn13 || null}
+                isbn10={book.isbn10 || null}
+                cover_i={book.openlibrary_cover_id || null}
+                openlibrary_cover_id={book.openlibrary_cover_id || null}
+                googleCoverUrl={book.google_books_id ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                 className="w-28 shrink-0 aspect-[2/3] rounded-xl overflow-hidden shadow-lg"
               />
 
@@ -340,16 +393,46 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
               </div>
             )}
 
-            {!userBook && (
-              <button
-                onClick={handleAddToLibrary}
-                className="w-full bg-primary text-black py-4 rounded-xl font-bold hover:brightness-95 transition-all shadow-sm flex items-center justify-center gap-2"
-              >
-                <Plus className="w-5 h-5" />
-                Ajouter à ma bibliothèque
-              </button>
+            {!userBook && !showReadingSetup && !pendingStatus && (
+              <AddBookStatusModal
+                bookTitle={book.title}
+                onClose={() => {}}
+                onSelect={async (status) => {
+                  // Get total_pages from book if available
+                  const bookTotalPages = book.total_pages || null;
+                  
+                  // Open ReadingSetupModal with the selected status
+                  setPendingStatus(status);
+                  setShowReadingSetup(true);
+                }}
+              />
             )}
           </div>
+
+          {/* Footer with actions */}
+          {(userBookId || onOpenRecap) && (
+            <div className="sticky bottom-0 bg-background-light border-t border-gray-200 px-6 py-4" style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}>
+              <div className="flex gap-3">
+                {userBookId && onEditRequested && (
+                  <button
+                    onClick={onEditRequested}
+                    className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-semibold hover:brightness-95 transition-colors"
+                  >
+                    Modifier
+                  </button>
+                )}
+                {onOpenRecap && (
+                  <button
+                    onClick={onOpenRecap}
+                    className="flex-1 py-3 px-4 bg-stone-900 text-white rounded-xl font-semibold hover:brightness-95 transition-all"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    IA
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -363,11 +446,26 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
         />
       )}
 
-      {showAddModal && book && (
-        <AddBookStatusModal
+      {showReadingSetup && pendingStatus && book && (
+        <ReadingSetupModal
+          open={showReadingSetup}
           bookTitle={book.title}
-          onClose={() => setShowAddModal(false)}
-          onSelect={handleAddComplete}
+          initialStatus={pendingStatus}
+          initialTotalPages={book.total_pages || null}
+          initialCurrentPage={null}
+          onCancel={() => {
+            setShowReadingSetup(false);
+            setPendingStatus(null);
+          }}
+          onConfirm={async (data) => {
+            try {
+              await handleAddComplete(data.status, data.total_pages, data.current_page);
+              setShowReadingSetup(false);
+              setPendingStatus(null);
+            } catch (error) {
+              fatalError('Error adding book:', error);
+            }
+          }}
         />
       )}
     </>

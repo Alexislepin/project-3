@@ -44,7 +44,9 @@ export function useSwipeTabs({
         if (deltaX > threshold && deltaX > deltaY * verticalThreshold) {
           isSwiping.current = true;
           // Empêcher le scroll vertical pendant le swipe horizontal
-          e.preventDefault();
+          if (e.cancelable) {
+            e.preventDefault();
+          }
         }
       }
     };

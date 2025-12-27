@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus } from 'lucide-react';
+import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus, Sparkles } from 'lucide-react';
 import { BookDetailsWithManagement } from '../components/BookDetailsWithManagement';
 import { BookDetailsModal } from '../components/BookDetailsModal';
 import { BarcodeScanner } from '../components/BarcodeScanner';
@@ -10,10 +10,11 @@ import { ManageBookModal } from '../components/ManageBookModal';
 import { EditBookModal } from '../components/EditBookModal';
 import { AddManualBookModal } from '../components/AddManualBookModal';
 import { BookCover } from '../components/BookCover';
+import { AddCoverModal } from '../components/AddCoverModal';
 import { Toast } from '../components/Toast';
 import { debugLog, debugWarn, fatalError } from '../utils/logger';
 import { searchBookByISBN, searchBooks as searchGoogleBooks, Book as GoogleBook } from '../lib/googleBooks';
-import { fetchByIsbn as fetchOpenLibraryByIsbn, searchBooks as searchOpenLibraryBooks, fetchWorkDescription, fetchEditionDescription, generateFallbackSummary } from '../services/openLibrary';
+import { fetchByIsbn as fetchOpenLibraryByIsbn, searchBooks as searchOpenLibraryBooks, fetchWorkDescription, fetchEditionDescription, generateFallbackSummary, fetchEditionByIsbn, fetchPagesFromBooksApi, fetchCoverUrlWithFallback } from '../services/openLibrary';
 import { ensureBookInDB } from '../lib/booksUpsert';
 import { getTranslatedDescription } from '../lib/translate';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +23,10 @@ import { AppHeader } from '../components/AppHeader';
 import { fetchOpenLibraryBrowse, OpenLibraryDoc } from '../lib/openLibraryBrowse';
 import { getBookSocialCounts, normalizeBookKey, canonicalBookKey, type BookSocialCounts } from '../lib/bookSocial';
 import { ExploreGrid } from '../components/ExploreGrid';
+import { BookRecapModal } from '../components/BookRecapModal';
+import { ReadingSetupModal } from '../components/ReadingSetupModal';
+import { normalizeReadingState } from '../lib/readingState';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 type BookStatus = 'reading' | 'completed' | 'want_to_read';
 type FilterType = BookStatus | 'explore';
@@ -56,6 +61,12 @@ export function Library({}: LibraryProps) {
   const [bookToAdd, setBookToAdd] = useState<GoogleBook | null>(null);
   const [bookToManage, setBookToManage] = useState<any>(null);
   const [bookToEdit, setBookToEdit] = useState<any>(null);
+  const [showReadingSetup, setShowReadingSetup] = useState(false);
+  const [pendingBookAdd, setPendingBookAdd] = useState<{ 
+    book: GoogleBook | UiBook; 
+    status: BookStatus;
+    totalPages?: number | null;
+  } | null>(null);
   const [selectedBookDetails, setSelectedBookDetails] = useState<GoogleBook | null>(null);
   const [selectedBookForComments, setSelectedBookForComments] = useState<GoogleBook | null>(null);
   const [selectedDbBook, setSelectedDbBook] = useState<any>(null); // For Explorer tab: DB book data
@@ -63,6 +74,13 @@ export function Library({}: LibraryProps) {
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [rateLimitError, setRateLimitError] = useState(false);
+  const [recapOpen, setRecapOpen] = useState(false);
+  const [recapBook, setRecapBook] = useState<{
+    book: { id: string; title: string; author?: string; cover_url?: string | null; total_pages?: number | null };
+    uptoPage: number;
+  } | null>(null);
+  const [addCoverBookId, setAddCoverBookId] = useState<string | null>(null);
+  const [addCoverBookTitle, setAddCoverBookTitle] = useState<string>('');
   const { user } = useAuth();
   const searchTimeoutRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -171,6 +189,11 @@ export function Library({}: LibraryProps) {
         book_id,
         created_at,
         updated_at,
+        custom_title,
+        custom_author,
+        custom_total_pages,
+        custom_cover_url,
+        custom_description,
         book:books (
           id,
           title,
@@ -264,18 +287,102 @@ export function Library({}: LibraryProps) {
         }
       }
       
-      // Legacy backfill: previously updated cover_url via ISBN; we now skip this
+      // Backfill: update books with missing pages/cover
+      const booksToUpdate: Array<{ bookId: string; isbn: string }> = [];
       for (const userBook of data) {
         const book = userBook.book;
         if (book && typeof book === 'object' && !Array.isArray(book)) {
           const bookIsbn = (book as any).isbn;
           const bookCoverUrl = (book as any).cover_url;
+          const bookTotalPages = (book as any).total_pages;
           const bookId = (book as any).id;
           
-          if (bookIsbn && !bookCoverUrl && bookId) {
-            // No-op: we don't auto-populate cover_url anymore
+          // Collect books that need backfill (missing pages OR cover, with ISBN)
+          if (bookIsbn && bookId && (!bookTotalPages || !bookCoverUrl)) {
+            booksToUpdate.push({ bookId, isbn: bookIsbn });
           }
         }
+      }
+      
+      // Run backfill in background (non-blocking)
+      if (booksToUpdate.length > 0) {
+        console.log(`[Backfill] Found ${booksToUpdate.length} books to update`);
+        // Run async without awaiting (fire and forget)
+        (async () => {
+          for (const { bookId, isbn } of booksToUpdate) {
+            try {
+              const cleanIsbn = String(isbn).replace(/[-\s]/g, '');
+              
+              // Fetch edition data
+              const editionData = await fetchEditionByIsbn(cleanIsbn);
+              
+              // Get pages
+              let pageCount: number | null = null;
+              if (editionData?.pages) {
+                pageCount = editionData.pages;
+              } else {
+                const pagesFromBooksApi = await fetchPagesFromBooksApi(cleanIsbn);
+                if (pagesFromBooksApi) {
+                  pageCount = pagesFromBooksApi;
+                }
+              }
+              
+              // Get cover
+              let coverUrl: string | null = null;
+              let coverId: number | null = null;
+              
+              if (editionData?.coverId) {
+                coverId = editionData.coverId;
+                const coverResult = await fetchCoverUrlWithFallback(coverId, cleanIsbn);
+                coverUrl = coverResult.url;
+              } else {
+                // Try ISBN-based cover
+                const coverResult = await fetchCoverUrlWithFallback(undefined, cleanIsbn);
+                coverUrl = coverResult.url;
+              }
+              
+              // Fallback to Google Books if still missing
+              if (!coverUrl || !pageCount) {
+                const googleBook = await searchBookByISBN(cleanIsbn);
+                if (googleBook) {
+                  if (!coverUrl && googleBook.thumbnail) {
+                    coverUrl = googleBook.thumbnail;
+                  }
+                  if (!pageCount && googleBook.pageCount) {
+                    pageCount = googleBook.pageCount;
+                  }
+                }
+              }
+              
+              // Update book in DB if we found new data
+              const updateData: any = {};
+              if (pageCount) {
+                updateData.total_pages = pageCount;
+              }
+              if (coverUrl) {
+                updateData.cover_url = coverUrl;
+              }
+              if (coverId) {
+                updateData.openlibrary_cover_id = coverId;
+              }
+              
+              if (Object.keys(updateData).length > 0) {
+                const { error: updateError } = await supabase
+                  .from('books')
+                  .update(updateData)
+                  .eq('id', bookId);
+                
+                if (updateError) {
+                  console.error(`[Backfill] Error updating book ${bookId}:`, updateError);
+                } else {
+                  console.log(`[Backfill] Updated book ${bookId} with:`, updateData);
+                }
+              }
+            } catch (err) {
+              console.error(`[Backfill] Error processing book ${bookId}:`, err);
+            }
+          }
+        })();
       }
       
       setUserBooks(data);
@@ -435,12 +542,14 @@ export function Library({}: LibraryProps) {
         // Convert OpenLibraryDoc to format compatible with canonicalBookKey
         const bookKeys = newBooks
           .map(book => {
+            // Handle ISBN as string or array (OpenLibrary often returns array)
+            const isbn = Array.isArray(book.isbn) ? book.isbn[0] : book.isbn;
             const bookForCanonical = {
               id: book.key || book.id,
               key: book.key,
-              isbn: book.isbn,
-              isbn13: book.isbn,
-              isbn10: book.isbn,
+              isbn: isbn,
+              isbn13: isbn,
+              isbn10: isbn,
               openLibraryKey: book.key,
             };
             return canonicalBookKey(bookForCanonical);
@@ -869,7 +978,12 @@ export function Library({}: LibraryProps) {
     }
   };
 
-  const handleAddBookToLibrary = async (book: GoogleBook | UiBook, status: BookStatus): Promise<{ success: boolean; alreadyExists: boolean }> => {
+  const handleAddBookToLibrary = async (
+    book: GoogleBook | UiBook, 
+    status: BookStatus, 
+    totalPages?: number | null,
+    currentPage?: number
+  ): Promise<{ success: boolean; alreadyExists: boolean }> => {
     const bookIdForState = (book as any).id || (book as any).openLibraryKey || 'unknown';
     setAddingBookId(bookIdForState);
 
@@ -956,15 +1070,50 @@ export function Library({}: LibraryProps) {
         return { success: true, alreadyExists: true };
       }
 
-      // Step 3: Upsert into user_books
+      // Step 3: Normalize reading state
+      const normalizedState = normalizeReadingState({
+        status,
+        total_pages: totalPages ?? null,
+        current_page: currentPage ?? null,
+      });
+
+      // Step 4: Update books.total_pages if provided
+      if (normalizedState.total_pages && normalizedState.total_pages > 0) {
+        const { data: bookData } = await supabase
+          .from('books')
+          .select('total_pages')
+          .eq('id', bookId)
+          .maybeSingle();
+        
+        if (!bookData?.total_pages) {
+          await supabase
+            .from('books')
+            .update({ total_pages: normalizedState.total_pages })
+            .eq('id', bookId);
+        }
+      }
+
+      // Step 5: Upsert into user_books
+      const upsertData: any = {
+        user_id: userId,
+        book_id: bookId,
+        status: normalizedState.status,
+        current_page: normalizedState.current_page,
+      };
+
+      // Set started_at if provided
+      if (normalizedState.started_at) {
+        upsertData.started_at = normalizedState.started_at;
+      }
+
+      // Set completed_at if provided
+      if (normalizedState.completed_at) {
+        upsertData.completed_at = normalizedState.completed_at;
+      }
+
       const { data: insertedRows, error: insertError } = await supabase
         .from('user_books')
-        .upsert({
-          user_id: userId,
-          book_id: bookId,
-          status: status,
-          current_page: 0,
-        }, {
+        .upsert(upsertData, {
           onConflict: 'user_id,book_id',
         })
         .select('id, user_id, book_id, status, current_page, created_at, updated_at');
@@ -1075,6 +1224,56 @@ export function Library({}: LibraryProps) {
         setBookToAdd(null);
         setToast({ message: 'Erreur lors de la récupération du livre', type: 'error' });
         return { success: false, alreadyExists: false };
+      }
+
+      // Anti-spam rule: Only create activity if pages_delta > 1
+      // This prevents creating activities for small adjustments (+1 page) during setup
+      // For new books, old current_page is 0, so pages_delta = new_current_page - 0 = new_current_page
+      // We only create activity if new_current_page > 1 (i.e., pages_delta > 1)
+      if (normalizedState.status === 'reading' && normalizedState.current_page > 1) {
+        try {
+          // Get book title for activity title
+          const bookTitle = finalRow?.book?.title || book.title || 'Livre';
+          
+          // Create a bootstrap activity to count initial pages in stats
+          // This is a minimal activity just to bootstrap the page count
+          // Only created if pages_delta > 1 to avoid spam
+          const { error: activityError } = await supabase
+            .from('activities')
+            .insert({
+              user_id: userId,
+              type: 'reading',
+              title: `Lecture de ${bookTitle}`,
+              book_id: bookId,
+              pages_read: normalizedState.current_page,
+              duration_minutes: 0, // No duration for bootstrap
+              visibility: 'public', // Public so it appears in followers' feeds
+            });
+
+          if (activityError) {
+            console.error('[handleAddBookToLibrary] Error creating bootstrap activity:', activityError);
+            // Don't fail the whole operation if bootstrap activity fails
+          } else {
+            // Update user_profiles.total_pages_read
+            const { data: profile } = await supabase
+              .from('user_profiles')
+              .select('total_pages_read')
+              .eq('id', userId)
+              .maybeSingle();
+
+            if (profile) {
+                 await supabase
+                   .from('user_profiles')
+                   .update({
+                     total_pages_read: (profile.total_pages_read || 0) + normalizedState.current_page,
+                   })
+                   .eq('id', userId);
+            }
+          }
+        } catch (bootstrapError) {
+          console.error('[handleAddBookToLibrary] Error in bootstrap activity creation:', bootstrapError);
+          // Don't fail the whole operation if bootstrap fails
+        }
       }
 
       // Si on est dans l'onglet Explorer, ne pas faire de reload complet
@@ -1239,19 +1438,115 @@ export function Library({}: LibraryProps) {
 
       // 2) Try OpenLibrary by ISBN (primary metadata + cover)
       const olBook = await fetchOpenLibraryByIsbn(cleanIsbn);
-      if (olBook && olBook.title && olBook.authors) {
-        const googleBookFromOl: GoogleBook = {
+      
+      // Log for debugging
+      console.log('[ISBN] olBook keys', Object.keys(olBook || {}), { 
+        title: olBook?.title, 
+        author: (olBook as any)?.author, 
+        authors: (olBook as any)?.authors 
+      });
+      
+      // Normalize authors: accept author (string) OR authors (string/array)
+      const olAuthors = (olBook as any)?.authors || (olBook as any)?.author || '';
+      const hasValidAuthor = String(olAuthors).trim().length > 0;
+      
+      if (olBook && olBook.title && hasValidAuthor) {
+        console.log(`[ISBN] OpenLibrary fetchByIsbn found: ${olBook.title}`);
+
+        // Fetch edition metadata for pages and better cover info
+        const editionData = await fetchEditionByIsbn(cleanIsbn);
+        
+        // Get pages: priority editionData > olBook.pages > fetchPagesFromBooksApi
+        let pageCount: number | undefined = undefined;
+        if (editionData?.pages) {
+          pageCount = editionData.pages;
+          console.log(`[ISBN] pages from edition: ${pageCount}`);
+        } else if ((olBook as any).pages) {
+          pageCount = (olBook as any).pages;
+          console.log(`[ISBN] pages from search API: ${pageCount}`);
+        } else {
+          // Fallback: try Books API
+          const pagesFromBooksApi = await fetchPagesFromBooksApi(cleanIsbn);
+          if (pagesFromBooksApi) {
+            pageCount = pagesFromBooksApi;
+          }
+        }
+        console.log(`[ISBN] final pageCount: ${pageCount ?? 'undefined'}`);
+
+        // Get cover: priority edition coverId > olBook cover_i > olBook coverUrl
+        let coverUrl: string | null = null;
+        let coverId: number | null = null;
+        let coverSource: 'OL_ID' | 'OL_ISBN' | 'GOOGLE' | 'NONE' = 'NONE';
+
+        if (editionData?.coverId) {
+          coverId = editionData.coverId;
+          const coverResult = await fetchCoverUrlWithFallback(coverId, cleanIsbn);
+          coverUrl = coverResult.url;
+          coverSource = coverResult.source;
+        } else if (olBook.cover_i) {
+          coverId = olBook.cover_i;
+          const coverResult = await fetchCoverUrlWithFallback(coverId, cleanIsbn);
+          coverUrl = coverResult.url;
+          coverSource = coverResult.source;
+        } else if (olBook.coverUrl) {
+          coverUrl = olBook.coverUrl;
+          coverSource = 'OL_ISBN'; // Assume it's from ISBN-based URL
+        }
+
+        console.log(`[ISBN] final thumbnail: ${coverUrl || 'null'}`);
+        console.log(`[ISBN] cover source: ${coverSource}`);
+
+        // If no cover from OpenLibrary, try Google Books as fallback
+        if (!coverUrl) {
+          console.log('[ISBN] No OpenLibrary cover, trying Google Books fallback');
+          const googleBook = await searchBookByISBN(cleanIsbn);
+          if (googleBook?.thumbnail) {
+            coverUrl = googleBook.thumbnail;
+            coverSource = 'GOOGLE';
+            console.log('[ISBN] cover source: GOOGLE (from Google Books)');
+            
+            // Also get pageCount from Google if missing
+            if (!pageCount && googleBook.pageCount) {
+              pageCount = googleBook.pageCount;
+              console.log(`[ISBN] pages from Google Books: ${pageCount}`);
+            }
+          }
+        }
+
+        // Build OpenLibrary work/edition keys
+        let openLibraryWorkKey: string | undefined = undefined;
+        let openLibraryEditionKey: string | undefined = undefined;
+        
+        if (editionData?.workKey) {
+          openLibraryWorkKey = editionData.workKey;
+        } else if (olBook.openLibraryWorkKey) {
+          openLibraryWorkKey = olBook.openLibraryWorkKey;
+        }
+        
+        if (editionData?.editionKey) {
+          openLibraryEditionKey = editionData.editionKey;
+        }
+
+        // Normalize authors for GoogleBook format (string, not array)
+        const normalizedAuthors = Array.isArray(olAuthors) 
+          ? olAuthors.join(', ') 
+          : String(olAuthors);
+
+        const googleBookFromOl: GoogleBook & { openLibraryWorkKey?: string; openLibraryEditionKey?: string; openlibrary_cover_id?: number } = {
           id: olBook.isbn13 || olBook.isbn10 || cleanIsbn,
           title: olBook.title,
-          authors: olBook.authors,
+          authors: normalizedAuthors,
           category: undefined,
-          pageCount: undefined, // OpenLibraryBook doesn't expose pages directly
+          pageCount: pageCount ?? undefined,
           publisher: undefined,
           isbn: olBook.isbn13 || olBook.isbn10 || cleanIsbn,
           description: olBook.description,
-          thumbnail: olBook.coverUrl,
+          thumbnail: coverUrl || undefined,
           isbn13: olBook.isbn13,
           isbn10: olBook.isbn10,
+          openLibraryWorkKey,
+          openLibraryEditionKey,
+          openlibrary_cover_id: coverId || undefined,
         };
 
         setSearching(false);
@@ -1292,7 +1587,8 @@ export function Library({}: LibraryProps) {
   // Ancienne logique d'ajout manuel via AddBookManuallyModal remplacée
 
   return (
-    <div className="max-w-2xl mx-auto font-sans text-neutral-900" style={{ isolation: 'isolate' }}>
+    <div className="h-screen max-w-2xl mx-auto font-sans text-neutral-900 overflow-hidden" style={{ isolation: 'isolate' }}>
+      {/* Fixed Header - now truly fixed via AppHeader component */}
       <AppHeader
         title={t('library.title')}
         rightActions={
@@ -1306,63 +1602,88 @@ export function Library({}: LibraryProps) {
         }
       />
       
-      <div className="px-4 py-3 bg-white border-b border-gray-100">
-        <div className="mb-3 relative">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-sub-light" />
-          <input
-            type="text"
-            placeholder="Rechercher un livre (titre, auteur...)"
-            value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
-          />
-        </div>
+      {/* Fixed Search + Tabs section (below header) */}
+      <div 
+        className="fixed left-0 right-0 bg-white border-b border-gray-100 z-40"
+        style={{
+          top: 'calc(56px + env(safe-area-inset-top))', // Below AppHeader
+        }}
+      >
+        <div className="max-w-2xl mx-auto px-4 py-3">
+          <div className="mb-3 relative">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-sub-light" />
+            <input
+              type="text"
+              placeholder="Rechercher un livre (titre, auteur...)"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+            />
+          </div>
 
-        <div className="flex gap-2 overflow-x-auto no-scrollbar">
-          <button
-            onClick={() => setFilter('reading')}
-            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-              filter === 'reading'
-                ? 'bg-primary text-black shadow-sm'
-                : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-            }`}
-          >
-            En cours
-          </button>
-          <button
-            onClick={() => setFilter('want_to_read')}
-            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-              filter === 'want_to_read'
-                ? 'bg-primary text-black shadow-sm'
-                : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-            }`}
-          >
-            À lire
-          </button>
-          <button
-            onClick={() => setFilter('completed')}
-            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-              filter === 'completed'
-                ? 'bg-primary text-black shadow-sm'
-                : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-            }`}
-          >
-            Terminé
-          </button>
-          <button
-            onClick={() => setFilter('explore')}
-            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-              filter === 'explore'
-                ? 'bg-primary text-black shadow-sm'
-                : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-            }`}
-          >
-            Explorer
-          </button>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            <button
+              onClick={() => setFilter('reading')}
+              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
+                filter === 'reading'
+                  ? 'bg-primary text-black shadow-sm'
+                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
+              }`}
+            >
+              En cours
+            </button>
+            <button
+              onClick={() => setFilter('want_to_read')}
+              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
+                filter === 'want_to_read'
+                  ? 'bg-primary text-black shadow-sm'
+                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
+              }`}
+            >
+              À lire
+            </button>
+            <button
+              onClick={() => setFilter('completed')}
+              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
+                filter === 'completed'
+                  ? 'bg-primary text-black shadow-sm'
+                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
+              }`}
+            >
+              Terminé
+            </button>
+            <button
+              onClick={() => setFilter('explore')}
+              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
+                filter === 'explore'
+                  ? 'bg-primary text-black shadow-sm'
+                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
+              }`}
+            >
+              Explorer
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="p-4 no-scrollbar">
+      {/* ✅ SCROLL ICI - Single scrollable container with proper padding */}
+      <div
+        className="h-full overflow-y-auto"
+        style={{
+          paddingTop: 'calc(136px + env(safe-area-inset-top))', // Header (56px) + Search/Tabs section (~80px: py-3 + input + buttons)
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          overscrollBehaviorX: 'none',
+          touchAction: 'pan-y', // Allow vertical panning only
+        }}
+      >
+        <div 
+          className="p-4 no-scrollbar"
+          style={{
+            paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+          }}
+        >
         {searching && !searchQuery && (
           <div className="mb-6">
             <div className="text-center py-8">
@@ -1566,13 +1887,14 @@ export function Library({}: LibraryProps) {
                   </div>
                 );
               }
-              const progress = getProgress(userBook.current_page, book.total_pages ?? null);
-              const displayTitle = book.title;
-              const displayAuthor = book.author;
-              const displayPages = book.total_pages ?? null;
-
-              // Use book.cover_url
-              const displayCover: string | null = book.cover_url || null;
+              // Use custom fields if present, otherwise fallback to book fields
+              const displayTitle = (userBook as any).custom_title ?? book.title;
+              const displayAuthor = (userBook as any).custom_author ?? book.author;
+              const displayPages = (userBook as any).custom_total_pages ?? book.total_pages ?? null;
+              const displayCover: string | null = (userBook as any).custom_cover_url ?? book.cover_url ?? null;
+              
+              // Use displayPages for progress calculation (custom_total_pages if present)
+              const progress = getProgress(userBook.current_page, displayPages ?? null);
 
                 return (
                   <div
@@ -1581,9 +1903,30 @@ export function Library({}: LibraryProps) {
                   >
                   <button
                     onClick={() => setBookToManage({ ...userBook, book })}
-                    className="absolute top-3 right-3 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    className="absolute top-3 right-3 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors z-10"
                   >
                     <MoreVertical className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRecapBook({
+                        book: {
+                          id: book.id,
+                          title: book.title,
+                          author: book.author,
+                          cover_url: book.cover_url,
+                          total_pages: book.total_pages,
+                        },
+                        uptoPage: userBook.current_page || 0,
+                      });
+                      setRecapOpen(true);
+                    }}
+                    className="absolute bottom-3 right-3 px-3 py-1.5 bg-stone-900 text-white text-xs font-semibold rounded-lg hover:brightness-95 transition-colors z-10 flex items-center gap-1.5"
+                    title="Résumé IA"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    IA
                   </button>
 
                   <div
@@ -1591,13 +1934,23 @@ export function Library({}: LibraryProps) {
                     className="cursor-pointer hover:scale-105 transition-transform"
                   >
                     <BookCover
-                      coverUrl={displayCover}
+                      custom_cover_url={(userBook as any).custom_cover_url || null}
+                      coverUrl={book.cover_url || null}
                       title={displayTitle}
                       author={displayAuthor || 'Auteur inconnu'}
                       isbn={(book as any).isbn || null}
                       isbn13={(book as any).isbn13 || null}
                       isbn10={(book as any).isbn10 || null}
+                      cover_i={(book as any).openlibrary_cover_id || null}
+                      openlibrary_cover_id={(book as any).openlibrary_cover_id || null}
+                      googleCoverUrl={(book as any).google_books_id ? `https://books.google.com/books/content?id=${(book as any).google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                       className="w-20 shrink-0 aspect-[2/3] rounded-lg overflow-hidden shadow-md"
+                      bookId={book.id}
+                      showAddCoverButton={!((userBook as any).custom_cover_url)}
+                      onAddCover={() => {
+                        setAddCoverBookId(book.id);
+                        setAddCoverBookTitle(displayTitle);
+                      }}
                       onCoverLoaded={async (url) => {
                         // Sauvegarder la cover dans Supabase si elle n'existe pas déjà
                         if (book.id && !book.cover_url && url && !url.includes('placeholder')) {
@@ -1659,17 +2012,49 @@ export function Library({}: LibraryProps) {
             })()}
           </div>
         ) : null}
+        </div>
       </div>
 
-      {detailsBookId && (
-        <BookDetailsWithManagement
-          bookId={detailsBookId}
-          onClose={() => {
-            setDetailsBookId(null);
-            loadUserBooks();
-          }}
-        />
-      )}
+      {detailsBookId && (() => {
+        // Find the userBook data for this bookId to get userBookId and currentPage
+        const userBook = userBooks.find(ub => ub.book?.id === detailsBookId);
+        const userBookId = userBook?.id;
+        const currentPage = userBook?.current_page;
+        
+        return (
+          <BookDetailsWithManagement
+            bookId={detailsBookId}
+            userBookId={userBookId}
+            currentPage={currentPage}
+            onClose={() => {
+              setDetailsBookId(null);
+              loadUserBooks();
+            }}
+            onEditRequested={() => {
+              if (userBook) {
+                setBookToEdit({ ...userBook, book: userBook.book });
+                setDetailsBookId(null);
+              }
+            }}
+            onOpenRecap={() => {
+              if (userBook && userBook.book) {
+                setRecapBook({
+                  book: {
+                    id: userBook.book.id,
+                    title: userBook.book.title,
+                    author: userBook.book.author,
+                    cover_url: userBook.book.cover_url,
+                    total_pages: userBook.book.total_pages,
+                  },
+                  uptoPage: userBook.current_page || 0,
+                });
+                setRecapOpen(true);
+                setDetailsBookId(null);
+              }
+            }}
+          />
+        );
+      })()}
 
       {showScanner && (
         <BarcodeScanner
@@ -1691,6 +2076,7 @@ export function Library({}: LibraryProps) {
           book={selectedDbBook}
           onClose={() => setSelectedDbBook(null)}
           showAddButton={true}
+          showAiButton={false}
           onAddToLibrary={(dbBook) => {
             // Ouvre le choix de statut (En cours / À lire / Terminé)
             setBookToAdd(dbBook as any);
@@ -1765,16 +2151,52 @@ export function Library({}: LibraryProps) {
           }}
           onSelect={async (status) => {
             try {
-              const result = await handleAddBookToLibrary(bookToAdd, status);
-              // Close modal only on success (whether already exists or newly added)
-              if (result.success) {
-                setBookToAdd(null);
-                setAddingBookId(null);
-              }
-              // If error, modal stays open for retry
+              // Get total_pages from book if available
+              const bookTotalPages = bookToAdd.pageCount || (bookToAdd as any).total_pages || null;
+              
+              // Always show reading setup modal to collect total_pages if missing
+              setPendingBookAdd({ 
+                book: bookToAdd, 
+                status,
+                totalPages: bookTotalPages,
+              });
+              setBookToAdd(null); // Close status modal
+              setShowReadingSetup(true);
             } catch (error) {
               fatalError('Error in onSelect:', error);
-              // Don't close modal on error - let user retry
+            }
+          }}
+        />
+      )}
+
+      {showReadingSetup && pendingBookAdd && (
+        <ReadingSetupModal
+          open={showReadingSetup}
+          bookTitle={pendingBookAdd.book.title}
+          initialStatus={pendingBookAdd.status}
+          initialTotalPages={pendingBookAdd.totalPages}
+          initialCurrentPage={null}
+          onCancel={() => {
+            setShowReadingSetup(false);
+            setPendingBookAdd(null);
+          }}
+          onConfirm={async (data) => {
+            try {
+              const result = await handleAddBookToLibrary(
+                pendingBookAdd.book,
+                data.status,
+                data.total_pages,
+                data.current_page
+              );
+              if (result.success) {
+                setShowReadingSetup(false);
+                setPendingBookAdd(null);
+                setAddingBookId(null);
+              }
+            } catch (error) {
+              fatalError('Error adding book:', error);
+              setShowReadingSetup(false);
+              setPendingBookAdd(null);
             }
           }}
         />
@@ -1824,11 +2246,11 @@ export function Library({}: LibraryProps) {
       {bookToEdit && (
         <EditBookModal
           userBookId={bookToEdit.id}
-          initialTitle={bookToEdit.book?.title || ''}
-          initialAuthor={bookToEdit.book?.author || ''}
-          initialTotalPages={bookToEdit.book?.total_pages || null}
-          initialDescription={bookToEdit.book?.description || ''}
-          initialCoverUrl={bookToEdit.book?.cover_url || ''}
+          initialTitle={(bookToEdit as any).custom_title ?? (bookToEdit.book?.title || '')}
+          initialAuthor={(bookToEdit as any).custom_author ?? (bookToEdit.book?.author || '')}
+          initialTotalPages={(bookToEdit as any).custom_total_pages ?? (bookToEdit.book?.total_pages || null)}
+          initialDescription={(bookToEdit as any).custom_description ?? (bookToEdit.book?.description || '')}
+          initialCoverUrl={(bookToEdit as any).custom_cover_url ?? (bookToEdit.book?.cover_url || '')}
           onClose={() => setBookToEdit(null)}
           onSaved={() => {
             loadUserBooks();
@@ -1836,16 +2258,30 @@ export function Library({}: LibraryProps) {
         />
       )}
 
-      {filter !== 'explore' && (
+      {/* Hide FAB when any modal is open */}
+      {filter !== 'explore' && !(detailsBookId || showScanner || loadingSelected || selectedDbBook || selectedBookDetails || selectedBookForComments || bookToAdd || bookToManage || showManualAdd || bookToEdit || recapOpen || showReadingSetup) && (
         <button
           onClick={() => {
             setShowManualAdd(true);
           }}
-          className="fixed right-6 bottom-[110px] z-50 w-14 h-14 rounded-full bg-primary text-black shadow-lg flex items-center justify-center hover:brightness-95 transition-all"
+          className="fixed right-6 z-50 w-14 h-14 rounded-full bg-primary text-black shadow-lg flex items-center justify-center hover:brightness-95 transition-all"
+          style={{ bottom: 'calc(64px + 16px + env(safe-area-inset-bottom))' }}
           title="Ajouter un livre manuellement"
         >
           <Plus className="w-6 h-6" />
         </button>
+      )}
+
+      {recapOpen && recapBook && (
+        <BookRecapModal
+          open={recapOpen}
+          onClose={() => {
+            setRecapOpen(false);
+            setRecapBook(null);
+          }}
+          book={recapBook.book}
+          uptoPage={recapBook.uptoPage}
+        />
       )}
 
       {toast && (
@@ -1853,6 +2289,27 @@ export function Library({}: LibraryProps) {
           message={toast.message}
           type={toast.type}
           onClose={() => setToast(null)}
+        />
+      )}
+
+      {addCoverBookId && (
+        <AddCoverModal
+          open={!!addCoverBookId}
+          bookId={addCoverBookId}
+          bookTitle={addCoverBookTitle}
+          onClose={() => {
+            setAddCoverBookId(null);
+            setAddCoverBookTitle('');
+          }}
+          onUploaded={(newUrl) => {
+            // Reload user books to refresh custom cover
+            loadUserBooks();
+            setAddCoverBookId(null);
+            setAddCoverBookTitle('');
+          }}
+          onShowToast={(message, type) => {
+            setToast({ message, type: type || 'info' });
+          }}
         />
       )}
     </div>

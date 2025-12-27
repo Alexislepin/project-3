@@ -39,6 +39,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
         book_id,
         created_at,
         updated_at,
+        custom_cover_url,
         book:books (
           id,
           title,
@@ -46,10 +47,10 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
           cover_url,
           total_pages,
           description,
-          description_clean,
           isbn,
           google_books_id,
-          edition
+          edition,
+          openlibrary_cover_id
         )
       `)
       .eq('user_id', userId)
@@ -233,10 +234,27 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
                 <div
                   key={userBook.id}
                   className="flex gap-4 p-4 bg-card-light rounded-xl shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-all"
-                  onClick={() => setSelectedBook(book)}
+                  onClick={() => {
+                    const b = userBook.book;
+                    if (!b) return;
+
+                    setSelectedBook({
+                      id: b.id ?? userBook.book_id ?? userBook.id,
+                      title: b.title ?? 'Titre inconnu',
+                      author: b.author ?? 'Auteur inconnu',
+                      cover_url: userBook.custom_cover_url ?? b.cover_url ?? null,
+                      thumbnail: userBook.custom_cover_url ?? b.cover_url ?? null,
+                      total_pages: b.total_pages ?? null,
+                      description: b.description ?? null,
+                      isbn: b.isbn ?? null,
+                      google_books_id: b.google_books_id ?? null,
+                      edition: b.edition ?? null,
+                      openlibrary_cover_id: b.openlibrary_cover_id ?? null,
+                    });
+                  }}
                 >
                   <BookCover
-                    coverUrl={book.cover_url}
+                    coverUrl={userBook.custom_cover_url ?? book.cover_url}
                     title={book.title}
                     author={book.author || 'Auteur inconnu'}
                     className="w-20 shrink-0 aspect-[2/3] rounded-lg overflow-hidden shadow-md"

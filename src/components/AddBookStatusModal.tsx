@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Book } from 'lucide-react';
 import { fatalError } from '../utils/logger';
+import { useScrollLock } from '../hooks/useScrollLock';
 
 interface AddBookStatusModalProps {
   onClose: () => void;
@@ -10,6 +11,8 @@ interface AddBookStatusModalProps {
 
 export function AddBookStatusModal({ onClose, onSelect, bookTitle }: AddBookStatusModalProps) {
   const [isAdding, setIsAdding] = useState(false);
+
+  useScrollLock(true);
 
   const handleSelect = async (status: 'reading' | 'completed' | 'want_to_read') => {
     // Prevent duplicate calls
@@ -31,8 +34,21 @@ export function AddBookStatusModal({ onClose, onSelect, bookTitle }: AddBookStat
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[110] p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full shadow-xl">
+    <div 
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-[110] p-4"
+      data-modal-overlay
+      onTouchMove={(e) => {
+        // Prevent scroll on overlay
+        const target = e.target as HTMLElement;
+        if (!target.closest('[data-modal-content]')) {
+          e.preventDefault();
+        }
+      }}
+    >
+      <div 
+        data-modal-content
+        className="bg-white rounded-2xl max-w-md w-full shadow-xl"
+      >
         <div className="p-6">
           <div className="flex items-start gap-4 mb-6">
             <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
