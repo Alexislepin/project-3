@@ -7,7 +7,7 @@ import { AppHeader } from '../components/AppHeader';
 import { UserProfileView } from '../components/UserProfileView';
 import { BookDetailsModal } from '../components/BookDetailsModal';
 import { groupSocialEvents, filterDiscoverEvents, type GroupedEvent } from '../lib/feedUtils';
-import { getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 type FeedFilter = 'all' | 'following' | 'me';
 
@@ -403,7 +403,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         className="h-full overflow-y-auto relative"
         style={{
           paddingTop: 'calc(106px + env(safe-area-inset-top))', // Header (56px) + Tabs section (~50px)
-          paddingBottom: getScrollBottomPadding(),
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',

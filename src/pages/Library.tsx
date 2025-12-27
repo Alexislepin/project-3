@@ -26,7 +26,7 @@ import { ExploreGrid } from '../components/ExploreGrid';
 import { BookRecapModal } from '../components/BookRecapModal';
 import { ReadingSetupModal } from '../components/ReadingSetupModal';
 import { normalizeReadingState } from '../lib/readingState';
-import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 type BookStatus = 'reading' | 'completed' | 'want_to_read';
 type FilterType = BookStatus | 'explore';
@@ -1670,15 +1670,20 @@ export function Library({}: LibraryProps) {
       <div
         className="h-full overflow-y-auto"
         style={{
-          paddingTop: 'calc(176px + env(safe-area-inset-top))', // Header (56px) + Search/Tabs section (~120px)
-          paddingBottom: getScrollBottomPadding(),
+          paddingTop: 'calc(136px + env(safe-area-inset-top))', // Header (56px) + Search/Tabs section (~80px: py-3 + input + buttons)
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
           touchAction: 'pan-y', // Allow vertical panning only
         }}
       >
-        <div className="p-4 no-scrollbar">
+        <div 
+          className="p-4 no-scrollbar"
+          style={{
+            paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+          }}
+        >
         {searching && !searchQuery && (
           <div className="mb-6">
             <div className="text-center py-8">

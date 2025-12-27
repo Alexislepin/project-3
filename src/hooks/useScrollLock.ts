@@ -26,15 +26,15 @@ export function useScrollLock(locked: boolean) {
       prevPosition = body.style.position;
       prevTop = body.style.top;
       prevWidth = body.style.width;
-
+      
       // iOS + web: lock background scroll
       body.style.overflow = 'hidden';
       body.style.position = 'fixed';
       body.style.top = `-${savedScrollY}px`;
       body.style.width = '100%';
     }
-
-    return () => {
+      
+      return () => {
       lockCount = Math.max(0, lockCount - 1);
       if (lockCount === 0) {
         const body = document.body;

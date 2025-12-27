@@ -129,18 +129,30 @@ function App() {
 
   // Hook 10: Routing basé sur l'URL
   useEffect(() => {
-    const path = window.location.pathname;
-    if (path === '/login' || path === '/signup') {
-      // Les pages auth sont gérées séparément
-      return;
-    }
-    // Map paths to AppView
-    const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
-    if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
-      setCurrentView(viewFromPath);
-    } else if (path === '/') {
-      setCurrentView('home');
-    }
+    const updateViewFromPath = () => {
+      const path = window.location.pathname;
+      if (path === '/login' || path === '/signup') {
+        // Les pages auth sont gérées séparément
+        return;
+      }
+      // Map paths to AppView
+      const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
+      if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
+        setCurrentView(viewFromPath);
+      } else if (path === '/') {
+        setCurrentView('home');
+      }
+    };
+
+    // Initial load
+    updateViewFromPath();
+
+    // Listen for popstate events (back/forward navigation and programmatic navigation)
+    window.addEventListener('popstate', updateViewFromPath);
+    
+    return () => {
+      window.removeEventListener('popstate', updateViewFromPath);
+    };
   }, []);
 
   // Hook 11: Initialize iOS swipe back gesture

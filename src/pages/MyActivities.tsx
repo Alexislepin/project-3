@@ -8,7 +8,7 @@ import { CommentModal } from '../components/CommentModal';
 import { LikersModal } from '../components/LikersModal';
 import { AppHeader } from '../components/AppHeader';
 import { X } from 'lucide-react';
-import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 interface MyActivitiesProps {
   onClose: () => void;
@@ -254,15 +254,19 @@ export function MyActivities({ onClose, userId: targetUserId, title }: MyActivit
       <div
         className="h-full overflow-y-auto"
         style={{
-          paddingTop: getScrollTopOffset(),
-          paddingBottom: getScrollBottomPadding(),
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
           touchAction: 'pan-y', // Allow vertical panning only
         }}
       >
-        <div className="p-4">
+        <div 
+          className="p-4"
+          style={{
+            paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+          }}
+        >
           {loading ? (
             <div className="text-center py-12 text-stone-500">Chargement...</div>
           ) : activities.length > 0 ? (

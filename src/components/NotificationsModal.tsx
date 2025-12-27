@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDistanceToNow } from '../utils/dateUtils';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 interface NotificationsModalProps {
   onClose: () => void;
@@ -326,7 +327,11 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
     >
       <div
         data-modal-content
-        className="bg-white rounded-3xl w-full max-w-2xl max-h-[calc(100vh-7rem)] flex flex-col overflow-hidden shadow-2xl"
+        className="bg-white rounded-3xl w-full max-w-2xl flex flex-col overflow-hidden shadow-2xl"
+        style={{
+          maxHeight: `calc(100vh - var(--sat) - var(--sab) - ${TABBAR_HEIGHT}px - 2rem)`,
+          marginBottom: '1rem',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
@@ -354,7 +359,7 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
         <div 
           className="flex-1 overflow-y-auto min-h-0 px-4 pt-3"
           style={{ 
-            paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))',
+            paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))',
             WebkitOverflowScrolling: 'touch',
             overscrollBehaviorY: 'contain',
             overscrollBehavior: 'contain',
@@ -453,7 +458,7 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
                 );
               })}
               {/* Spacer pour éviter que le dernier item soit caché par la tab bar */}
-              <div className="h-6" />
+              <div className="h-4" />
             </div>
           )}
         </div>

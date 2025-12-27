@@ -34,10 +34,17 @@ export function LikersModal({
   return (
     <div 
       className="fixed inset-0 z-[350] bg-black/30 flex items-end justify-center"
-      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}
       onClick={onClose}
     >
-      <div className="w-full max-w-2xl bg-white rounded-t-2xl shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div 
+        className="w-full max-w-2xl bg-white rounded-t-2xl shadow-xl flex flex-col"
+        style={{
+          maxHeight: 'calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom))',
+          marginBottom: 0,
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
           <div className="font-semibold">Likes</div>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5">
@@ -45,7 +52,12 @@ export function LikersModal({
           </button>
         </div>
 
-        <div className="max-h-[55vh] overflow-y-auto">
+        <div 
+          className="flex-1 overflow-y-auto"
+          style={{
+            paddingBottom: 'calc(16px + env(safe-area-inset-bottom))',
+          }}
+        >
           {loading ? (
             <div className="py-10 text-center text-stone-500">Chargement…</div>
           ) : likers.length === 0 ? (

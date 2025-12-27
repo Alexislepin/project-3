@@ -8,6 +8,7 @@ import { computeReadingStats, formatStatValue } from '../lib/readingStats';
 import { ActivityCard } from './ActivityCard';
 import { supabase } from '../lib/supabase';
 import { formatPagesCount } from '../utils/formatPages';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 interface ProfileLayoutProps {
   profile: any;
@@ -174,7 +175,12 @@ export function ProfileLayout({
 
   return (
     <>
-      <div className="px-4 pt-4 pb-6">
+      <div 
+        className="px-4 pt-4 pb-6"
+        style={{
+          paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+        }}
+      >
         <div className="flex flex-col items-center text-center mb-6" style={{ paddingTop: '8px' }}>
           <div className="relative mb-4">
             <div className="w-32 h-32 bg-gray-200 rounded-full flex items-center justify-center text-4xl font-bold text-text-main-light border-4 border-white shadow-lg overflow-hidden">

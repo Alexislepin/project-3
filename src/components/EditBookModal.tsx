@@ -149,7 +149,7 @@ export function EditBookModal({
       if (coverFile) {
         try {
           const path = generateBookCoverPath(user.id, bookId);
-          const uploadedUrl = await uploadImageToSupabase(supabase, coverFile, {
+          await uploadImageToSupabase(supabase, coverFile, {
             bucket: 'book-covers',
             path,
             compress: true,
@@ -158,8 +158,17 @@ export function EditBookModal({
             quality: 0.85,
           });
 
+          // Generate public URL from the path
+          const { data: { publicUrl } } = supabase.storage
+            .from('book-covers')
+            .getPublicUrl(path);
+
+          if (!publicUrl) {
+            throw new Error('Failed to get public URL');
+          }
+
           customCoverPath = path;
-          coverUrlValue = uploadedUrl;
+          coverUrlValue = publicUrl;
         } catch (uploadError) {
           console.error('[EditBookModal] Error uploading cover:', uploadError);
           setError('Erreur lors de l\'upload de la couverture. Les autres modifications seront sauvegardées.');
@@ -289,7 +298,7 @@ export function EditBookModal({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Ex: Mon édition préférée"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             />
           </div>
 
@@ -302,7 +311,7 @@ export function EditBookModal({
               value={author}
               onChange={(e) => setAuthor(e.target.value)}
               placeholder="Nom de l'auteur"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             />
           </div>
 
@@ -317,7 +326,7 @@ export function EditBookModal({
                 value={totalPages}
                 onChange={(e) => setTotalPages(e.target.value)}
                 placeholder="Ex: 320"
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                className="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
               />
             </div>
           </div>
@@ -331,7 +340,7 @@ export function EditBookModal({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Votre résumé, vos notes..."
               rows={4}
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
+              className="w-full px-4 py-3 bg-white border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent resize-none"
             />
           </div>
 
@@ -383,7 +392,7 @@ export function EditBookModal({
                 <button
                   type="button"
                   onClick={handleSelectCover}
-                  className="mt-2 w-full py-2 px-4 bg-primary/10 hover:bg-primary/20 text-primary rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                  className="mt-2 w-full py-2 px-4 bg-primary/10 hover:bg-primary/20 text-black rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
                 >
                   <Camera className="w-4 h-4" />
                   Changer la couverture
@@ -409,7 +418,7 @@ export function EditBookModal({
                   value={coverUrl}
                   onChange={(e) => setCoverUrl(e.target.value)}
                   placeholder="Ou coller une URL d'image (optionnel)"
-                  className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className="w-full px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                 />
               </div>
             )}

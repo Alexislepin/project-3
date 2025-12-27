@@ -22,7 +22,7 @@ import { LevelProgressBar } from '../components/LevelProgressBar';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { MyActivities } from './MyActivities';
 import { countRows } from '../lib/supabaseCounts';
-import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 interface ProfileProps {
   onNavigateToLibrary: () => void;
@@ -146,7 +146,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         countRows('activities', q => q.eq('user_id', profileId)),
         countRows('user_books', q => q.eq('user_id', profileId)),
         countRows('book_likes', q => q.eq('user_id', profileId)),
-      ]);
+    ]);
 
       if (reqId !== statsReqRef.current) return; // ✅ ignore stale
       console.log('[loadStats counts]', { profileId, followers, following, activities, books, likes });
@@ -345,10 +345,10 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
       setStreakDays(streak);
 
       // Update profile's current_streak (always self profile)
-      await supabase
-        .from('user_profiles')
-        .update({ current_streak: streak })
-        .eq('id', user.id);
+        await supabase
+          .from('user_profiles')
+          .update({ current_streak: streak })
+          .eq('id', user.id);
     } catch (error) {
       console.error('[loadStreak] Exception:', error);
       // ✅ ne pas reset à 0 (sinon "flash 0")
@@ -577,7 +577,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   }
 
   if (showMyActivities) {
-    return (
+  return (
       <MyActivities
         onClose={() => {
           setShowMyActivities(false);
@@ -590,46 +590,45 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   return (
     <div className="h-screen max-w-2xl mx-auto overflow-hidden">
       {/* Fixed Header - now truly fixed via AppHeader component */}
-      <AppHeader
-        title={t('profile.title')}
-        rightActions={
-          <>
-            <button
-              onClick={() => setShowSearchUsers(true)}
-              className="p-2 hover:bg-black/5 rounded-full transition-colors"
-              title={t('profile.followers')}
-            >
-              <UserPlus className="w-5 h-5 text-text-sub-light" />
-            </button>
-            <button
-              onClick={() => setShowNotifications(true)}
-              className="p-2 hover:bg-black/5 rounded-full transition-colors relative"
-              title={t('common.notifications')}
-            >
-              <Bell className="w-5 h-5 text-text-sub-light" />
-              {unreadNotificationsCount > 0 && (
-                <span className="absolute -top-1 -right-1 bg-primary text-black text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
-                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={handleSignOut}
-              className="p-2 hover:bg-black/5 rounded-full transition-colors"
-              title={t('common.signOut')}
-            >
-              <LogOut className="w-5 h-5 text-text-sub-light" />
-            </button>
-          </>
-        }
-      />
+        <AppHeader
+          title={t('profile.title')}
+          rightActions={
+            <>
+              <button
+                onClick={() => setShowSearchUsers(true)}
+                className="p-2 hover:bg-black/5 rounded-full transition-colors"
+                title={t('profile.followers')}
+              >
+                <UserPlus className="w-5 h-5 text-text-sub-light" />
+              </button>
+              <button
+                onClick={() => setShowNotifications(true)}
+                className="p-2 hover:bg-black/5 rounded-full transition-colors relative"
+                title={t('common.notifications')}
+              >
+                <Bell className="w-5 h-5 text-text-sub-light" />
+                {unreadNotificationsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-primary text-black text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                    {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="p-2 hover:bg-black/5 rounded-full transition-colors"
+                title={t('common.signOut')}
+              >
+                <LogOut className="w-5 h-5 text-text-sub-light" />
+              </button>
+            </>
+          }
+        />
 
       {/* ✅ SCROLL ICI - Single scrollable container with proper padding */}
       <div
         className="h-full overflow-y-auto"
         style={{
-          paddingTop: getScrollTopOffset(),
-          paddingBottom: getScrollBottomPadding(),
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',

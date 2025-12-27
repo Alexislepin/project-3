@@ -113,6 +113,20 @@ export function AddCoverModal({
     setUploading(true);
 
     try {
+      // Check if bucket exists
+      const { data: bucketList, error: bucketError } = await supabase.storage
+        .from('book-covers')
+        .list('', { limit: 1 });
+
+      if (bucketError) {
+        console.error('[AddCoverModal] Bucket check error:', bucketError);
+        if (bucketError.message?.includes('not found') || bucketError.message?.includes('Bucket')) {
+          onShowToast?.('Le bucket de stockage n\'existe pas. Veuillez le créer dans Supabase.', 'error');
+          return;
+        }
+        throw bucketError;
+      }
+
       // Compress image
       const compressedBlob = await compressImage(selectedFile, 1200, 0.75);
       
@@ -132,6 +146,14 @@ export function AddCoverModal({
 
       if (uploadError) {
         console.error('[AddCoverModal] Upload error:', uploadError);
+        // Provide more specific error message
+        if (uploadError.message?.includes('not found') || uploadError.message?.includes('Bucket')) {
+          onShowToast?.('Le bucket de stockage n\'existe pas. Veuillez le créer dans Supabase.', 'error');
+        } else if (uploadError.message?.includes('permission') || uploadError.message?.includes('policy')) {
+          onShowToast?.('Permission refusée. Vérifiez les politiques RLS du bucket.', 'error');
+        } else {
+          onShowToast?.(`Erreur d'upload: ${uploadError.message || 'Erreur inconnue'}`, 'error');
+        }
         throw uploadError;
       }
 
@@ -145,25 +167,73 @@ export function AddCoverModal({
       }
 
       // Update user_books with custom_cover_url
-      const { error: updateError } = await supabase
+      // First, try to update only custom_cover_url (simplest approach)
+      const { error: updateError, data: updateData } = await supabase
         .from('user_books')
-        .update({
-          custom_cover_url: publicUrl,
-          custom_cover_source: source,
-          custom_cover_updated_at: new Date().toISOString(),
-        })
+        .update({ custom_cover_url: publicUrl })
         .eq('user_id', user.id)
-        .eq('book_id', bookId);
+        .eq('book_id', bookId)
+        .select('id');
+      
+      // If update found no rows, the book might not be in user_books yet
+      if (!updateError && (!updateData || updateData.length === 0)) {
+        console.warn('[AddCoverModal] No user_books row found for book_id:', bookId);
+        onShowToast?.('Le livre n\'est pas dans votre bibliothèque. Ajoutez-le d\'abord.', 'error');
+        // Try to delete uploaded file
+        try {
+          await supabase.storage.from('book-covers').remove([storagePath]);
+        } catch (deleteError) {
+          console.error('[AddCoverModal] Failed to delete uploaded file:', deleteError);
+        }
+        return;
+      }
 
       if (updateError) {
         console.error('[AddCoverModal] Update error:', updateError);
+        console.error('[AddCoverModal] Update error details:', {
+          message: updateError.message,
+          details: updateError.details,
+          hint: updateError.hint,
+          code: updateError.code,
+        });
         
         // Try to delete uploaded file if DB update fails
-        await supabase.storage
-          .from('book-covers')
-          .remove([storagePath]);
+        try {
+          await supabase.storage
+            .from('book-covers')
+            .remove([storagePath]);
+        } catch (deleteError) {
+          console.error('[AddCoverModal] Failed to delete uploaded file:', deleteError);
+        }
         
+        // Provide specific error message
+        if (updateError.message?.includes('permission') || updateError.message?.includes('policy') || updateError.code === '42501') {
+          onShowToast?.('Permission refusée pour mettre à jour le livre. Vérifiez les politiques RLS.', 'error');
+        } else if (updateError.message?.includes('column') || updateError.code === '42703') {
+          onShowToast?.('Erreur de schéma de base de données. Contactez le support.', 'error');
+        } else if (updateError.code === 'PGRST116') {
+          onShowToast?.('Le livre n\'est pas dans votre bibliothèque. Ajoutez-le d\'abord.', 'error');
+        } else {
+          onShowToast?.(`Erreur lors de la mise à jour: ${updateError.message || 'Erreur inconnue'}`, 'error');
+        }
         throw updateError;
+      }
+      
+      // Optionally update metadata fields if they exist (non-blocking)
+      if (source) {
+        try {
+          await supabase
+            .from('user_books')
+            .update({
+              custom_cover_source: source,
+              custom_cover_updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', user.id)
+            .eq('book_id', bookId);
+        } catch (metadataError) {
+          // Non-critical, just log it
+          console.warn('[AddCoverModal] Failed to update metadata (non-critical):', metadataError);
+        }
       }
 
       onShowToast?.('Couverture ajoutée avec succès', 'success');
@@ -171,7 +241,17 @@ export function AddCoverModal({
       handleClose();
     } catch (error: any) {
       console.error('[AddCoverModal] Upload failed:', error);
-      onShowToast?.('Impossible d\'ajouter la couverture', 'error');
+      console.error('[AddCoverModal] Error details:', {
+        message: error?.message,
+        statusCode: error?.statusCode,
+        error: error?.error,
+      });
+      
+      // Only show generic error if no specific error was already shown
+      if (!error?.message || (!error.message.includes('not found') && !error.message.includes('Bucket') && !error.message.includes('permission') && !error.message.includes('policy') && !error.message.includes('Permission'))) {
+        const errorMessage = error?.message || error?.error?.message || 'Erreur inconnue';
+        onShowToast?.(`Impossible d'ajouter la couverture: ${errorMessage}`, 'error');
+      }
     } finally {
       setUploading(false);
     }
@@ -195,7 +275,7 @@ export function AddCoverModal({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-6" style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom) + 16px)' }}>
           {/* Preview */}
           {previewUrl && (
             <div className="relative w-full aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden">

@@ -71,7 +71,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
 
   return (
     <div 
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-[100]" 
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]" 
       data-modal-overlay
       onClick={onClose}
       onTouchMove={(e) => {
@@ -84,7 +84,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
     >
       <div
         data-modal-content
-        className="bg-white rounded-t-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden mx-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">

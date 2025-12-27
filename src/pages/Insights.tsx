@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Target, Calendar, Flame, Plus, X, BookOpen, Clock, Trophy } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
-import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 // Date helpers (local timezone)
 function pad2(n: number) {
@@ -574,15 +574,19 @@ export function Insights() {
         <div
           className="h-full overflow-y-auto"
           style={{
-            paddingTop: getScrollTopOffset(),
-            paddingBottom: getScrollBottomPadding(),
+            paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
             WebkitOverflowScrolling: 'touch',
             overscrollBehaviorY: 'contain',
             overscrollBehaviorX: 'none',
             touchAction: 'pan-y', // Allow vertical panning only
           }}
         >
-          <div className="px-4 py-6">
+          <div 
+            className="px-4 py-6"
+            style={{
+              paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+            }}
+          >
             {/* Level Progress Bar */}
             {profile?.xp_total !== undefined && (
               <div className="mb-6">

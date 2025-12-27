@@ -75,10 +75,14 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
       ? activity.photos[0]
       : null;
 
+  // Generate imageUrl: if photoPath is already a URL (starts with http), use it directly
+  // Otherwise, generate public URL from storage path
   const imageUrl = photoPath
-    ? supabase.storage
-        .from('activity-photos')
-        .getPublicUrl(photoPath).data.publicUrl
+    ? (photoPath.startsWith('http://') || photoPath.startsWith('https://'))
+      ? photoPath
+      : supabase.storage
+          .from('activity-photos')
+          .getPublicUrl(photoPath).data.publicUrl
     : null;
 
   // Check if this is a reading activity with a book
@@ -137,9 +141,18 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-stone-200 shadow-sm mb-3 overflow-hidden">
-      {/* Photo - displayed above the card content (only if not a reading activity) */}
-      {!isReadingActivity && imageUrl && (
+    <div 
+      className="bg-white rounded-2xl border border-stone-200 shadow-sm mb-3 overflow-hidden"
+      onClick={(e) => {
+        // Prevent card click from interfering with button clicks
+        const target = e.target as HTMLElement;
+        if (target.closest('button') || target.closest('a')) {
+          return; // Let button/link handle it
+        }
+      }}
+    >
+      {/* Photo - displayed above the card content if it exists */}
+      {imageUrl && (
         <div className="w-full aspect-video overflow-hidden bg-gray-100">
           <img
             src={imageUrl}
@@ -271,15 +284,46 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
         {/* Bottom actions */}
         <div className="flex items-center gap-4 pt-3 border-t border-stone-100">
           <button
-            onClick={onReact}
-            className={`flex items-center gap-1.5 transition-colors ${
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[ActivityCard] Like button clicked', activity.id, 'onReact:', typeof onReact);
+              if (onReact) {
+                onReact();
+              } else {
+                console.error('[ActivityCard] onReact is not defined!');
+              }
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onTouchStart={(e) => {
+              // Don't preventDefault here, just stop propagation
+              e.stopPropagation();
+            }}
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              // Trigger onReact on touch end for mobile
+              console.log('[ActivityCard] Like button touch end', activity.id);
+              if (onReact) {
+                onReact();
+              }
+            }}
+            onTouchCancel={(e) => {
+              e.stopPropagation();
+            }}
+            className={`flex items-center gap-1.5 transition-colors relative z-10 cursor-pointer pointer-events-auto ${
               activity.user_has_reacted
                 ? 'text-red-500'
                 : 'text-stone-500 hover:text-red-500'
             }`}
+            style={{ touchAction: 'manipulation' }}
           >
             <Heart
-              className={activity.user_has_reacted ? "fill-red-500 text-red-500 w-5 h-5" : "w-5 h-5"}
+              className={activity.user_has_reacted ? "fill-red-500 text-red-500 w-5 h-5 pointer-events-none" : "w-5 h-5 pointer-events-none"}
             />
             {activity.reactions_count > 0 ? (
               onOpenLikers ? (
@@ -299,8 +343,24 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
           </button>
 
           <button
-            onClick={onComment}
-            className="flex items-center gap-1.5 text-stone-500 hover:text-stone-900 transition-colors"
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[ActivityCard] Comment button clicked', activity.id);
+              onComment();
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onTouchStart={(e) => {
+              e.stopPropagation();
+            }}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+            }}
+            className="flex items-center gap-1.5 text-stone-500 hover:text-stone-900 transition-colors relative z-10 cursor-pointer"
           >
             <MessageCircle className="w-4.5 h-4.5" />
             {activity.comments_count > 0 && (

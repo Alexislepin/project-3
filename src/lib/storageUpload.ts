@@ -147,10 +147,12 @@ export function generateActivityPhotoPath(userId: string, index: number): string
 
 /**
  * Generate a unique path for a book cover
+ * Path format: user_covers/<userId>/<bookId>/<timestamp>_<random>.jpg
+ * This matches the RLS policies that check for user_covers/<auth.uid()>/
  */
 export function generateBookCoverPath(userId: string, bookId: string): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 9);
-  return `book-covers/${userId}/${bookId}/${timestamp}_${random}.jpg`;
+  return `user_covers/${userId}/${bookId}/${timestamp}_${random}.jpg`;
 }
 

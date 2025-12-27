@@ -18,7 +18,7 @@ import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
-import { getScrollTopOffset, getScrollBottomPadding } from '../lib/layoutConstants';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 // Note: Bottom spacing is now handled by getScrollBottomPadding() in layoutConstants
 
@@ -212,10 +212,14 @@ export function Home() {
         .order('created_at', { ascending: false })
         .limit(30);
 
-      // Include: activities from people I follow (public or followers-only), EXCLUDE my own
+      // Include: activities ONLY from people I follow (public or followers-only), EXCLUDE my own and private
       if (followingIds.length > 0) {
-        query.or(`visibility.eq.public,and(visibility.eq.followers,user_id.in.(${followingIds.join(',')}))`);
+        // Only show activities from people I follow (visibility = public OR followers)
+        // Exclude private activities and my own activities
+        query.in('user_id', followingIds);
         query.neq('user_id', user.id); // Exclude my activities
+        query.or('visibility.eq.public,visibility.eq.followers'); // Only public or followers visibility
+        query.neq('visibility', 'private'); // Explicitly exclude private
       } else {
         // If no following, show empty feed (will show CTA to find readers)
         query.eq('user_id', '00000000-0000-0000-0000-000000000000'); // Impossible UUID to return empty
@@ -405,16 +409,26 @@ export function Home() {
   };
 
   const handleReact = async (activityId: string) => {
-    if (!user) return;
+    console.log('[Home] handleReact called', activityId);
+    if (!user) {
+      console.log('[Home] handleReact: no user');
+      return;
+    }
 
     const a = activities.find((x) => x.id === activityId);
-    if (!a) return;
+    if (!a) {
+      console.log('[Home] handleReact: activity not found', activityId);
+      return;
+    }
+    console.log('[Home] handleReact: activity found', a.id, 'current liked:', a.user_has_reacted);
+
+    const currentLiked = a.user_has_reacted;
+    const nextLiked = !currentLiked;
 
     // Optimistic UI
     setActivities((prev) =>
       prev.map((x) => {
         if (x.id !== activityId) return x;
-        const nextLiked = !x.user_has_reacted;
         return {
           ...x,
           user_has_reacted: nextLiked,
@@ -424,28 +438,62 @@ export function Home() {
     );
 
     try {
-      if (a.user_has_reacted) {
+      if (currentLiked) {
+        // Unlike: delete reaction
         const { error } = await supabase
           .from('activity_reactions')
           .delete()
           .eq('activity_id', activityId)
           .eq('user_id', user.id);
 
-        if (error) throw error;
+        if (error) {
+          console.error('[handleReact] delete error', error);
+          // Rollback on error
+          setActivities((prev) =>
+            prev.map((x) => {
+              if (x.id !== activityId) return x;
+              return {
+                ...x,
+                user_has_reacted: currentLiked,
+                reactions_count: Math.max(0, (x.reactions_count || 0) + (currentLiked ? 1 : -1)),
+              };
+            })
+          );
+        }
       } else {
+        // Like: insert reaction
         const { error } = await supabase
           .from('activity_reactions')
-          .upsert(
-            { activity_id: activityId, user_id: user.id, type: 'like' },
-            { onConflict: 'user_id,activity_id' }
-          );
+          .insert({ activity_id: activityId, user_id: user.id });
 
-        if (error) throw error;
+        if (error) {
+          console.error('[handleReact] insert error', error);
+          // Rollback on error
+          setActivities((prev) =>
+            prev.map((x) => {
+              if (x.id !== activityId) return x;
+              return {
+                ...x,
+                user_has_reacted: currentLiked,
+                reactions_count: Math.max(0, (x.reactions_count || 0) + (currentLiked ? 1 : -1)),
+              };
+            })
+          );
+        }
       }
     } catch (e) {
-      console.error('[handleReact] error', e);
-      // rollback simple: refresh
-      loadActivities();
+      console.error('[handleReact] exception', e);
+      // Rollback on exception
+      setActivities((prev) =>
+        prev.map((x) => {
+          if (x.id !== activityId) return x;
+          return {
+            ...x,
+            user_has_reacted: currentLiked,
+            reactions_count: Math.max(0, (x.reactions_count || 0) + (currentLiked ? 1 : -1)),
+          };
+        })
+      );
     }
   };
 
@@ -454,8 +502,27 @@ export function Home() {
   };
 
   const handleCloseComments = () => {
+    console.log('[Home] handleCloseComments called');
     setCommentingActivityId(null);
-    loadActivities();
+    // Don't reload activities on close, just close the modal
+    // loadActivities();
+  };
+
+  const handleCommentAdded = () => {
+    // Optimistically update comment count for the activity
+    if (commentingActivityId) {
+      setActivities((prev) =>
+        prev.map((activity) => {
+          if (activity.id === commentingActivityId) {
+            return {
+              ...activity,
+              comments_count: (activity.comments_count || 0) + 1,
+            };
+          }
+          return activity;
+        })
+      );
+    }
   };
 
   // Pull-to-refresh handlers
@@ -555,7 +622,10 @@ export function Home() {
   };
 
   const handleNavigateToInsights = () => {
-    window.location.href = '/insights';
+    // Navigate without page reload
+    window.history.pushState({}, '', '/insights');
+    // Trigger navigation event for App.tsx
+    window.dispatchEvent(new PopStateEvent('popstate'));
   };
 
   return (
@@ -601,8 +671,7 @@ export function Home() {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: getScrollTopOffset(),
-          paddingBottom: getScrollBottomPadding(),
+          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -644,7 +713,7 @@ export function Home() {
             transform: `translateY(${pullDistance}px)`,
             transition: isPulling ? 'none' : 'transform 180ms ease',
             willChange: 'transform',
-            paddingBottom: getScrollBottomPadding(),
+            paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           }}
         >
           {/* Weekly Summary Carousel + Level Progress Bar (aligned) */}
@@ -722,6 +791,7 @@ export function Home() {
         <CommentModal
           activityId={commentingActivityId}
           onClose={handleCloseComments}
+          onCommentAdded={handleCommentAdded}
         />
       )}
 

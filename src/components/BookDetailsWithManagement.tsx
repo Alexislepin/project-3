@@ -416,7 +416,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
                 {userBookId && onEditRequested && (
                   <button
                     onClick={onEditRequested}
-                    className="flex-1 py-3 px-4 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors"
+                    className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-semibold hover:brightness-95 transition-colors"
                   >
                     Modifier
                   </button>

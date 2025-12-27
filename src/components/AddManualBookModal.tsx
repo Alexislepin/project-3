@@ -253,8 +253,10 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
         }
       }}
     >
-      <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between rounded-t-2xl">
+      <div 
+        className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+      >
+        <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between rounded-t-2xl z-10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
               <Book className="w-5 h-5 text-primary" />
@@ -274,7 +276,13 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form 
+          onSubmit={handleSubmit} 
+          className="p-6 space-y-4"
+          style={{
+            paddingBottom: 'calc(48px + env(safe-area-inset-bottom))',
+          }}
+        >
           <div>
             <label className="block text-sm font-semibold text-text-main-light mb-2">
               Titre <span className="text-red-500">*</span>
