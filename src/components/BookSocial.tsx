@@ -104,6 +104,9 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
   // Helper function to dispatch global event for Explorer synchronization
   const dispatchCountsChanged = useCallback((likesCount: number, commentsCount: number, isLikedByMe: boolean) => {
     if (bookKey && bookKey !== 'unknown') {
+      // Debug log (temporary)
+      console.debug('[BookSocial] dispatch', bookKey, { likes: likesCount, comments: commentsCount, isLiked: isLikedByMe });
+      
       window.dispatchEvent(new CustomEvent('book-social-counts-changed', {
         detail: {
           bookKey,
@@ -318,9 +321,23 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
       return;
     }
 
+    // IDEMPOTENT: Vérifier si le like existe déjà
+    const { data: existing, error: checkErr } = await supabase
+      .from('book_likes')
+      .select('id')
+      .eq('user_id', currentUser.id)
+      .eq('book_key', bookKey)
+      .maybeSingle();
+
+    if (checkErr) {
+      console.error('[book_likes] Error checking existing like:', checkErr);
+      return;
+    }
+
+    const wasLiked = !!existing?.id;
+
     // OPTIMISTIC UPDATE: Mettre à jour l'UI immédiatement
     // STOCKER LES VALEURS AVANT setState pour dispatch stable
-    const wasLiked = isLiked;
     const previousLikes = [...likes];
     const prevLikesCount = previousLikes.length;
     const prevCommentsCount = comments.length;
@@ -390,25 +407,88 @@ export function BookSocial({ bookId, book, focusComment = false }: BookSocialPro
         // Dispatch global event for Explorer synchronization avec valeurs stables
         dispatchCountsChanged(nextLikesCount, prevCommentsCount, false);
       } else {
-        // LIKE: UPSERT (never INSERT)
-        // RÈGLE ABSOLUE: Like = UPSERT, jamais INSERT
-        const { data: newLike, error: upsertError } = await supabase
+        // LIKE: IDEMPOTENT INSERT
+        // Vérifier à nouveau si le like existe (race condition protection)
+        const { data: doubleCheck, error: doubleCheckErr } = await supabase
           .from('book_likes')
-          .upsert(
-            {
-              user_id: currentUser.id,
+          .select('id')
+          .eq('user_id', currentUser.id)
+          .eq('book_key', bookKey)
+          .maybeSingle();
+
+        if (doubleCheckErr) {
+          console.error('Error double-checking like:', doubleCheckErr);
+          // Rollback UI on error
+          setIsLiked(wasLiked);
+          setLikes(previousLikes);
+          return;
+        }
+
+        // Si le like existe déjà, c'est OK (idempotent)
+        if (doubleCheck?.id) {
+          // Already liked, do nothing (idempotent success)
+          // Just update the UI to show the real like (replace temp like)
+          const { data: profileData } = await supabase
+            .from('user_profiles')
+            .select('id, display_name, avatar_url')
+            .eq('id', currentUser.id)
+            .single();
+
+          const likeWithProfile: Like = {
+            id: `like-${Date.now()}`,
+            user_id: currentUser.id,
+            created_at: new Date().toISOString(),
+            user_profiles: profileData || null,
+          };
+
+          setLikes(prev => {
+            const filtered = prev.filter(like => !like.id.startsWith('temp-like-'));
+            return [...filtered, likeWithProfile];
+          });
+
+          dispatchCountsChanged(nextLikesCount, prevCommentsCount, true);
+          return;
+        }
+
+        // Insert new like
+        const { data: newLike, error: insertError } = await supabase
+          .from('book_likes')
+          .insert({
+            user_id: currentUser.id,
               book_key: bookKey,
-              book_id: bookUuid, // Using book_id as book_uuid
-            },
-            { onConflict: 'user_id,book_id' } // Assuming unique constraint on (user_id, book_id)
-          )
+            book_id: bookUuid,
+          })
           .select('user_id, created_at')
           .single();
 
-        // Handle upsert errors
-        if (upsertError) {
-          console.error('Error upserting like:', upsertError);
-          // Rollback en cas d'erreur
+        // Handle insert errors (except unique constraint violation)
+        if (insertError) {
+          // If it's a unique constraint violation, treat as success (idempotent)
+          if (insertError.code === '23505' || insertError.message?.includes('unique') || insertError.message?.includes('duplicate')) {
+            // Already exists, that's OK - update UI with real like
+            const { data: profileData } = await supabase
+              .from('user_profiles')
+              .select('id, display_name, avatar_url')
+              .eq('id', currentUser.id)
+              .single();
+
+            const likeWithProfile: Like = {
+              id: `like-${Date.now()}`,
+              user_id: currentUser.id,
+              created_at: new Date().toISOString(),
+              user_profiles: profileData || null,
+            };
+
+            setLikes(prev => {
+              const filtered = prev.filter(like => !like.id.startsWith('temp-like-'));
+              return [...filtered, likeWithProfile];
+            });
+
+            dispatchCountsChanged(nextLikesCount, prevCommentsCount, true);
+            return;
+          }
+          // Other errors: rollback UI
+          console.error('Error inserting like:', insertError);
           setIsLiked(wasLiked);
           setLikes(previousLikes);
           return;

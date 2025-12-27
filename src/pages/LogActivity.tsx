@@ -86,6 +86,7 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
       duration_minutes: parseInt(duration) || 0,
       notes: notes,
       book_id: selectedBook,
+      visibility: 'public', // Default to public so it appears in followers' feeds
     };
 
     const { error } = await supabase.from('activities').insert(activityData);

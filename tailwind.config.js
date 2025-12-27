@@ -23,6 +23,15 @@ export default {
         'lg': '1.5rem',
         'xl': '2rem',
       },
+      keyframes: {
+        flame: {
+          '0%, 100%': { transform: 'rotate(-6deg) scale(1)' },
+          '50%': { transform: 'rotate(6deg) scale(1.08)' },
+        },
+      },
+      animation: {
+        flame: 'flame 1.2s ease-in-out infinite',
+      },
     },
   },
   plugins: [],

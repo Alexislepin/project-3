@@ -166,20 +166,62 @@ export function candidateBookKeysFromBook(bookOrKey: any, bookId?: string): stri
 }
 
 /**
+ * Normalizes OpenLibrary work key to canonical format.
+ * Accepts: "ol:/works/OL...W", "/works/OL...W", "works/OL...W", "OL...W"
+ * Always returns: "ol:/works/OL...W" (canonical format)
+ */
+function normalizeOlKeyForCanonical(input?: any): string | null {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (!s) return null;
+
+  // Already normalized
+  if (s.startsWith("ol:/works/")) return s;
+  
+  // Normalize variants
+  if (s.startsWith("/works/")) return `ol:${s}`;
+  if (s.startsWith("works/")) return `ol:/${s}`;
+  if (s.includes("/works/")) {
+    const idx = s.indexOf("/works/");
+    return `ol:${s.slice(idx)}`;
+  }
+  
+  // Extract OL...W pattern if present
+  const match = s.match(/OL\d+W/);
+  if (match) {
+    return `ol:/works/${match[0]}`;
+  }
+  
+  return null;
+}
+
+/**
+ * Extracts first valid ISBN from string or array, cleaned.
+ */
+function firstIsbn(raw: any): string | null {
+  if (!raw) return null;
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (!v) return null;
+  const clean = String(v).replace(/[-\s]/g, "").trim();
+  return clean.length >= 10 ? clean : null;
+}
+
+/**
  * Canonical book key function - returns the same key for the same book everywhere.
  * This ensures consistency between Explorer, Modal, and all social features.
  * 
  * Priority order:
- * 1) ISBN (cleaned) -> "isbn:XXXXXXXXXX"
- * 2) OpenLibrary work key -> "ol:/works/OLxxxxW" (normalized)
+ * 1) OpenLibrary work key -> "ol:/works/OLxxxxW" (normalized) - PRIORITY for Explorer stability
+ * 2) ISBN (cleaned) -> "isbn:XXXXXXXXXX"
  * 3) Google Books ID -> "google:..."
  * 4) UUID DB -> "uuid:..."
  * 5) "unknown"
  * 
  * Rules:
- * - If book comes from OpenLibrary -> returns "ol:/works/OL...W" (canonical format)
- * - If book is in books table -> returns "uuid:${books.id}" (UUID format)
+ * - If book comes from OpenLibrary -> returns "ol:/works/OL...W" (canonical format) - PRIORITY
  * - If book has reliable ISBN -> returns "isbn:${digits}" (cleaned digits)
+ * - If book is in books table -> returns "uuid:${books.id}" (UUID format)
+ * - Handles ISBN as string or array (OpenLibrary often returns array)
  * 
  * @param book - Book object (can be DB book, GoogleBook, OpenLibraryDoc, etc.)
  * @returns Canonical book key string
@@ -187,38 +229,28 @@ export function candidateBookKeysFromBook(bookOrKey: any, bookId?: string): stri
 export function canonicalBookKey(book: any): string {
   if (!book) return 'unknown';
 
-  const clean = (v?: string | number | null) => {
-    if (!v) return '';
-    return String(v).replace(/[-\s]/g, '').trim();
-  };
-
-  // 1) ISBN (PRIORITY - most universal identifier)
-  const isbn = clean(book?.isbn || book?.isbn13 || book?.isbn10);
-  if (isbn && isbn.length >= 10) {
-    return `isbn:${isbn}`;
-  }
-
-  // 2) OpenLibrary work key
-  const olRaw =
-    book?.openlibrary_work_key ||
-    book?.openLibraryKey ||
-    book?.openLibraryWorkKey ||
-    book?.key ||
-    book?.openlibraryKey ||
-    book?.open_library_key ||
-    null;
+  // 1) OpenLibrary work key FIRST (Explorer stability - most stable identifier)
+  const ol =
+    normalizeOlKeyForCanonical(book?.openLibraryKey) ||
+    normalizeOlKeyForCanonical(book?.openlibrary_work_key) ||
+    normalizeOlKeyForCanonical(book?.key) ||
+    normalizeOlKeyForCanonical(book?.openLibraryWorkKey) ||
+    normalizeOlKeyForCanonical(book?.openlibraryKey) ||
+    normalizeOlKeyForCanonical(book?.open_library_key);
   
-  if (olRaw && typeof olRaw === 'string') {
-    const ol = normalizeOlWorkKey(olRaw);
-    if (ol) {
-      return ol.canonical; // "ol:/works/OL2775807W"
-    }
-  }
+  if (ol) return ol;
+
+  // 2) ISBN (handles string or array)
+  const isbn =
+    firstIsbn(book?.isbn13) ||
+    firstIsbn(book?.isbn10) ||
+    firstIsbn(book?.isbn);
+  if (isbn) return `isbn:${isbn}`;
 
   // 3) Google Books ID
-  const gbid = book?.google_books_id || book?.googleBooksId;
-  if (gbid && typeof gbid === 'string' && gbid.trim()) {
-    return `google:${gbid.trim()}`;
+  const gid = book?.google_books_id || book?.googleBooksId;
+  if (gid && typeof gid === 'string' && gid.trim()) {
+    return gid.startsWith('google:') ? gid : `google:${gid.trim()}`;
   }
 
   // 4) UUID DB
@@ -233,6 +265,32 @@ export function canonicalBookKey(book: any): string {
   }
 
   return 'unknown';
+}
+
+/**
+ * Helper to get canonical key from OpenLibraryDoc.
+ * Handles ISBN as array and ensures openLibraryKey is properly set.
+ * Use this helper to avoid duplicating the conversion logic in multiple places.
+ * 
+ * @param doc - OpenLibraryDoc object
+ * @returns Canonical book key string
+ */
+export function getCanonicalKeyFromOpenLibraryDoc(doc: any): string {
+  if (!doc) return 'unknown';
+  
+  // Handle ISBN as string or array (OpenLibrary often returns array)
+  const isbn = Array.isArray(doc.isbn) ? doc.isbn[0] : doc.isbn;
+  
+  const bookForCanonical = {
+    id: doc.key || doc.id,
+    key: doc.key,
+    isbn: isbn,
+    isbn13: isbn,
+    isbn10: isbn,
+    openLibraryKey: doc.key,
+  };
+  
+  return canonicalBookKey(bookForCanonical);
 }
 
 /**
@@ -420,15 +478,17 @@ export async function getBookSocialCounts(
       variants_sample: variantArray.slice(0, 5),
     });
     
+    // CRITICAL: Select id and user_id for likes to enable proper deduplication
     const { data: likesData, error: likesError } = await supabase
       .from('book_likes')
-      .select('book_key, book_id')
+      .select('id, user_id, book_key, book_id')
       .in('book_key', variantArray);
 
     // 3) Charger les counts de commentaires groupés par UNE SEULE clé normalisée
+    // CRITICAL: Select id for comments to enable proper deduplication
     const { data: commentsData, error: commentsError } = await supabase
       .from('book_comments')
-      .select('book_key, book_id')
+      .select('id, book_key, book_id')
       .in('book_key', variantArray);
 
     // 4) Si userId fourni, charger les likes de l'utilisateur pour ces book_keys
@@ -438,7 +498,7 @@ export async function getBookSocialCounts(
     if (userId) {
       const { data: userLikesData, error: userLikesError } = await supabase
         .from('book_likes')
-        .select('book_key, book_id')
+        .select('id, user_id, book_key, book_id')
         .eq('user_id', userId)
         .in('book_key', variantArray);
 
@@ -477,9 +537,18 @@ export async function getBookSocialCounts(
       const normalizedKey = like.book_key || (like.book_id ? String(like.book_id) : null);
       if (!normalizedKey) return;
       
-      // Create a unique identifier for this like (user_id + normalized_key)
-      // This prevents counting the same like twice if it appears with different book_key/book_id combinations
-      const uniqueLikeId = `${like.user_id || 'unknown'}:${normalizedKey}`;
+      // Create a unique identifier for this like
+      // Use like.id if available (primary key), otherwise use user_id + normalized_key
+      // CRITICAL: user_id is now selected, so it's available
+      // Note: book_likes table may not have an 'id' column, so we use user_id + book_key as unique key
+      const uniqueLikeId = like.id || (like.user_id ? `${like.user_id}:${normalizedKey}` : null);
+      
+      if (!uniqueLikeId) {
+        // Skip if we can't create a unique identifier (shouldn't happen with proper data)
+        console.warn('[getBookSocialCounts] Like missing id and user_id, skipping:', like);
+        return;
+      }
+      
       if (processedLikes.has(uniqueLikeId)) {
         console.debug('[getBookSocialCounts] Skipping duplicate like:', uniqueLikeId);
         return; // Already counted this like
@@ -502,8 +571,14 @@ export async function getBookSocialCounts(
       const normalizedKey = comment.book_key || (comment.book_id ? String(comment.book_id) : null);
       if (!normalizedKey) return;
       
-      // Create a unique identifier for this comment (id is unique, but use user_id + normalized_key for safety)
-      const uniqueCommentId = `${comment.id || comment.user_id || 'unknown'}:${normalizedKey}`;
+      // Create a unique identifier for this comment
+      // CRITICAL: comment.id is now selected and is the primary key, so it's always unique
+      const uniqueCommentId = comment.id;
+      if (!uniqueCommentId) {
+        console.warn('[getBookSocialCounts] Comment missing id:', comment);
+        // Skip this comment if no id (shouldn't happen, but safety check)
+        return;
+      }
       if (processedComments.has(uniqueCommentId)) {
         console.debug('[getBookSocialCounts] Skipping duplicate comment:', uniqueCommentId);
         return; // Already counted this comment
@@ -520,12 +595,21 @@ export async function getBookSocialCounts(
       }
     });
     
+    // Debug log (temporary) - verify counts match
     console.debug('[getBookSocialCounts] Final counts:', {
       requested_keys: requested,
-      likes_count: Object.keys(likesCount).length,
-      comments_count: Object.keys(commentsCount).length,
-      processed_likes: processedLikes.size,
-      processed_comments: processedComments.size,
+      likes_data_length: (likesData || []).length,
+      processed_likes_size: processedLikes.size,
+      comments_data_length: (commentsData || []).length,
+      processed_comments_size: processedComments.size,
+      likes_count_keys: Object.keys(likesCount).length,
+      comments_count_keys: Object.keys(commentsCount).length,
+      likes_count_by_key: Object.fromEntries(
+        requested.map(key => [key, likesCount[key] || 0])
+      ),
+      comments_count_by_key: Object.fromEntries(
+        requested.map(key => [key, commentsCount[key] || 0])
+      ),
     });
 
     // 6) Construire le résultat avec les clés normalisées

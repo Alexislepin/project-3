@@ -100,6 +100,21 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
     }
   }
 
+  // Also check if we have edition key
+  if (book?.openLibraryEditionKey) {
+    const editionKey = book.openLibraryEditionKey;
+    if (typeof editionKey === 'string' && editionKey.includes('/books/')) {
+      openlibrary_edition_key = editionKey.startsWith('/') ? editionKey : `/${editionKey}`;
+    }
+  }
+
+  // Extract OpenLibrary cover ID (cover_i or openlibrary_cover_id)
+  const openlibrary_cover_id = 
+    (typeof book?.openlibrary_cover_id === 'number' && book.openlibrary_cover_id > 0) ? book.openlibrary_cover_id :
+    (typeof book?.cover_i === 'number' && book.cover_i > 0) ? book.cover_i :
+    (typeof book?.coverId === 'number' && book.coverId > 0) ? book.coverId :
+    null;
+
   // Extract total_pages: prefer existing, then pageCount, then volumeInfo.pageCount
   // IMPORTANT: Only set if > 0, otherwise null (not 0)
   const total_pages = 
@@ -140,6 +155,9 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
       }
       if (openlibrary_edition_key) {
         updateData.openlibrary_edition_key = openlibrary_edition_key;
+      }
+      if (openlibrary_cover_id) {
+        updateData.openlibrary_cover_id = openlibrary_cover_id;
       }
 
       // IMPORTANT: n'écrase jamais la cover par null
@@ -188,6 +206,9 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
     if (openlibrary_edition_key) {
       updateData.openlibrary_edition_key = openlibrary_edition_key;
     }
+    if (openlibrary_cover_id) {
+      updateData.openlibrary_cover_id = openlibrary_cover_id;
+    }
 
     if (finalCoverUrl) {
       updateData.cover_url = finalCoverUrl;
@@ -225,6 +246,7 @@ export async function ensureBookInDB(supabase: SupabaseClient, book: any): Promi
           isbn: cleanIsbn || null,
           openlibrary_work_key: openlibrary_work_key || null,
           openlibrary_edition_key: openlibrary_edition_key || null,
+          openlibrary_cover_id: openlibrary_cover_id || null,
         },
         {
           onConflict: cleanIsbn ? 'isbn' : undefined,

@@ -3,6 +3,19 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { scheduleGoalCheck } from '../utils/goalNotifications';
 
+// Safe timer management to prevent double-invoke issues with React StrictMode
+const endedTimers = new Set<string>();
+
+function safeTimeEnd(name: string) {
+  if (endedTimers.has(name)) return;
+  try { 
+    console.timeEnd(name); 
+  } catch (e) {
+    // Timer doesn't exist, ignore
+  }
+  endedTimers.add(name);
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
@@ -20,7 +33,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!(window as any).__authInitStarted) {
+      (window as any).__authInitStarted = true;
     console.time('AUTH_INIT');
+    }
     console.log('[AUTH] Starting session check...');
     
     // FIX: Ne pas bloquer le render - initialiser loading à false après un court délai
@@ -43,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
-      console.timeEnd('AUTH_INIT');
+      safeTimeEnd('AUTH_INIT');
 
       if (session?.user) {
         scheduleGoalCheck(session.user.id);
@@ -54,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       console.error('[AUTH] Error getting session:', error);
       setLoading(false);
-      console.timeEnd('AUTH_INIT');
+      safeTimeEnd('AUTH_INIT');
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {

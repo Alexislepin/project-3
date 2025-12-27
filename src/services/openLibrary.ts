@@ -423,6 +423,7 @@ export async function fetchByIsbn(isbn: string): Promise<{
   openLibraryWorkKey?: string;
   coverUrl?: string;
   cover_i?: number;
+  pages?: number;
 } | null> {
   if (!isbn) return null;
 
@@ -591,6 +592,191 @@ export async function fetchByIsbn(isbn: string): Promise<{
     const entry: CachedIsbnEntry = { value: null, expiresAt: Date.now() + ISBN_CACHE_TTL_MS };
     isbnCache.set(cacheKey, entry);
     saveIsbnToLocalStorage(cleanIsbn, entry);
+    return null;
+  }
+}
+
+/**
+ * Check if a cover URL exists (returns 200 OK)
+ * @param url Cover URL to check
+ * @returns true if URL exists, false otherwise
+ */
+async function checkCoverUrlExists(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: 'HEAD' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch cover URL with fallback strategy
+ * Priority:
+ * 1) OpenLibrary cover ID (https://covers.openlibrary.org/b/id/{coverId}-L.jpg?default=false)
+ *    Fallback to -M, then -S if 404
+ * 2) OpenLibrary ISBN (https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg?default=false)
+ *    Fallback to -M, then -S if 404
+ * 3) null (no cover found)
+ * 
+ * @param coverId OpenLibrary cover ID (optional)
+ * @param isbn ISBN for fallback (optional)
+ * @returns Cover URL or null
+ */
+export async function fetchCoverUrlWithFallback(
+  coverId?: number,
+  isbn?: string
+): Promise<{ url: string | null; source: 'OL_ID' | 'OL_ISBN' | 'NONE' }> {
+  // Priority 1: Cover ID with size fallback (L -> M -> S)
+  if (coverId && typeof coverId === 'number' && coverId > 0) {
+    const sizes = ['-L', '-M', '-S'] as const;
+    for (const size of sizes) {
+      const url = `https://covers.openlibrary.org/b/id/${coverId}${size}.jpg?default=false`;
+      if (await checkCoverUrlExists(url)) {
+        console.log(`[ISBN] cover source: OL_ID (${coverId}${size})`);
+        return { url, source: 'OL_ID' };
+      }
+    }
+  }
+
+  // Priority 2: ISBN-based with size fallback (L -> M -> S)
+  if (isbn) {
+    const cleanIsbn = isbn.replace(/[-\s]/g, '');
+    if (cleanIsbn.length >= 10) {
+      const sizes = ['-L', '-M', '-S'] as const;
+      for (const size of sizes) {
+        const url = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}${size}.jpg?default=false`;
+        if (await checkCoverUrlExists(url)) {
+          console.log(`[ISBN] cover source: OL_ISBN (${size})`);
+          return { url, source: 'OL_ISBN' };
+        }
+      }
+    }
+  }
+
+  console.log('[ISBN] cover source: NONE');
+  return { url: null, source: 'NONE' };
+}
+
+/**
+ * Fetch edition metadata by ISBN from OpenLibrary Edition API
+ * @param isbn ISBN (10 or 13 digits)
+ * @returns Edition metadata or null
+ */
+export async function fetchEditionByIsbn(isbn: string): Promise<{
+  pages: number | null;
+  coverId: number | null;
+  editionKey: string | null;
+  workKey: string | null;
+} | null> {
+  if (!isbn) return null;
+
+  const cleanIsbn = isbn.replace(/[-\s]/g, '');
+  if (!cleanIsbn || cleanIsbn.length < 10) {
+    return null;
+  }
+
+  try {
+    const url = `https://openlibrary.org/isbn/${cleanIsbn}.json`;
+    if (isDev) {
+      debugLog(`[OpenLibrary] Fetching edition by ISBN: ${url}`);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (isDev) {
+        debugLog(`[OpenLibrary] Edition API error (${response.status}) for ISBN ${cleanIsbn}`);
+      }
+      return null;
+    }
+
+    const data = await response.json();
+
+    // Extract number_of_pages
+    const pages = typeof data.number_of_pages === 'number' && data.number_of_pages > 0
+      ? data.number_of_pages
+      : null;
+
+    // Extract covers array (first cover ID)
+    let coverId: number | null = null;
+    if (Array.isArray(data.covers) && data.covers.length > 0) {
+      const firstCover = data.covers[0];
+      if (typeof firstCover === 'number' && firstCover > 0) {
+        coverId = firstCover;
+      }
+    }
+
+    // Extract edition key
+    let editionKey: string | null = null;
+    if (data.key && typeof data.key === 'string') {
+      editionKey = data.key.startsWith('/') ? data.key : `/${data.key}`;
+    }
+
+    // Extract work key from works array
+    let workKey: string | null = null;
+    if (Array.isArray(data.works) && data.works.length > 0) {
+      const firstWork = data.works[0];
+      if (firstWork?.key && typeof firstWork.key === 'string') {
+        workKey = firstWork.key.startsWith('/') ? firstWork.key : `/${firstWork.key}`;
+      }
+    }
+
+    console.log(`[ISBN] edition pages found? ${pages !== null ? `yes (${pages})` : 'no'}`);
+    console.log(`[ISBN] edition coverId: ${coverId || 'none'}`);
+    console.log(`[ISBN] edition workKey: ${workKey || 'none'}`);
+
+    return {
+      pages,
+      coverId,
+      editionKey,
+      workKey,
+    };
+  } catch (error) {
+    if (isDev) {
+      debugLog(`[OpenLibrary] Error fetching edition by ISBN ${cleanIsbn}:`, error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Fetch pages from OpenLibrary Books API (fallback)
+ * @param isbn ISBN (10 or 13 digits)
+ * @returns Number of pages or null
+ */
+export async function fetchPagesFromBooksApi(isbn: string): Promise<number | null> {
+  if (!isbn) return null;
+
+  const cleanIsbn = isbn.replace(/[-\s]/g, '');
+  if (!cleanIsbn || cleanIsbn.length < 10) {
+    return null;
+  }
+
+  try {
+    const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`;
+    if (isDev) {
+      debugLog(`[OpenLibrary] Fetching pages from Books API: ${url}`);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    const bookKey = `ISBN:${cleanIsbn}`;
+    const bookData = data[bookKey];
+
+    if (bookData?.number_of_pages && typeof bookData.number_of_pages === 'number' && bookData.number_of_pages > 0) {
+      console.log(`[ISBN] pages from Books API: ${bookData.number_of_pages}`);
+      return bookData.number_of_pages;
+    }
+
+    return null;
+  } catch (error) {
+    if (isDev) {
+      debugLog(`[OpenLibrary] Error fetching pages from Books API for ISBN ${cleanIsbn}:`, error);
+    }
     return null;
   }
 }

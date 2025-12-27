@@ -79,8 +79,11 @@ export function CommentModal({ activityId, onClose }: CommentModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl max-w-2xl w-full max-h-[70vh] mb-16 flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="fixed inset-0 z-[300] bg-black/30 flex items-end justify-center"
+      onClick={onClose}
+    >
+      <div className="w-full max-w-2xl bg-white rounded-t-2xl shadow-xl flex flex-col max-h-[70vh] mb-24" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-stone-200">
           <h2 className="text-lg font-bold">Commentaires</h2>
           <button
@@ -123,22 +126,22 @@ export function CommentModal({ activityId, onClose }: CommentModalProps) {
           )}
         </div>
 
-        <div className="p-4 border-t border-stone-200">
-          <form onSubmit={handleSubmit} className="flex gap-2">
+        <div className="border-t border-gray-100 px-4 py-4">
+          <form onSubmit={handleSubmit} className="flex items-center gap-3 bg-gray-50 rounded-full px-4 py-2">
             <input
               type="text"
               value={newComment}
               onChange={(e) => setNewComment(e.target.value)}
-              placeholder="Ajouter un commentaire..."
-              className="flex-1 px-4 py-2 border border-stone-300 rounded-full focus:outline-none focus:ring-2 focus:ring-lime-400 focus:border-transparent"
+              placeholder="Ajouter un commentaire…"
+              className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
               disabled={submitting}
             />
             <button
               type="submit"
               disabled={!newComment.trim() || submitting}
-              className="w-10 h-10 flex items-center justify-center rounded-full bg-stone-900 text-white hover:bg-stone-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-9 h-9 rounded-full bg-primary flex items-center justify-center hover:brightness-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Send className="w-5 h-5" />
+              <Send className="w-4 h-4 text-black" />
             </button>
           </form>
         </div>

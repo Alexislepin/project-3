@@ -1,19 +1,29 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { Camera } from "lucide-react";
 import { BookQuickActions } from "./BookQuickActions";
 
 // Cache mémoire global pour les covers (évite de retenter les URLs qui ont échoué)
-const coverCache = new Map<string, { valid: boolean; expiresAt: number }>();
-const COVER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 heures
-const COVER_TIMEOUT_MS = 15000; // 15 secondes pour tester une URL cover (augmenté pour 4G lente)
+const coverCache = new Map<string, { ok: boolean; ts: number }>();
+const COVER_CACHE_TTL_OK_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours pour les covers valides
+const COVER_CACHE_TTL_FAIL_MS = 12 * 60 * 60 * 1000; // 12 heures pour les échecs
+const COVER_TIMEOUT_MS = 25000; // 25 secondes pour tester une URL cover (augmenté pour 4G lente)
+
+// Flag DEBUG pour calmer les logs
+const DEBUG = import.meta.env.DEV && false; // mets true quand tu debug
+const log = (...args: any[]) => {
+  if (DEBUG) console.log(...args);
+};
 
 type BookCoverProps = {
   title: string;
   author?: string;
   coverUrl?: string | null; // Initial cover URL (can be from any source)
+  custom_cover_url?: string | null; // User-specific custom cover (highest priority)
   isbn?: string | null;
   isbn13?: string | null;
   isbn10?: string | null;
   cover_i?: number | null; // OpenLibrary cover ID (most reliable)
+  openlibrary_cover_id?: number | null; // Alias for cover_i
   googleCoverUrl?: string | null; // Google Books thumbnail/smallThumbnail
   className?: string;
   likes?: number;
@@ -24,7 +34,10 @@ type BookCoverProps = {
   onOpenComments?: () => void;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'error') => void;
   showQuickActions?: boolean; // Whether to show quick actions buttons
-  onCoverLoaded?: (url: string, source: CoverSource['type']) => void; // Callback when a valid cover is loaded
+  onCoverLoaded?: (url: string, source: string) => void; // Callback when a valid cover is loaded
+  onAddCover?: () => void; // Callback when user wants to add a custom cover
+  bookId?: string; // Book ID for custom cover upload
+  showAddCoverButton?: boolean; // Whether to show "Add cover" button when placeholder
 };
 
 type CoverSource = 
@@ -38,6 +51,8 @@ export function BookCover({
   title,
   author,
   coverUrl,
+  custom_cover_url,
+  openlibrary_cover_id,
   className = "",
   likes = 0,
   comments = 0,
@@ -53,317 +68,292 @@ export function BookCover({
   cover_i,
   googleCoverUrl,
   onCoverLoaded,
+  onAddCover,
+  bookId,
+  showAddCoverButton = false,
 }: BookCoverProps) {
-  // Fallback chain with index
-  const [sourceIndex, setSourceIndex] = useState(0);
-  // Request ID pour éviter les race conditions (chaque nouveau chargement incrémente)
-  const requestIdRef = useRef(0);
-  // État "settled" : une fois qu'une image a chargé, on ne fait plus de fallback
-  const [isSettled, setIsSettled] = useState(false);
-  // Timeout ID pour pouvoir l'annuler
+  // Refs pour éviter les reloads inutiles et le "despawn"
+  const resolvedSrcRef = useRef<string | null>(null);
+  const lastIdentityRef = useRef<string>('');
+  const reqIdRef = useRef(0);
   const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // State pour l'affichage
+  const [imgSrc, setImgSrc] = useState<string>('/placeholder-cover.svg');
+  
+  // Construire une identity stable (UNIQUEMENT sur ce qui change vraiment l'image)
+  const identity = useMemo(() => {
+    return [
+      custom_cover_url || '',
+      coverUrl || '',
+      isbn13 || '',
+      isbn10 || '',
+      isbn || '',
+      cover_i ? String(cover_i) : '',
+      openlibrary_cover_id ? String(openlibrary_cover_id) : '',
+      googleCoverUrl || '',
+    ].join('|');
+  }, [custom_cover_url, coverUrl, isbn13, isbn10, isbn, cover_i, openlibrary_cover_id, googleCoverUrl]);
 
   // Helper: vérifier si une URL contient archive.org (interdit)
   const isArchiveOrgUrl = (url: string): boolean => {
     return url.includes('archive.org');
   };
 
-  // FIX: Build sources avec useMemo pour éviter recalcul à chaque render
-  // Build fallback sources in priority order (STRICT: NO archive.org, NO archive.org/download/...zip)
-  // PRIORITÉ OBLIGATOIRE: Google Books > OpenLibrary ISBN > OpenLibrary ID > Initial > Placeholder
-  // Si une URL archive.org est détectée → considérer comme échec immédiat
-  const sources = useMemo((): CoverSource[] => {
+  // Build fallback sources in priority order
+  const buildSources = (): CoverSource[] => {
     const sourcesList: CoverSource[] = [];
 
-    // Priority 1: Google Books cover (le plus fiable, jamais archive.org)
-    if (googleCoverUrl && !isArchiveOrgUrl(googleCoverUrl)) {
-      const cached = coverCache.get(googleCoverUrl);
-      // Inclure seulement si pas dans le cache ou si valide
-      if (!cached || (cached.valid && Date.now() < cached.expiresAt)) {
-        sourcesList.push({
-          type: 'google',
-          url: googleCoverUrl,
-        });
-      }
-    }
-
-    // Priority 2: OpenLibrary ISBN (avec ?default=false pour éviter redirection archive.org)
-    const isbnToUse = isbn13 || isbn10 || isbn;
-    if (isbnToUse) {
-      const cleanIsbn = isbnToUse.replace(/[-\s]/g, '');
-      if (cleanIsbn.length >= 10) {
-        const url = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg?default=false`;
-        const cached = coverCache.get(url);
-        // Inclure seulement si pas dans le cache ou si valide
-        if (!cached || (cached.valid && Date.now() < cached.expiresAt)) {
-          sourcesList.push({
-            type: 'openlibrary_isbn',
-            url,
-          });
-        }
-      }
-    }
-
-    // Priority 3: OpenLibrary cover_i (avec ?default=false pour éviter redirection archive.org)
-    if (typeof cover_i === 'number' && cover_i > 0) {
-      const url = `https://covers.openlibrary.org/b/id/${cover_i}-L.jpg?default=false`;
+    // Priority 1: Custom cover URL (user-specific manual cover) - HIGHEST PRIORITY
+    if (custom_cover_url && custom_cover_url.trim().length > 0 && !isArchiveOrgUrl(custom_cover_url)) {
+      const url = custom_cover_url.trim();
       const cached = coverCache.get(url);
-      // Inclure seulement si pas dans le cache ou si valide
-      if (!cached || (cached.valid && Date.now() < cached.expiresAt)) {
-        sourcesList.push({
-          type: 'openlibrary_id',
-          url,
-        });
+      const now = Date.now();
+      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
+        sourcesList.push({ type: 'initial', url }); // Use 'initial' type for custom covers
+      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
+        log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
       }
     }
 
-    // Priority 4: Initial coverUrl (si fourni et PAS archive.org)
+    // Priority 2: Cover URL from books table
     if (coverUrl && !isArchiveOrgUrl(coverUrl)) {
       const isDuplicate = sourcesList.some(s => s.url === coverUrl);
       if (!isDuplicate) {
         const cached = coverCache.get(coverUrl);
-        // Inclure seulement si pas dans le cache ou si valide
-        if (!cached || (cached.valid && Date.now() < cached.expiresAt)) {
-          sourcesList.push({
-            type: 'initial',
-            url: coverUrl,
-          });
+        const now = Date.now();
+        if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
+          sourcesList.push({ type: 'initial', url: coverUrl });
+        } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
+          log(`[BookCover] ${title}: Skipping cached fail - ${coverUrl}`);
         }
       }
     }
 
-    // Priority 5: Placeholder (always last, pas de fetch)
-    sourcesList.push({
-      type: 'placeholder',
-      url: '/placeholder-cover.svg',
-    });
+    // Priority 3: OpenLibrary cover_i or openlibrary_cover_id
+    const coverId = cover_i || openlibrary_cover_id;
+    if (typeof coverId === 'number' && coverId > 0) {
+      const url = `https://covers.openlibrary.org/b/id/${coverId}-L.jpg?default=false`;
+      const cached = coverCache.get(url);
+      const now = Date.now();
+      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
+        sourcesList.push({ type: 'openlibrary_id', url });
+      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
+        log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
+      }
+    }
+
+    // Priority 4: OpenLibrary ISBN
+    const isbnToUse = isbn13 || isbn10 || isbn;
+    if (isbnToUse) {
+      const cleanIsbn = String(isbnToUse).replace(/[-\s]/g, '');
+      if (cleanIsbn.length >= 10) {
+        const url = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg?default=false`;
+        const cached = coverCache.get(url);
+        const now = Date.now();
+        if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
+          sourcesList.push({ type: 'openlibrary_isbn', url });
+        } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
+          log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
+        }
+      }
+    }
+
+    // Priority 5: Google Books cover
+    if (googleCoverUrl && !isArchiveOrgUrl(googleCoverUrl)) {
+      const cached = coverCache.get(googleCoverUrl);
+      const now = Date.now();
+      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
+        sourcesList.push({ type: 'google', url: googleCoverUrl });
+      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
+        log(`[BookCover] ${title}: Skipping cached fail - ${googleCoverUrl}`);
+      }
+    }
+
+    // Priority 6: Placeholder (always last)
+    sourcesList.push({ type: 'placeholder', url: '/placeholder-cover.svg' });
 
     return sourcesList;
-  }, [googleCoverUrl, isbn13, isbn10, isbn, cover_i, coverUrl]);
-
-  const currentSource = sources[sourceIndex] || sources[sources.length - 1];
-
-  // Reset index when props change
-  useEffect(() => {
-    // Nouveau chargement : incrémenter requestId et réinitialiser settled
-    requestIdRef.current += 1;
-    setIsSettled(false);
-    setSourceIndex(0);
-    
-    // Annuler le timeout précédent s'il existe
-    if (timeoutIdRef.current) {
-      clearTimeout(timeoutIdRef.current);
-      timeoutIdRef.current = null;
-    }
-    
-    if (sources.length > 0) {
-      const firstSource = sources[0];
-      // Log source (corriger l'URL affichée)
-      const logUrl = firstSource.type === 'google' && firstSource.url.includes('openlibrary.org')
-        ? 'Google Books URL'
-        : firstSource.url;
-      console.log(`[BookCover] ${title}: Using source ${firstSource.type} - ${logUrl}`);
-    }
-    
-    return () => {
-      // Cleanup : annuler timeout si composant démonté
-      if (timeoutIdRef.current) {
-        clearTimeout(timeoutIdRef.current);
-        timeoutIdRef.current = null;
-      }
-    };
-  }, [coverUrl, cover_i, isbn13, isbn10, isbn, googleCoverUrl, title, sources]);
-
-  // Handle image error - try next source in chain
-  const handleImageError = (isRealError: boolean = true) => {
-    // Si une image a déjà réussi à charger, ne plus faire de fallback
-    if (isSettled) {
-      return;
-    }
-    
-    // Vérifier que c'est toujours la même "session" de chargement
-    const currentRequestId = requestIdRef.current;
-    
-    // Vérifier requestId avant setState (éviter race condition)
-    if (requestIdRef.current !== currentRequestId) {
-      return; // Nouveau chargement en cours, ignorer cet échec
-    }
-    
-    const currentUrl = currentSource.url;
-    
-    // FIX: Ne marquer invalid QUE sur erreur réelle (onError), PAS sur timeout
-    // Timeout != erreur réseau, donc on ne pollue pas le cache
-    if (isRealError) {
-      // Détecter si l'URL redirige vers archive.org (même après chargement)
-      // Si c'est le cas, marquer comme invalide immédiatement
-      if (currentUrl && isArchiveOrgUrl(currentUrl)) {
-        console.warn(`[BookCover] ${title}: Archive.org URL detected, rejecting immediately`);
-        coverCache.set(currentUrl, {
-          valid: false,
-          expiresAt: Date.now() + COVER_CACHE_TTL_MS,
-        });
-      }
-      
-      // Marquer l'URL actuelle comme invalide dans le cache (seulement sur erreur réelle)
-      if (currentUrl && currentSource.type !== 'placeholder') {
-        coverCache.set(currentUrl, {
-          valid: false,
-          expiresAt: Date.now() + COVER_CACHE_TTL_MS,
-        });
-      }
-    }
-    
-    if (sourceIndex < sources.length - 1) {
-      const nextIndex = sourceIndex + 1;
-      setSourceIndex(nextIndex);
-      const nextSource = sources[nextIndex];
-      console.log(`[BookCover] ${title}: Fallback to ${nextSource.type} - ${nextSource.url}`);
-    } else {
-      // Already on placeholder, stop
-      console.log(`[BookCover] ${title}: All sources failed, showing placeholder`);
-    }
   };
 
-  // Timeout pour forcer le fallback si l'image ne charge pas assez vite
+  // Main effect: charger l'image uniquement si identity change
   useEffect(() => {
-    if (currentSource.type === 'placeholder') {
-      return;
-    }
-    
-    // Si une image a déjà réussi, ne pas mettre de timeout
-    if (isSettled) {
+    const reqId = ++reqIdRef.current;
+
+    // Si identity n'a pas changé et qu'on a déjà une image résolue, ne rien faire
+    if (lastIdentityRef.current === identity && resolvedSrcRef.current) {
+      setImgSrc(resolvedSrcRef.current);
       return;
     }
 
-    // Annuler le timeout précédent
+    // Si identity a changé, reset le cache local
+    if (lastIdentityRef.current !== identity) {
+      lastIdentityRef.current = identity;
+      resolvedSrcRef.current = null;
+    }
+
+    let cancelled = false;
+
+    const safeSetResolved = (url: string) => {
+      if (cancelled) return;
+      if (reqId !== reqIdRef.current) return; // ignore anciennes requêtes
+      resolvedSrcRef.current = url;
+      setImgSrc(url);
+    };
+
+    const safeFallback = () => {
+      // IMPORTANT: ne fallback QUE si on n'a jamais eu de resolvedSrc
+      if (cancelled) return;
+      if (reqId !== reqIdRef.current) return;
+      if (resolvedSrcRef.current) return; // <- clé anti-despawn
+      setImgSrc('/placeholder-cover.svg');
+    };
+
+    // Annuler timeout précédent
     if (timeoutIdRef.current) {
       clearTimeout(timeoutIdRef.current);
       timeoutIdRef.current = null;
     }
-
-    const currentRequestId = requestIdRef.current;
-    const currentSourceUrl = currentSource.url;
     
-    timeoutIdRef.current = setTimeout(() => {
-      // Vérifier que c'est toujours la même session et que l'image n'a pas chargé
-      if (requestIdRef.current !== currentRequestId) {
-        return; // Nouveau chargement en cours
-      }
-      
-      if (isSettled) {
-        return; // Image déjà chargée
-      }
-      
-      // Vérifier que l'URL n'a pas changé
-      const currentSourceNow = sources[sourceIndex] || sources[sources.length - 1];
-      if (currentSourceNow.url !== currentSourceUrl) {
-        return; // Source a changé
-      }
-      
-      // FIX: Timeout n'est PAS une erreur réelle, donc on ne marque pas invalid
-      // On passe juste à la source suivante sans polluer le cache
-      console.log(`[BookCover] ${title}: Timeout after ${COVER_TIMEOUT_MS}ms, trying next source (not marking as invalid)`);
-      handleImageError(false); // false = timeout, pas erreur réelle
+    // Si on a déjà une image résolue, l'utiliser immédiatement
+    if (resolvedSrcRef.current) {
+      setImgSrc(resolvedSrcRef.current);
+      return;
+    }
+    
+    // Essayer de charger les sources
+    (async () => {
+      const sources = buildSources();
+      let sourceIndex = 0;
+
+      const tryNextSource = async (): Promise<void> => {
+        if (cancelled || reqId !== reqIdRef.current) return;
+
+        if (sourceIndex >= sources.length) {
+          safeFallback();
+          return;
+    }
+    
+        const source = sources[sourceIndex];
+        
+        if (source.type === 'placeholder') {
+          safeFallback();
+          return;
+        }
+
+        log(`[BookCover] ${title}: Trying source ${source.type} - ${source.url}`);
+
+        // Créer une image pour tester le chargement
+        const img = new Image();
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let resolved = false;
+
+        const cleanup = () => {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          img.onload = null;
+          img.onerror = null;
+        };
+
+        const onSuccess = () => {
+          if (resolved || cancelled || reqId !== reqIdRef.current) return;
+          resolved = true;
+          cleanup();
+
+          const finalUrl = img.src;
+          if (isArchiveOrgUrl(finalUrl)) {
+            log(`[BookCover] ${title}: Archive.org detected, trying next source`);
+            sourceIndex++;
+            tryNextSource();
+      return;
+    }
+    
+          // Marquer comme valide dans le cache
+          coverCache.set(source.url, { ok: true, ts: Date.now() });
+          safeSetResolved(finalUrl);
+
+          if (onCoverLoaded && source.type !== 'initial') {
+            onCoverLoaded(finalUrl, source.type);
+          }
+
+          log(`[BookCover] ${title}: ✓ Loaded ${source.type}`);
+        };
+
+        const onError = () => {
+          if (resolved || cancelled || reqId !== reqIdRef.current) return;
+          resolved = true;
+          cleanup();
+
+          // Marquer comme invalide seulement si erreur réelle (pas timeout)
+          coverCache.set(source.url, { ok: false, ts: Date.now() });
+
+          sourceIndex++;
+          tryNextSource();
+        };
+
+        img.onload = onSuccess;
+        img.onerror = onError;
+
+        // Timeout pour passer à la source suivante
+        timeoutId = setTimeout(() => {
+          if (resolved) return;
+          log(`[BookCover] ${title}: Timeout on ${source.type}, trying next`);
+          sourceIndex++;
+          tryNextSource();
     }, COVER_TIMEOUT_MS);
 
+        img.src = source.url;
+      };
+
+      await tryNextSource();
+    })();
+
     return () => {
+      cancelled = true;
       if (timeoutIdRef.current) {
         clearTimeout(timeoutIdRef.current);
         timeoutIdRef.current = null;
       }
     };
-  }, [currentSource.url, sourceIndex, isSettled]);
+  }, [identity]); // <- dépendance MINIMALE
 
-  // Determine what to render
-  const displayUrl = currentSource.url;
-  const isPlaceholder = currentSource.type === 'placeholder';
+  const isPlaceholder = imgSrc === '/placeholder-cover.svg' && !resolvedSrcRef.current;
 
   return (
     <div className={`relative overflow-hidden ${className}`}>
       {!isPlaceholder ? (
         <img
-          src={displayUrl}
+          src={imgSrc}
           alt={`${title}${author ? ` - ${author}` : ""}`}
           className="w-full h-full object-cover"
           loading="lazy"
           decoding="async"
-          onLoad={(e) => {
-            // Vérifier que c'est toujours la même session de chargement
-            const currentRequestId = requestIdRef.current;
-            
-            // Vérifier que l'image chargée n'est pas une redirection vers archive.org
-            const img = e.currentTarget;
-            const finalUrl = img.src || displayUrl;
-            
-            if (isArchiveOrgUrl(finalUrl)) {
-              // Si l'image a redirigé vers archive.org, considérer comme échec
-              console.warn(`[BookCover] ${title}: Image redirected to archive.org, rejecting`);
-              // Ne pas marquer comme settled si archive.org
-              handleImageError(true); // true = erreur réelle (archive.org)
-              return;
-            }
-            
-            // Vérifier requestId avant setState (éviter race condition)
-            if (requestIdRef.current !== currentRequestId) {
-              return; // Nouveau chargement en cours, ignorer ce succès
-            }
-            
-            // Annuler le timeout car l'image a chargé
-            if (timeoutIdRef.current) {
-              clearTimeout(timeoutIdRef.current);
-              timeoutIdRef.current = null;
-            }
-            
-            // Marquer comme settled : cette image a réussi, ne plus faire de fallback
-            setIsSettled(true);
-            
-            // Marquer comme valide dans le cache quand l'image charge avec succès
-            coverCache.set(displayUrl, {
-              valid: true,
-              expiresAt: Date.now() + COVER_CACHE_TTL_MS,
-            });
-            
-            // Notifier le parent qu'une cover valide a été chargée (pour cache Supabase)
-            // Seulement si ce n'est pas déjà la cover initiale (pour éviter les boucles)
-            if (onCoverLoaded && currentSource.type !== 'initial') {
-              onCoverLoaded(displayUrl, currentSource.type);
-            }
-            
-            // Log source utilisée pour performance
-            const logUrl = currentSource.type === 'google' && displayUrl.includes('openlibrary.org')
-              ? 'Google Books URL'
-              : displayUrl;
-            console.log(`[BookCover] ${title}: ✓ Loaded ${currentSource.type} - ${logUrl}`);
-          }}
-          onError={() => {
-            // Vérifier que c'est toujours la même session
-            const currentRequestId = requestIdRef.current;
-            
-            // Si une image a déjà réussi, ne pas déclencher d'erreur
-            if (isSettled) {
-              return;
-            }
-            
-            // Vérifier requestId avant setState
-            if (requestIdRef.current !== currentRequestId) {
-              return; // Nouveau chargement en cours
-            }
-            
-            // Annuler le timeout car on va faire un fallback
-            if (timeoutIdRef.current) {
-              clearTimeout(timeoutIdRef.current);
-              timeoutIdRef.current = null;
-            }
-            
-            handleImageError(true); // true = erreur réelle (onError)
-          }}
         />
       ) : (
-        <div className="w-full h-full bg-neutral-200 flex items-center justify-center">
+        <div className="w-full h-full bg-neutral-200 flex items-center justify-center relative">
           <span className="text-xs text-black/50 px-2 text-center line-clamp-3">
             {title}
           </span>
         </div>
+      )}
+
+      {/* Add Cover Button (shown when placeholder and button enabled) */}
+      {isPlaceholder && showAddCoverButton && onAddCover && bookId && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onAddCover();
+          }}
+          className="absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/30 transition-colors group"
+          aria-label="Ajouter une couverture"
+        >
+          <div className="bg-black/60 backdrop-blur-sm rounded-full p-2.5 group-hover:bg-black/70 transition-colors">
+            <Camera className="w-5 h-5 text-white" />
+          </div>
+        </button>
       )}
 
       {/* Quick Actions (Like/Comment buttons) */}
@@ -381,3 +371,4 @@ export function BookCover({
     </div>
   );
 }
+

@@ -8,8 +8,24 @@ import './i18n';
 import { initializeAppLanguage } from './lib/appLanguage';
 import './index.css';
 
+// Safe timer management to prevent double-invoke issues
+const endedTimers = new Set<string>();
+
+function safeTimeEnd(name: string) {
+  if (endedTimers.has(name)) return;
+  try { 
+    console.timeEnd(name); 
+  } catch (e) {
+    // Timer doesn't exist, ignore
+  }
+  endedTimers.add(name);
+}
+
 // Instrumentation: Mesurer le temps de boot
-console.time('APP_BOOT');
+if (!(window as any).__appBootStarted) {
+  (window as any).__appBootStarted = true;
+  console.time('APP_BOOT');
+}
 console.log('[BOOT] Starting app initialization...');
 
 // Initialize language before rendering (priority: user_profiles > localStorage > navigator > 'fr')
@@ -33,7 +49,8 @@ initializeAppLanguage().then(() => {
 
   // Marquer le premier render React
   console.log('[BOOT] React root rendered');
-  console.timeEnd('APP_BOOT');
+  // Use safeTimeEnd to prevent double-invoke issues
+  setTimeout(() => safeTimeEnd('APP_BOOT'), 0);
 }).catch((error) => {
   console.error('[BOOT] Error initializing app language:', error);
   // Continue anyway with default language
