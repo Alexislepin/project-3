@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { scheduleGoalCheck } from '../utils/goalNotifications';
+import { debugLog, debugError } from '../utils/logger';
+import { mapAuthError, FriendlyAuthError } from '../lib/authErrors';
 
 // Safe timer management to prevent double-invoke issues with React StrictMode
 const endedTimers = new Set<string>();
@@ -16,13 +18,30 @@ function safeTimeEnd(name: string) {
   endedTimers.add(name);
 }
 
+export interface UserProfile {
+  id: string;
+  username: string | null;
+  display_name: string | null;
+  bio: string | null;
+  avatar_url: string | null;
+  onboarding_completed: boolean;
+  has_password: boolean;
+  interests: string[];
+  [key: string]: any;
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
+  profile: UserProfile | null;
+  profileLoading: boolean;
   loading: boolean;
-  signUp: (email: string, password: string, username: string, displayName: string) => Promise<{ error: any }>;
-  signIn: (email: string, password: string) => Promise<{ error: any }>;
+  signUp: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
+  signIn: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
   signOut: () => Promise<void>;
+  refreshProfile: (userId?: string) => Promise<void>;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: any }>;
+  isOnboardingComplete: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,6 +49,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -55,14 +76,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (initTimeout) clearTimeout(initTimeout);
       if (!isMounted) return;
       
-      console.log('[AUTH] Session retrieved:', session ? 'authenticated' : 'not authenticated');
+      if (session) {
+        console.log('[AUTH] INITIAL_SESSION: Session found on mount', {
+          userId: session.user?.id,
+          email: session.user?.email,
+          expiresAt: session.expires_at,
+        });
+      } else {
+        console.log('[AUTH] INITIAL_SESSION: No session found on mount');
+      }
+      
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
       safeTimeEnd('AUTH_INIT');
 
       if (session?.user) {
+        console.log('[AUTH] User authenticated, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        // Fetch profile after session is set
+        refreshProfile(session.user.id);
       }
     }).catch((error) => {
       if (initTimeout) clearTimeout(initTimeout);
@@ -73,16 +106,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       safeTimeEnd('AUTH_INIT');
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
       
-      console.log('[AUTH] Auth state changed:', _event);
+      console.log(`[AUTH] Auth state changed: ${event}`, {
+        hasSession: !!session,
+        userId: session?.user?.id,
+        email: session?.user?.email,
+      });
+      
+      // Logger explicitement les événements importants
+      if (event === 'SIGNED_IN') {
+        console.log('[AUTH] SIGNED_IN: User successfully signed in', {
+          userId: session?.user?.id,
+          email: session?.user?.email,
+          provider: session?.user?.app_metadata?.provider,
+        });
+      } else if (event === 'INITIAL_SESSION') {
+        console.log('[AUTH] INITIAL_SESSION: Initial session from onAuthStateChange', {
+          hasSession: !!session,
+          userId: session?.user?.id,
+        });
+      } else if (event === 'SIGNED_OUT') {
+        console.log('[AUTH] SIGNED_OUT: User signed out');
+      } else if (event === 'TOKEN_REFRESHED') {
+        console.log('[AUTH] TOKEN_REFRESHED: Access token refreshed');
+      }
+      
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
 
       if (session?.user) {
+        console.log('[AUTH] Session active, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        // Fetch profile after session is set
+        refreshProfile(session.user.id).then(async () => {
+          // If OAuth user (Google), ensure has_password is false
+          const provider = session.user.app_metadata?.provider;
+          if (provider === 'google') {
+            // Re-fetch profile to get latest data
+            const { data: latestProfile } = await supabase
+              .from('user_profiles')
+              .select('has_password')
+              .eq('id', session.user.id)
+              .single();
+            
+            if (latestProfile && latestProfile.has_password !== false) {
+              await updateProfile({ has_password: false });
+            }
+          }
+        }).catch((err) => {
+          debugError('[AUTH] Error in refreshProfile callback:', err);
+        });
+      } else {
+        console.log('[AUTH] No active session');
+        setProfile(null);
       }
     });
 
@@ -93,83 +172,214 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const signUp = async (email: string, password: string, username: string, displayName: string) => {
+  const refreshProfile = async (userId?: string) => {
+    const targetUserId = userId || user?.id;
+    if (!targetUserId) {
+      setProfile(null);
+      return;
+    }
+
+    setProfileLoading(true);
     try {
-      // Créer le compte utilisateur
+      debugLog('[AUTH] Fetching user profile...', { userId: targetUserId });
+      
+      // Step 1: Try to fetch profile
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', targetUserId)
+        .maybeSingle();
+
+      // Step 2: Handle errors (log but continue)
+      if (error) {
+        debugError('[AUTH] Error fetching profile:', error);
+        // Continue to create profile if data is null
+      }
+
+      // Step 3: If profile exists, use it
+      if (data) {
+        debugLog('[AUTH] Profile fetched successfully');
+        setProfile(data as UserProfile);
+        setProfileLoading(false);
+        return;
+      }
+
+      // Step 4: Profile doesn't exist, create minimal one using upsert
+      debugLog('[AUTH] Profile not found, creating minimal profile...');
+      
+      // Determine has_password based on auth provider
+      const { data: authUser } = await supabase.auth.getUser();
+      const provider = authUser?.user?.app_metadata?.provider || 'email';
+      const hasPassword = provider === 'email';
+
+      const { data: upsertedProfile, error: upsertError } = await supabase
+        .from('user_profiles')
+        .upsert(
+          {
+            id: targetUserId,
+            username: null,
+            display_name: null,
+            bio: null,
+            avatar_url: null,
+            onboarding_completed: false,
+            has_password: hasPassword,
+            interests: [],
+            xp_total: 0,
+            current_streak: 0,
+          },
+          {
+            onConflict: 'id',
+            ignoreDuplicates: false,
+          }
+        )
+        .select()
+        .single();
+
+      if (upsertError) {
+        debugError('[AUTH] Error upserting profile:', upsertError);
+        setProfile(null);
+      } else if (upsertedProfile) {
+        debugLog('[AUTH] Profile created/updated successfully');
+        setProfile(upsertedProfile as UserProfile);
+      } else {
+        // Fallback: try to fetch again
+        const { data: fetchedProfile } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', targetUserId)
+          .single();
+        
+        if (fetchedProfile) {
+          setProfile(fetchedProfile as UserProfile);
+        } else {
+          setProfile(null);
+        }
+      }
+    } catch (err: any) {
+      debugError('[AUTH] Error in refreshProfile:', err);
+      setProfile(null);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const updateProfile = async (updates: Partial<UserProfile>) => {
+    if (!user) {
+      return { error: { message: 'User not authenticated' } };
+    }
+
+    try {
+      debugLog('[AUTH] Updating profile...', updates);
+      const { error } = await supabase
+        .from('user_profiles')
+        .update(updates)
+        .eq('id', user.id);
+
+      if (error) {
+        debugError('[AUTH] Error updating profile:', error);
+        return { error };
+      }
+
+      // Refresh profile after update
+      await refreshProfile();
+      return { error: null };
+    } catch (err: any) {
+      debugError('[AUTH] Error in updateProfile:', err);
+      return { error: { message: err.message || 'Erreur lors de la mise à jour du profil' } };
+    }
+  };
+
+  const signUp = async (email: string, password: string) => {
+    try {
+      debugLog('[AUTH] Signing up user...');
+      // Créer le compte utilisateur (sans username/displayName)
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          data: {
-            username,
-            display_name: displayName,
-          },
           emailRedirectTo: undefined, // Pas de redirection email
         },
       });
 
       if (error) {
-        return { error };
+        debugError('[AUTH] Sign up error:', error);
+        return { error: mapAuthError(error) };
       }
 
       if (!data.user) {
-        return { error: { message: 'Erreur lors de la création du compte' } };
+        return { error: { title: 'Erreur', message: 'Erreur lors de la création du compte', action: 'none' as const } };
       }
 
-      // Créer le profil immédiatement (ne pas attendre le trigger)
-      const { error: insertError } = await supabase
+      // Créer le profil minimal (onboarding_completed = false) avec upsert
+      const { error: upsertError } = await supabase
         .from('user_profiles')
-        .insert({
-          id: data.user.id,
-          username,
-          display_name: displayName,
-          bio: '',
-          avatar_url: '',
-          interests: [],
-        });
+        .upsert(
+          {
+            id: data.user.id,
+            username: null,
+            display_name: null,
+            bio: null,
+            avatar_url: null,
+            onboarding_completed: false,
+            has_password: true, // User signed up with password
+            interests: [],
+            xp_total: 0,
+            current_streak: 0,
+          },
+          {
+            onConflict: 'id',
+            ignoreDuplicates: false,
+          }
+        );
 
-      if (insertError) {
-        console.error('Erreur création profil:', insertError);
-        // Si l'insertion échoue, essayer de vérifier si le trigger l'a créé
-        const { data: existingProfile } = await supabase
-          .from('user_profiles')
-          .select('id')
-          .eq('id', data.user.id)
-          .single();
-        
-        if (!existingProfile) {
-          return { error: insertError };
-        }
-        // Le profil existe déjà (créé par le trigger), c'est bon
+      if (upsertError) {
+        debugError('[AUTH] Error upserting profile:', upsertError);
+        // Continue anyway - profile might be created by trigger
       }
 
+      debugLog('[AUTH] Sign up successful');
       return { error: null };
     } catch (err: any) {
-      console.error('Erreur signUp:', err);
-      return { error: { message: err.message || 'Erreur lors de la création du compte' } };
+      debugError('[AUTH] Error in signUp:', err);
+      return { error: mapAuthError(err) };
     }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    return { error };
+      if (error) {
+        return { error: mapAuthError(error) };
+      }
+
+      return { error: null };
+    } catch (err: any) {
+      return { error: mapAuthError(err) };
+    }
   };
 
   const signOut = async () => {
     await supabase.auth.signOut();
   };
 
+  const isOnboardingComplete = profile?.onboarding_completed ?? false;
+
   const value = {
     user,
     session,
+    profile,
+    profileLoading,
     loading,
     signUp,
     signIn,
     signOut,
+    refreshProfile,
+    updateProfile,
+    isOnboardingComplete,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

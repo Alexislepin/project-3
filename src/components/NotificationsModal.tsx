@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
-import { X, Heart, RefreshCw, UserPlus, UserCheck, MessageCircle } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDistanceToNow } from '../utils/dateUtils';
 import { useScrollLock } from '../hooks/useScrollLock';
-import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
 interface NotificationsModalProps {
   onClose: () => void;
   onUserClick?: (userId: string) => void;
+  onOpenMyActivity?: (activityId: string, commentId?: string | null, notifType?: 'like' | 'comment') => void;
 }
+
+type NotifType = 'comment' | 'like' | 'follow';
 
 interface Notification {
   id: string;
@@ -26,12 +28,193 @@ interface Notification {
   };
   comment?: {
     content: string;
+    id?: string;
   };
   reactionType?: string;
   created_at: string;
+  read?: boolean;
 }
 
-export function NotificationsModal({ onClose, onUserClick }: NotificationsModalProps) {
+// Composants UI propres
+function getIcon(type: NotifType) {
+  if (type === 'comment') return '💬';
+  if (type === 'like') return '💛';
+  return '👤';
+}
+
+function formatAgo(iso: string) {
+  return formatDistanceToNow(iso);
+}
+
+function Avatar({ name, url }: { name: string; url?: string | null }) {
+  const letter = (name?.trim()?.[0] ?? '?').toUpperCase();
+  return (
+    <div className="h-10 w-10 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
+      {url ? (
+        <img src={url} alt={name} className="h-full w-full object-cover" />
+      ) : (
+        <span className="text-sm font-semibold text-gray-600">{letter}</span>
+      )}
+    </div>
+  );
+}
+
+function FollowButton({
+  isFollowing,
+  onClick,
+  disabled,
+}: {
+  isFollowing: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={
+        isFollowing
+          ? "px-3 py-1.5 rounded-full text-xs font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          : "px-3 py-1.5 rounded-full text-xs font-bold bg-black text-white hover:bg-gray-900 disabled:opacity-50"
+      }
+    >
+      {isFollowing ? "Suivi" : "Suivre"}
+    </button>
+  );
+}
+
+function NotificationItem({
+  n,
+  onOpenBook,
+  onToggleFollow,
+  onUserClick,
+  onClick,
+}: {
+  n: {
+    id: string;
+    type: NotifType;
+    created_at: string;
+    actorName: string;
+    actorAvatar?: string | null;
+    bookTitle?: string | null;
+    commentText?: string | null;
+    isFollowing?: boolean;
+    unread?: boolean;
+  };
+  onOpenBook?: () => void;
+  onToggleFollow?: () => void;
+  onUserClick?: () => void;
+  onClick?: () => void;
+}) {
+  const icon = getIcon(n.type);
+
+  return (
+    <div className="px-4">
+      <div
+        role="button"
+        tabIndex={0}
+        className={[
+          "w-full flex gap-3 py-3 text-left transition-colors cursor-pointer",
+          "border-b border-gray-100",
+          n.unread 
+            ? "bg-neutral-50 border border-neutral-200 hover:bg-neutral-100" 
+            : "bg-white hover:bg-gray-50",
+        ].join(" ")}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onClick?.();
+          }
+        }}
+      >
+        <div className="shrink-0 relative">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUserClick?.();
+            }}
+            className="shrink-0"
+          >
+            <Avatar name={n.actorName} url={n.actorAvatar} />
+          </button>
+          {/* Dot unread */}
+          {n.unread && (
+            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-neutral-400 border border-white" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          {/* Ligne principale */}
+          <div className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUserClick?.();
+              }}
+              className="text-left flex-1"
+            >
+              <span className="text-sm leading-snug text-gray-900">
+                <span className="font-semibold">{n.actorName}</span>{" "}
+                <span className="text-gray-600">
+                  {n.type === 'comment'
+                    ? "a commenté votre lecture"
+                    : n.type === 'like'
+                    ? "a aimé votre lecture"
+                    : "s'est abonné à vous"}
+                </span>
+              </span>
+            </button>
+            <span className="text-[11px] text-gray-400 mt-0.5 whitespace-nowrap">
+              {formatAgo(n.created_at)}
+            </span>
+          </div>
+
+          {/* Sous-ligne : livre cliquable */}
+          {(n.bookTitle && n.type !== 'follow') && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenBook?.();
+              }}
+              className="mt-1 text-xs text-gray-500 hover:text-gray-900 text-left line-clamp-1"
+            >
+              {icon} <span className="italic">"{n.bookTitle}"</span>
+            </button>
+          )}
+
+          {/* Preview commentaire */}
+          {n.type === 'comment' && n.commentText && (
+            <div className="mt-2 inline-flex max-w-full rounded-full bg-gray-50 border border-gray-200 px-3 py-1">
+              <p className="text-xs text-gray-700 line-clamp-1">
+                {n.commentText}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Action à droite */}
+        {n.type === 'follow' && (
+          <div className="shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
+            <FollowButton
+              isFollowing={!!n.isFollowing}
+              onClick={(e) => {
+                e?.stopPropagation();
+                onToggleFollow?.();
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function NotificationsModal({ onClose, onUserClick, onOpenMyActivity }: NotificationsModalProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [followingIds, setFollowingIds] = useState<string[]>([]);
@@ -68,6 +251,27 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
       .eq('read', false);
   };
 
+  const markNotificationAsRead = async (notificationId: string) => {
+    if (!user) return;
+
+    // Update optimistically in state
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
+    );
+
+    // Update in database
+    try {
+      // Try to update in notifications table (for follow notifications)
+      await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', notificationId)
+        .eq('user_id', user.id);
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
   const loadNotifications = async () => {
     if (!user) return;
 
@@ -84,7 +288,11 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
         .order('created_at', { ascending: false })
         .limit(30);
       
-      followNotifications = result.data || [];
+      // Marquer read: false par défaut si le champ n'existe pas
+      followNotifications = (result.data || []).map((n: any) => ({
+        ...n,
+        read: n.read ?? false,
+      }));
     } catch (error) {
       console.error('Erreur lors du chargement des notifications follow:', error);
     }
@@ -132,6 +340,7 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
           },
           reactionType: reaction.type,
           created_at: reaction.created_at,
+          read: false, // Les réactions n'ont pas de champ read dans la table
         }));
       }
     } catch (error) {
@@ -181,8 +390,10 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
           },
           comment: {
             content: comment.content || '',
+            id: comment.id,
           },
           created_at: comment.created_at,
+          read: false, // Les commentaires n'ont pas de champ read dans la table
         }));
       }
     } catch (error) {
@@ -222,6 +433,7 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
             avatar_url: profile.avatar_url,
           },
           created_at: notif.created_at,
+          read: notif.read ?? false,
         };
       });
 
@@ -234,52 +446,26 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
     setLoading(false);
   };
 
-  const getNotificationIcon = (type: string) => {
-    switch (type) {
-      case 'follow':
-        return UserPlus;
-      case 'reaction':
-        return Heart;
-      case 'comment':
-        return MessageCircle;
-      default:
-        return Heart;
+  // Extraire le titre du livre depuis activity.title (format: "Read [Book Title]")
+  const extractBookTitle = (activityTitle?: string): string | null => {
+    if (!activityTitle) return null;
+    // Format typique: "Read [Book Title]" ou "Lu [Book Title]" ou juste "[Book Title]"
+    const patterns = [
+      /Read\s+"?([^"]+)"?/i,
+      /Lu\s+"?([^"]+)"?/i,
+      /"?([^"]+)"?/,
+    ];
+    for (const pattern of patterns) {
+      const match = activityTitle.match(pattern);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
     }
+    return activityTitle;
   };
 
-  const getNotificationText = (notif: Notification) => {
-    if (notif.type === 'follow') {
-      return (
-        <>
-          <span className="font-semibold">{notif.user.display_name}</span> s'est abonné à vous
-        </>
-      );
-    }
-    if (notif.type === 'reaction') {
-      return (
-        <>
-          <span className="font-semibold">{notif.user.display_name}</span> a aimé votre lecture
-          {notif.activity?.title && (
-            <span className="text-stone-600"> "{notif.activity.title}"</span>
-          )}
-        </>
-      );
-    }
-    if (notif.type === 'comment') {
-      return (
-        <>
-          <span className="font-semibold">{notif.user.display_name}</span> a commenté votre lecture
-          {notif.activity?.title && (
-            <span className="text-stone-600"> "{notif.activity.title}"</span>
-          )}
-        </>
-      );
-    }
-    return <span className="font-semibold">{notif.user.display_name}</span>;
-  };
-
-  const handleFollow = async (userId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleFollow = async (userId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     if (!user || userId === user.id) return;
 
     const isFollowing = followingIds.includes(userId);
@@ -308,158 +494,180 @@ export function NotificationsModal({ onClose, onUserClick }: NotificationsModalP
 
   useScrollLock(true);
 
-  return (
-    <div 
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4 py-6"
-      data-modal-overlay
-      style={{ 
-        paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))', 
-        paddingTop: 'calc(1.5rem + env(safe-area-inset-top))' 
-      }}
-      onClick={onClose}
-      onTouchMove={(e) => {
-        // Prevent scroll on overlay
-        const target = e.target as HTMLElement;
-        if (!target.closest('[data-modal-content]')) {
-          e.preventDefault();
+  // Handler pour cliquer sur une notification
+  const handleNotificationClick = async (notif: Notification) => {
+    // Marquer comme lu (optimiste)
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
+    );
+
+    // Marquer comme lu en base
+    try {
+      await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', notif.id)
+        .eq('user_id', user?.id);
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+
+    // Fermer le modal
+    onClose();
+
+    // Navigation selon le type
+    switch (notif.type) {
+      case 'reaction':
+        // Ouvrir MON profil avec focus sur MON activité
+        if (notif.activity?.id && onOpenMyActivity) {
+          onOpenMyActivity(notif.activity.id, null, 'like');
         }
-      }}
-    >
+        break;
+
+      case 'comment':
+        // Ouvrir MON profil avec focus sur MON activité et le commentaire
+        if (notif.activity?.id && onOpenMyActivity) {
+          const commentId = notif.comment?.id || null;
+          onOpenMyActivity(notif.activity.id, commentId, 'comment');
+        }
+        break;
+
+      case 'follow':
+        // Ouvrir le profil de l'utilisateur qui a suivi (actor_id)
+        if (notif.userId && onUserClick) {
+          onUserClick(notif.userId);
+        }
+        break;
+
+      default:
+        // Fallback: activité si disponible, sinon profil
+        if (notif.activity?.id && onOpenMyActivity) {
+          onOpenMyActivity(notif.activity.id, notif.comment?.id || null);
+        } else if (notif.userId && onUserClick) {
+          onUserClick(notif.userId);
+        }
+        break;
+    }
+  };
+
+  // Transformer les notifications pour NotificationItem
+  const transformedNotifications = notifications.map((notif) => {
+    const notifType: NotifType = notif.type === 'reaction' ? 'like' : notif.type === 'comment' ? 'comment' : 'follow';
+    const isFollowing = notif.userId && followingIds.includes(notif.userId);
+    const isOwnProfile = notif.userId === user?.id;
+    
+    return {
+      id: notif.id,
+      type: notifType,
+      created_at: notif.created_at,
+      actorName: notif.user.display_name || 'Utilisateur',
+      actorAvatar: notif.user.avatar_url,
+      bookTitle: extractBookTitle(notif.activity?.title),
+      commentText: notif.comment?.content,
+      isFollowing: notifType === 'follow' ? isFollowing : undefined,
+      unread: !notif.read,
+      userId: notif.userId,
+      activityId: notif.activity?.id,
+      commentId: notif.comment?.id,
+      isOwnProfile,
+      // Garder la référence à la notification originale pour handleNotificationClick
+      originalNotif: notif,
+    };
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]" onClick={onClose}>
       <div
-        data-modal-content
-        className="bg-white rounded-3xl w-full max-w-2xl flex flex-col overflow-hidden shadow-2xl"
-        style={{
-          maxHeight: `calc(100vh - var(--sat) - var(--sab) - ${TABBAR_HEIGHT}px - 2rem)`,
-          marginBottom: '1rem',
-        }}
+        className="rounded-2xl bg-white shadow-xl overflow-hidden w-[420px] max-w-[92vw]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
-          <h2 className="text-xl font-bold">Notifications</h2>
+        {/* Header */}
+        <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold text-gray-900">Notifications</h2>
+            <span className="text-xs text-gray-400">•</span>
+            <span className="text-xs text-gray-500">{notifications.length}</span>
+          </div>
+
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
                 loadNotifications();
                 loadFollowingIds();
               }}
-              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
-              title="Rafraîchir"
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              title="Actualiser"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCw className="w-4 h-4" />
             </button>
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+              title="Fermer"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        <div 
-          className="flex-1 overflow-y-auto min-h-0 px-4 pt-3"
-          style={{ 
-            paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))',
-            WebkitOverflowScrolling: 'touch',
-            overscrollBehaviorY: 'contain',
-            overscrollBehavior: 'contain',
-            touchAction: 'pan-y',
-          }}
-        >
+        {/* List */}
+        <div className="max-h-[70vh] overflow-y-auto">
           {loading ? (
-            <div className="text-center py-12 text-text-sub-light">Chargement...</div>
+            <div className="text-center py-12 text-gray-500">Chargement...</div>
           ) : notifications.length === 0 ? (
-            <div className="text-center py-12">
-              <Heart className="w-16 h-16 mx-auto mb-4 text-text-sub-light" />
-              <p className="text-lg font-medium text-text-main-light mb-2">Aucune notification</p>
-              <p className="text-sm text-text-sub-light">
+            <div className="text-center py-12 px-4">
+              <div className="text-4xl mb-4">💬</div>
+              <p className="text-lg font-medium text-gray-900 mb-2">Aucune notification</p>
+              <p className="text-sm text-gray-500">
                 Vous recevrez des notifications quand quelqu'un interagit avec vous
               </p>
             </div>
           ) : (
-            <div className="space-y-2 py-2">
-              {notifications.map((notif) => {
-                const Icon = getNotificationIcon(notif.type);
-                const isFollowing = notif.userId && followingIds.includes(notif.userId);
-                const isOwnProfile = notif.userId === user?.id;
-                const showFollowButton = notif.type === 'follow' && !isOwnProfile && onUserClick && notif.userId;
-
+            <>
+              {transformedNotifications.map((notif) => {
                 return (
-                  <button
+                  <NotificationItem
                     key={notif.id}
-                    type="button"
-                    onClick={() => {
-                      if (!notif.userId) return;
-                      onUserClick?.(notif.userId);
-                      setTimeout(() => onClose?.(), 0);
+                    n={{
+                      id: notif.id,
+                      type: notif.type,
+                      created_at: notif.created_at,
+                      actorName: notif.actorName,
+                      actorAvatar: notif.actorAvatar,
+                      bookTitle: notif.bookTitle,
+                      commentText: notif.commentText,
+                      isFollowing: notif.isFollowing,
+                      unread: notif.unread,
                     }}
-                    className="w-full flex items-center gap-3 p-4 rounded-2xl hover:bg-stone-50 transition-colors text-left"
-                  >
-                    <div className="w-10 h-10 bg-stone-200 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
-                      {notif.user.avatar_url ? (
-                        <img
-                          src={notif.user.avatar_url}
-                          alt={notif.user.display_name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <span className="text-stone-600 font-medium">
-                          {notif.user.display_name.charAt(0).toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Icon className="w-4 h-4 text-primary flex-shrink-0" />
-                        <p className="text-sm text-stone-900 flex-1 leading-relaxed">
-                          {getNotificationText(notif)}
-                        </p>
-                      </div>
-                      {notif.type === 'comment' && notif.comment?.content && (
-                        <div className="ml-6 mt-2 p-3 bg-stone-50 rounded-lg border border-stone-200">
-                          <p className="text-xs text-stone-700 line-clamp-2">
-                            {notif.comment.content}
-                          </p>
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between mt-2">
-                        <p className="text-xs text-stone-500">{formatDistanceToNow(notif.created_at)}</p>
-                        {showFollowButton && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleFollow(notif.userId, e);
-                            }}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 ${
-                              isFollowing
-                                ? 'bg-stone-100 text-stone-900 hover:bg-stone-200'
-                                : 'bg-primary text-black hover:brightness-95'
-                            }`}
-                          >
-                            {isFollowing ? (
-                              <>
-                                <UserCheck className="w-3.5 h-3.5" />
-                                Suivi
-                              </>
-                            ) : (
-                              <>
-                                <UserPlus className="w-3.5 h-3.5" />
-                                Suivre
-                              </>
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </button>
+                    onClick={() => {
+                      if (notif.originalNotif) {
+                        handleNotificationClick(notif.originalNotif);
+                      }
+                    }}
+                    onUserClick={() => {
+                      if (notif.userId && onUserClick) {
+                        markNotificationAsRead(notif.id);
+                        onUserClick(notif.userId);
+                        setTimeout(() => onClose(), 0);
+                      }
+                    }}
+                    onOpenBook={() => {
+                      // Ouvrir MON activité si disponible
+                      if (notif.activityId && onOpenMyActivity) {
+                        markNotificationAsRead(notif.id);
+                        onOpenMyActivity(notif.activityId, notif.commentId || null, notif.type === 'comment' ? 'comment' : 'like');
+                        setTimeout(() => onClose(), 0);
+                      }
+                    }}
+                    onToggleFollow={() => {
+                      if (notif.userId) {
+                        handleFollow(notif.userId);
+                      }
+                    }}
+                  />
                 );
               })}
-              {/* Spacer pour éviter que le dernier item soit caché par la tab bar */}
-              <div className="h-4" />
-            </div>
+            </>
           )}
         </div>
       </div>

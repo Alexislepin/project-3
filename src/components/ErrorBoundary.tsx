@@ -17,6 +17,13 @@ export class ErrorBoundary extends Component<Props, State> {
       hasError: false,
       error: null,
     };
+    // Diagnostic: log mount
+    console.log('[MOUNT]', 'ErrorBoundary');
+  }
+
+  componentWillUnmount() {
+    // Diagnostic: log unmount
+    console.log('[UNMOUNT]', 'ErrorBoundary');
   }
 
   static getDerivedStateFromError(error: Error): State {

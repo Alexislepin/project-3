@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus, Sparkles } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 import { BookDetailsWithManagement } from '../components/BookDetailsWithManagement';
 import { BookDetailsModal } from '../components/BookDetailsModal';
 import { BarcodeScanner } from '../components/BarcodeScanner';
@@ -27,6 +28,7 @@ import { BookRecapModal } from '../components/BookRecapModal';
 import { ReadingSetupModal } from '../components/ReadingSetupModal';
 import { normalizeReadingState } from '../lib/readingState';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
+import { RecapUIState, DEFAULT_RECAP_UI } from '../lib/recapUI';
 
 type BookStatus = 'reading' | 'completed' | 'want_to_read';
 type FilterType = BookStatus | 'explore';
@@ -76,9 +78,13 @@ export function Library({}: LibraryProps) {
   const [rateLimitError, setRateLimitError] = useState(false);
   const [recapOpen, setRecapOpen] = useState(false);
   const [recapBook, setRecapBook] = useState<{
-    book: { id: string; title: string; author?: string; cover_url?: string | null; total_pages?: number | null };
+    book: { id: string; title: string; author?: string; cover_url?: string | null; total_pages?: number | null; book_key?: string | null; isbn?: string | null; openlibrary_key?: string | null; google_books_id?: string | null };
     uptoPage: number;
   } | null>(null);
+  // ✅ États pour BookRecapModal
+  const [recapUI, setRecapUI] = useState<RecapUIState>(DEFAULT_RECAP_UI);
+  const [recapTabTouched, setRecapTabTouched] = useState(false);
+  const recapReqRef = useRef<string | null>(null);
   const [addCoverBookId, setAddCoverBookId] = useState<string | null>(null);
   const [addCoverBookTitle, setAddCoverBookTitle] = useState<string>('');
   const { user } = useAuth();
@@ -1358,6 +1364,150 @@ export function Library({}: LibraryProps) {
     // Toast géré par l'appelant (ManageBookModal)
   };
 
+  // ✅ Fonction loadRecap pour BookRecapModal dans Library.tsx
+  const loadRecap = useCallback(async (force = false) => {
+    if (!user || !recapBook) return;
+    
+    const isValidBook = Boolean(recapBook.book?.id && recapBook.book.id !== 'noop' && recapBook.book.title);
+    if (!isValidBook) {
+      console.log('[Library] loadRecap blocked: invalid book (fallback)');
+      return;
+    }
+    
+    // ✅ NE JAMAIS recharger si on est en train de soumettre ou si le défi a été validé
+    if (recapUI.challengeSubmitting || recapUI.hasSubmittedChallenge) {
+      console.log('[Library] loadRecap blocked', { 
+        challengeSubmitting: recapUI.challengeSubmitting,
+        hasSubmittedChallenge: recapUI.hasSubmittedChallenge
+      });
+      return;
+    }
+    
+    // ✅ Guard pour empêcher les doubles loads (StrictMode)
+    const reqId = crypto.randomUUID();
+    recapReqRef.current = reqId;
+    
+    console.log('[Library] loadRecap called', { force, bookId: recapBook.book.id, uptoPage: recapBook.uptoPage });
+    
+    setRecapUI(s => ({ ...s, recapLoading: true, recapError: null, recapData: null }));
+    
+    try {
+      const payload: any = {
+        bookId: recapBook.book.id,
+        uptoPage: recapBook.uptoPage,
+        current_page: recapBook.uptoPage,
+        language: 'fr',
+        force,
+      };
+      
+      if (recapBook.book.book_key) {
+        payload.book_key = recapBook.book.book_key;
+      } else if (recapBook.book.openlibrary_key) {
+        payload.book_key = recapBook.book.openlibrary_key;
+      }
+      
+      if (recapBook.book.isbn) {
+        payload.isbn = recapBook.book.isbn;
+      }
+      
+      const { data, error } = await supabase.functions.invoke('book_recap_v2', {
+        body: payload,
+      });
+      
+      // ✅ Ignorer les réponses obsolètes
+      if (recapReqRef.current !== reqId) {
+        console.log('[Library] loadRecap: ignoring stale response', { reqId, current: recapReqRef.current });
+        return;
+      }
+      
+      if (error) {
+        const requestId = data?.requestId || data?.meta?.requestId || 'unknown';
+        const errorMessage = error.message || 'Erreur serveur';
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapError: { message: errorMessage, requestId },
+        }));
+        return;
+      }
+      
+      if (data && data.ok === false) {
+        const requestId = data.requestId || data.meta?.requestId || 'unknown';
+        if (data.status === 'no_data') {
+          setRecapUI(s => ({
+            ...s,
+            recapLoading: false,
+            recapData: null,
+            recapError: null,
+          }));
+          return;
+        }
+        const errorMessage = data.error || 'Impossible de charger le rappel';
+        const details = data.meta?.details ? ` (${data.meta.details})` : '';
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapError: { message: `${errorMessage}${details}`, requestId },
+        }));
+        return;
+      }
+      
+      if (data && data.status === 'no_data') {
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapData: null,
+          recapError: null,
+        }));
+        return;
+      }
+      
+      if (data && data.ultra_20s) {
+        const mapped = {
+          summary: data.summary || '',
+          ultra_20s: data.ultra_20s,
+          takeaways: data.takeaways || '',
+          question: data.question,
+          answer: data.answer,
+          explanation: data.explanation,
+          key_takeaways: data.key_takeaways,
+          key_moments: data.key_moments,
+          challenge: data.challenge,
+          chapters: data.chapters,
+          detailed: data.detailed,
+          characters: data.characters || [],
+          uptoPage: data.uptoPage || data.meta?.uptoPage || recapBook.uptoPage,
+          meta: data.meta,
+        };
+        
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapData: mapped,
+          recapError: null,
+          // ✅ Ne reset l'onglet que si l'utilisateur n'a pas encore touché
+          tab: recapTabTouched ? s.tab : 'personnages',
+        }));
+      } else {
+        const requestId = data?.meta?.requestId || 'unknown';
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapData: null,
+          recapError: { message: 'Réponse invalide du serveur', requestId },
+        }));
+      }
+    } catch (err) {
+      if (recapReqRef.current !== reqId) return;
+      const errorMessage = err instanceof Error ? err.message : 'Erreur inattendue';
+      setRecapUI(s => ({
+        ...s,
+        recapLoading: false,
+        recapError: { message: errorMessage, requestId: 'unknown' },
+      }));
+    }
+  }, [user, recapBook, recapUI.challengeSubmitting, recapUI.hasSubmittedChallenge, recapTabTouched]);
+
   const handleChangeBookStatus = async (userBookId: string, newStatus: BookStatus) => {
     if (!user) return;
 
@@ -1586,8 +1736,33 @@ export function Library({}: LibraryProps) {
 
   // Ancienne logique d'ajout manuel via AddBookManuallyModal remplacée
 
+  // Debug: Log platform and search bar visibility
+  useEffect(() => {
+    const platform = Capacitor.getPlatform();
+    debugLog('[Library] Component mounted', { 
+      platform, 
+      isNative: Capacitor.isNativePlatform(),
+      searchBarRendered: true // Always rendered, no conditional
+    });
+    
+    // Check if search bar element exists
+    const searchBarEl = document.querySelector('[data-search-bar]');
+    if (searchBarEl) {
+      const rect = searchBarEl.getBoundingClientRect();
+      debugLog('[Library] Search bar element found', {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+        visible: rect.width > 0 && rect.height > 0
+      });
+    } else {
+      debugLog('[Library] Search bar element NOT found in DOM');
+    }
+  }, []);
+
   return (
-    <div className="h-screen max-w-2xl mx-auto font-sans text-neutral-900 overflow-hidden" style={{ isolation: 'isolate' }}>
+    <div className="h-screen max-w-2xl mx-auto font-sans text-neutral-900 overflow-hidden" style={{ isolation: 'isolate', position: 'relative' }}>
       {/* Fixed Header - now truly fixed via AppHeader component */}
       <AppHeader
         title={t('library.title')}
@@ -1603,10 +1778,16 @@ export function Library({}: LibraryProps) {
       />
       
       {/* Fixed Search + Tabs section (below header) */}
+      {/* Always visible on all platforms - no conditional rendering */}
       <div 
-        className="fixed left-0 right-0 bg-white border-b border-gray-100 z-40"
+        data-search-bar
+        className="fixed left-0 right-0 bg-white border-b border-gray-100"
         style={{
-          top: 'calc(56px + env(safe-area-inset-top))', // Below AppHeader
+          top: 'calc(56px + env(safe-area-inset-top))', // Below AppHeader: 56px (header height) + safe-area (AppHeader is sticky and handles safe-area)
+          zIndex: 40, // Use inline style for z-index to ensure it works on iOS
+          visibility: 'visible', // Explicitly ensure visibility
+          display: 'block', // Explicitly ensure display
+          position: 'fixed', // Explicitly ensure fixed positioning
         }}
       >
         <div className="max-w-2xl mx-auto px-4 py-3">
@@ -1670,7 +1851,7 @@ export function Library({}: LibraryProps) {
       <div
         className="h-full overflow-y-auto"
         style={{
-          paddingTop: 'calc(136px + env(safe-area-inset-top))', // Header (56px) + Search/Tabs section (~80px: py-3 + input + buttons)
+          paddingTop: 'calc(130px + env(safe-area-inset-top))', // Header (56px + safe-area) + Search/Tabs section (~74px)
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
@@ -1679,8 +1860,9 @@ export function Library({}: LibraryProps) {
         }}
       >
         <div 
-          className="p-4 no-scrollbar"
+          className="px-4 pb-4 no-scrollbar"
           style={{
+            paddingTop: '0px', // No extra spacing after filters
             paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           }}
         >
@@ -1870,7 +2052,7 @@ export function Library({}: LibraryProps) {
             </button>
           </div>
         ) : !searchQuery && userBooks.length > 0 ? (
-          <div className="space-y-3">
+          <div className="space-y-3" style={{ marginTop: '-6px' }}>
             {(() => {
               // Dédupliquer les livres par book.id avant le render
               const uniqueBooks = Array.from(
@@ -1917,6 +2099,10 @@ export function Library({}: LibraryProps) {
                           author: book.author,
                           cover_url: book.cover_url,
                           total_pages: book.total_pages,
+                          isbn: (book as any).isbn || null,
+                          book_key: (book as any).book_key || (book as any).openlibrary_work_key || null,
+                          openlibrary_key: (book as any).openlibrary_work_key || null,
+                          google_books_id: (book as any).google_books_id || null,
                         },
                         uptoPage: userBook.current_page || 0,
                       });
@@ -2045,6 +2231,10 @@ export function Library({}: LibraryProps) {
                     author: userBook.book.author,
                     cover_url: userBook.book.cover_url,
                     total_pages: userBook.book.total_pages,
+                    isbn: userBook.book.isbn || null,
+                    book_key: (userBook.book as any).book_key || (userBook.book as any).openlibrary_work_key || null,
+                    openlibrary_key: (userBook.book as any).openlibrary_work_key || null,
+                    google_books_id: userBook.book.google_books_id || null,
                   },
                   uptoPage: userBook.current_page || 0,
                 });
@@ -2277,10 +2467,22 @@ export function Library({}: LibraryProps) {
           open={recapOpen}
           onClose={() => {
             setRecapOpen(false);
+            // ✅ Reset le state UI seulement si le défi n'a pas été validé
+            if (!recapUI.hasSubmittedChallenge) {
+              setRecapUI(DEFAULT_RECAP_UI);
+              setRecapTabTouched(false);
+            }
             setRecapBook(null);
           }}
           book={recapBook.book}
           uptoPage={recapBook.uptoPage}
+          ui={recapUI}
+          setUI={setRecapUI}
+          onTabChange={(tab) => {
+            setRecapTabTouched(true);
+            setRecapUI(s => ({ ...s, tab }));
+          }}
+          loadRecap={loadRecap}
         />
       )}
 

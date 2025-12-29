@@ -13,6 +13,7 @@ import { getCurrentLang } from '../lib/appLanguage';
 import { LibraryAIModal } from './LibraryAIModal';
 import { canonicalBookKey } from '../lib/bookSocial';
 import { useAuth } from '../contexts/AuthContext';
+import { useBookBlurb } from '../hooks/useBookBlurb';
 
 interface BookDetailsModalProps {
   book: any;
@@ -51,6 +52,9 @@ export function BookDetailsModal({
   const [showAIModal, setShowAIModal] = useState(false);
   const [userBook, setUserBook] = useState<any>(null);
   const [showAddCover, setShowAddCover] = useState(false);
+  
+  // Hook pour le blurb (résumé court instantané)
+  const { blurb, loading: loadingBlurb, status: blurbStatus } = useBookBlurb(book);
 
   // Log book object when modal opens
   useEffect(() => {
@@ -292,14 +296,13 @@ export function BookDetailsModal({
     >
       <div
         data-modal-content
-        className="bg-background-light rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
+        className="bg-background-light rounded-3xl w-full max-w-lg flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         style={{ 
-          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
-          maxHeight: 'calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))'
+          maxHeight: '85vh'
         }}
       >
-        <div className="sticky top-0 bg-background-light/95 backdrop-blur-sm z-10 px-6 pt-4 pb-3 border-b border-gray-200">
+        <div className="sticky top-0 bg-background-light z-10 px-6 pt-4 pb-3 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-text-main-light">{t('book.details')}</h2>
             <button
@@ -312,7 +315,13 @@ export function BookDetailsModal({
           </div>
         </div>
 
-        <div className="px-6 py-6" style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom) + 88px)' }}>
+        <div 
+          className="flex-1 overflow-y-auto min-h-0 px-6 py-6" 
+          style={{ 
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+          }}
+        >
           <div className="flex gap-4 mb-6 items-start">
             <div className="w-20 h-28 shrink-0">
               <BookCover
@@ -388,15 +397,22 @@ export function BookDetailsModal({
             <h4 className="text-sm font-bold text-text-main-light mb-3 uppercase tracking-wide">
               {t('book.summary')}
             </h4>
-            {loadingSummary || translating ? (
+            {/* Priorité 1: Blurb (résumé court généré) */}
+            {blurb && blurb.trim().length > 0 ? (
+              <p className="text-sm text-black/70 leading-relaxed whitespace-pre-line line-clamp-6">
+                {blurb}
+              </p>
+            ) : loadingSummary || translating || loadingBlurb ? (
               <p className="text-sm text-black/50 italic">
                 {translating ? t('book.translating') : t('common.loading')}
               </p>
             ) : displayDescription && displayDescription.trim().length > 0 ? (
+              /* Priorité 2: Description source traduite existante (fallback) */
               <p className="text-sm text-black/70 leading-relaxed whitespace-pre-line line-clamp-6">
                 {displayDescription}
               </p>
             ) : (
+              /* Priorité 3: Placeholder */
               <p className="text-sm text-black/50 italic">{t('book.summaryUnavailable')}</p>
             )}
           </div>
@@ -444,8 +460,13 @@ export function BookDetailsModal({
 
         {/* Footer with actions */}
         {(userBookId || onOpenRecap) && (
-          <div className="sticky bottom-0 bg-background-light border-t border-gray-200 px-6 py-4" style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}>
-            <div className="flex gap-3">
+          <div className="sticky bottom-0 bg-background-light border-t border-gray-200 rounded-b-3xl flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
+            <div 
+              className="px-6 py-3 flex gap-3"
+              style={{ 
+                paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+              }}
+            >
               {userBookId && onEditRequested && (
                 <button
                   onClick={onEditRequested}

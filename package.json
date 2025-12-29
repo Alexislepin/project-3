@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.0.0",
+    "@capacitor/browser": "^8.0.0",
     "@capacitor/camera": "^8.0.0",
     "@capacitor/cli": "^8.0.0",
     "@capacitor/core": "^8.0.0",
@@ -19,6 +20,7 @@
     "@capacitor/ios": "^8.0.0",
     "@capacitor/local-notifications": "^8.0.0",
     "@supabase/supabase-js": "^2.57.4",
+    "canvas-confetti": "^1.9.4",
     "html5-qrcode": "^2.3.8",
     "i18next": "^25.7.3",
     "i18next-browser-languagedetector": "^8.2.0",

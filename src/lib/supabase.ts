@@ -14,9 +14,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
 // The apikey header is always added, even for unauthenticated requests
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true,
+    flowType: 'implicit',
     autoRefreshToken: true,
-    detectSessionInUrl: false,
+    persistSession: true,
+    detectSessionInUrl: true,
   },
   // Ensure apikey header is always sent (Supabase client should do this automatically, but we're being explicit)
   global: {

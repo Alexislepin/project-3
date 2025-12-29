@@ -149,7 +149,7 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0" style={{ WebkitOverflowScrolling: 'touch' }}>
-          <div className="space-y-6 p-6 pb-20">
+          <div className="space-y-6 p-6" style={{ paddingBottom: 'calc(3rem + env(safe-area-inset-bottom) + 32px)' }}>
             {!browserSupported && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                 <p className="text-sm text-amber-800">

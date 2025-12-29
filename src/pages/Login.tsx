@@ -1,24 +1,27 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { signInWithGoogle } from '../lib/oauth';
+import { BrandLogo } from '../components/BrandLogo';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ title?: string; message: string; action?: 'go_login' | 'go_signup' | 'none' } | string>('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const { signIn } = useAuth();
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: window.location.origin
-      }
-    });
-    // Note: setGoogleLoading(false) ne sera pas atteint car redirection
+    setError('');
+    
+    const { error } = await signInWithGoogle();
+    
+    if (error) {
+      setError(error.message || 'Erreur lors de la connexion Google');
+      setGoogleLoading(false);
+    }
+    // Note: Si succès, le loading restera true car redirection/navigation
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -29,7 +32,7 @@ export function LoginPage() {
     const { error } = await signIn(email, password);
 
     if (error) {
-      setError(error.message || 'Erreur lors de la connexion');
+      setError(error);
       setLoading(false);
     } else {
       // Navigation sera gérée par App.tsx via AuthContext
@@ -52,7 +55,9 @@ export function LoginPage() {
         <div className="flex items-center justify-center min-h-full p-4">
           <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold tracking-tight mb-2 text-text-main-light">Lexu</h1>
+          <div className="mb-2">
+            <BrandLogo size={48} color="#111" />
+          </div>
           <p className="text-text-sub-light">Suivez votre progression, construisez votre élan</p>
         </div>
 
@@ -61,7 +66,16 @@ export function LoginPage() {
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">
-              {error}
+              <p className="font-semibold mb-1">{typeof error === 'object' ? (error.title || 'Erreur') : 'Erreur'}</p>
+              <p>{typeof error === 'object' ? error.message : error}</p>
+              {typeof error === 'object' && error.action === 'go_signup' && (
+                <a
+                  href="/signup"
+                  className="mt-2 inline-block text-sm font-semibold underline hover:text-red-800"
+                >
+                  S'inscrire
+                </a>
+              )}
             </div>
           )}
 
@@ -126,7 +140,7 @@ export function LoginPage() {
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
               </svg>
-              {googleLoading ? 'Connexion...' : 'Continuer avec Google'}
+              {googleLoading ? 'Connexion...' : 'Se connecter avec Google'}
             </button>
           </div>
 

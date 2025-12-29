@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { LoginPage } from '../pages/Login';
 
@@ -8,6 +8,12 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, loading } = useAuth();
+
+  // Diagnostic: logs mount/unmount
+  useEffect(() => {
+    console.log('[MOUNT]', 'ProtectedRoute');
+    return () => console.log('[UNMOUNT]', 'ProtectedRoute');
+  }, []);
 
   if (loading) {
     return (

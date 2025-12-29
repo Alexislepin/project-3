@@ -389,7 +389,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       <div 
         className="fixed left-0 right-0 z-40"
         style={{
-          top: 'calc(56px + env(safe-area-inset-top))', // Below AppHeader
+          top: '56px', // Below AppHeader (AppHeader already handles safe-area)
         }}
       >
         <div className="max-w-2xl mx-auto">
@@ -402,7 +402,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: 'calc(106px + env(safe-area-inset-top))', // Header (56px) + Tabs section (~50px)
+          paddingTop: '82px', // Header (56px) + Tabs section (~26px) - AppHeader already handles safe-area
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
@@ -430,7 +430,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         )}
 
         <div 
-          className="p-4" 
+          className="px-4 pb-4" 
           style={{ 
             transform: `translateY(${pullDistance}px)`,
             paddingBottom: 'calc(96px + env(safe-area-inset-bottom))',
@@ -444,7 +444,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
                 <>
                   {/* Following section */}
                   {processedSocialEvents.following.length > 0 && (
-                    <div className="mb-4">
+                    <div style={{ marginTop: '-6px' }}>
                       <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 px-1">
                         Abonnements
                       </h3>

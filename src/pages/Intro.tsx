@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { BrandLogo } from '../components/BrandLogo';
+import { celebrateStart } from '../lib/celebrate';
 
 interface IntroProps {
   onDone: () => void;
@@ -14,12 +16,18 @@ export function Intro({ onDone }: IntroProps) {
     setTimeout(() => setFadeIn(true), 50);
   }, []);
 
-  const handleStart = () => {
-    setFadeIn(false);
+  const handleStart = async () => {
+    // Celebration: haptic + confetti
+    await celebrateStart();
+
+    // Petite pause pour que l'utilisateur voie l'effet (un poil plus long = sûr de voir l'effet)
     setTimeout(() => {
-      onDone();
-      navigate('/home');
-    }, 200);
+      setFadeIn(false);
+      setTimeout(() => {
+        onDone();
+        navigate('/home');
+      }, 200);
+    }, 550);
   };
 
   return (
@@ -30,20 +38,7 @@ export function Intro({ onDone }: IntroProps) {
     >
       {/* Logo */}
       <div className="mb-8">
-        <img
-          src="/lexu-logo-white.png"
-          alt="LEXU"
-          className="w-[70%] max-w-[280px] h-auto object-contain"
-          onError={(e) => {
-            // Fallback si l'image n'existe pas
-            const target = e.target as HTMLImageElement;
-            target.style.display = 'none';
-            const fallback = document.createElement('div');
-            fallback.className = 'text-white text-6xl font-bold tracking-wider';
-            fallback.textContent = 'LEXU';
-            target.parentNode?.appendChild(fallback);
-          }}
-        />
+        <BrandLogo size={64} color="#fff" />
       </div>
 
       {/* Tagline */}

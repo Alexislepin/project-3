@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect } from 'react';
 import { BottomNav } from './BottomNav';
 
 type View = 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social';
@@ -11,6 +11,11 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children, currentView, onNavigate, onStartSession }: AppLayoutProps) {
+  // Diagnostic: logs mount/unmount
+  useEffect(() => {
+    console.log('[MOUNT]', 'AppLayout');
+    return () => console.log('[UNMOUNT]', 'AppLayout');
+  }, []);
   return (
     <div 
       className="h-screen bg-background-light overflow-hidden"

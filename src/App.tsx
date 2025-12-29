@@ -3,6 +3,7 @@ import { useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
 import { LoginPage } from './pages/Login';
 import { SignupPage } from './pages/Signup';
+import { ProfileOnboarding } from './pages/ProfileOnboarding';
 import { Onboarding } from './components/auth/Onboarding';
 import { LanguageOnboarding } from './components/auth/LanguageOnboarding';
 import { AppLayout } from './components/layout/AppLayout';
@@ -18,6 +19,10 @@ import { Debug } from './pages/Debug';
 import { ManageBook } from './pages/ManageBook';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
+import { handleOAuthCallback } from './lib/oauth';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
+import { debugLog, debugError } from './utils/logger';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
 
@@ -52,7 +57,7 @@ function App() {
   }, []);
   
   // Hook 1: Auth context
-  const { user, loading } = useAuth();
+  const { user, loading, profile, profileLoading, isOnboardingComplete } = useAuth();
   
   // Hook 2-8: State hooks (toujours dans le même ordre)
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
@@ -88,44 +93,41 @@ function App() {
   // Hook 9: Check onboarding status (NON-BLOQUANT)
   useEffect(() => {
     // Condition dans le body du hook (OK), pas autour du hook (interdit)
-    if (user && !needsLanguageOnboarding) {
-      // FIX: Ne pas bloquer le render - vérifier onboarding en arrière-plan
-      setCheckingOnboarding(true);
-      const checkOnboardingStatus = async () => {
-        if (!(window as any).__loadInitialDataStarted) {
-          (window as any).__loadInitialDataStarted = true;
-          console.time('LOAD_INITIAL_DATA');
-        }
-        console.log('[APP] Checking onboarding status...');
-        
-        try {
-          const { data: profile } = await supabase
-            .from('user_profiles')
-            .select('interests')
-            .eq('id', user.id)
-            .maybeSingle();
+    if (user && !needsLanguageOnboarding && !profileLoading) {
+      // Check profile onboarding completion
+      if (profile && !isOnboardingComplete) {
+        setNeedsOnboarding(true);
+      } else if (profile && isOnboardingComplete) {
+        // Also check interests onboarding (legacy)
+        setCheckingOnboarding(true);
+        const checkInterestsOnboarding = async () => {
+          try {
+            const { data: profileData } = await supabase
+              .from('user_profiles')
+              .select('interests')
+              .eq('id', user.id)
+              .maybeSingle();
 
-          if (profile && profile.interests && profile.interests.length > 0) {
+            if (profileData && profileData.interests && profileData.interests.length > 0) {
+              setNeedsOnboarding(false);
+            } else {
+              // Profile onboarding complete but interests not set - show interests onboarding
+              setNeedsOnboarding(true);
+            }
+          } catch (error) {
+            console.error('[APP] Error checking interests onboarding:', error);
             setNeedsOnboarding(false);
-          } else {
-            setNeedsOnboarding(true);
+          } finally {
+            setCheckingOnboarding(false);
           }
-        } catch (error) {
-          console.error('[APP] Error checking onboarding:', error);
-          // Default to no onboarding on error
-          setNeedsOnboarding(false);
-        } finally {
-          setCheckingOnboarding(false);
-          // Use safeTimeEnd to prevent double-invoke issues
-          safeTimeEnd('LOAD_INITIAL_DATA');
-        }
-      };
-
-      checkOnboardingStatus();
-    } else {
+        };
+        checkInterestsOnboarding();
+      }
+    } else if (!user) {
+      setNeedsOnboarding(false);
       setCheckingOnboarding(false);
     }
-  }, [user, needsLanguageOnboarding]);
+  }, [user, needsLanguageOnboarding, profile, profileLoading, isOnboardingComplete]);
 
   // Hook 10: Routing basé sur l'URL
   useEffect(() => {
@@ -158,6 +160,56 @@ function App() {
   // Hook 11: Initialize iOS swipe back gesture
   useEffect(() => {
     initSwipeBack();
+  }, []);
+
+  // Hook 12: Handle OAuth deep links (iOS/Android)
+  useEffect(() => {
+    // Only set up deep link listener on Capacitor platforms
+    if (!Capacitor.isNativePlatform()) {
+      return;
+    }
+
+    let listener: any = null;
+
+    const setupDeepLinkListener = async () => {
+      try {
+        listener = await CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
+          debugLog('[App] Deep link received', { url });
+
+          if (!url) {
+            debugError('[App] Deep link URL is undefined');
+            return;
+          }
+
+          if (url.startsWith('lexu://auth/callback')) {
+            debugLog('[App] Handling OAuth callback', { url });
+            const { error } = await handleOAuthCallback(url);
+            
+            if (error) {
+              debugError('[App] OAuth callback error', error);
+              // TODO: Show toast error to user
+            } else {
+              debugLog('[App] OAuth callback successful');
+            }
+          } else {
+            debugLog('[App] Deep link ignored (not OAuth callback)', { url });
+          }
+        });
+
+        debugLog('[App] Deep link listener registered');
+      } catch (error) {
+        debugError('[App] Error setting up deep link listener', error);
+      }
+    };
+
+    setupDeepLinkListener();
+
+    // Cleanup function
+    return () => {
+      if (listener) {
+        listener.remove();
+      }
+    };
   }, []);
 
   // ============================================
@@ -219,6 +271,15 @@ function App() {
     );
   }
 
+  // Show loader while profile is loading (but only if we have a user)
+  if (user && profileLoading && !profile) {
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center">
+        <div className="text-text-sub-light">Chargement du profil...</div>
+      </div>
+    );
+  }
+
   // Pages auth accessibles sans protection
   if (!user) {
     const path = window.location.pathname;
@@ -231,6 +292,22 @@ function App() {
   // Language onboarding (first priority)
   if (needsLanguageOnboarding) {
     return <LanguageOnboarding onComplete={handleLanguageOnboardingComplete} />;
+  }
+
+  // Profile onboarding (username, display_name, bio, avatar) - NEW
+  // CRITICAL: Never show Home if onboarding is not complete
+  if (user && profile && !isOnboardingComplete) {
+    return <ProfileOnboarding />;
+  }
+
+  // If user exists but profile is missing, try to refresh and show loading
+  if (user && !profile && !profileLoading) {
+    // This should not happen if refreshProfile works correctly, but as a safety net:
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center">
+        <div className="text-text-sub-light">Initialisation du profil...</div>
+      </div>
+    );
   }
 
   // FIX: Afficher l'UI même si onboarding check est en cours
@@ -246,7 +323,8 @@ function App() {
     );
   }
 
-  if (needsOnboarding) {
+  // Interests onboarding (legacy - only if profile onboarding is complete)
+  if (needsOnboarding && isOnboardingComplete) {
     return <Onboarding onComplete={handleOnboardingComplete} />;
   }
 

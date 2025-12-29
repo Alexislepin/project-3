@@ -281,11 +281,11 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
         onClick={onClose}
       >
         <div
-          className="bg-background-light rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
+          className="bg-background-light rounded-3xl w-full max-w-lg flex flex-col overflow-hidden shadow-2xl"
           onClick={(e) => e.stopPropagation()}
-          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+          style={{ maxHeight: '85vh' }}
         >
-          <div className="sticky top-0 bg-background-light/95 backdrop-blur-sm z-10 px-6 pt-4 pb-3 border-b border-gray-200">
+          <div className="sticky top-0 bg-background-light z-10 px-6 pt-4 pb-3 border-b border-gray-200">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-text-main-light">Détails du livre</h2>
               <button
@@ -298,7 +298,13 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
             </div>
           </div>
 
-          <div className="px-6 py-6">
+          <div 
+            className="flex-1 overflow-y-auto min-h-0 px-6 py-6" 
+            style={{ 
+              WebkitOverflowScrolling: 'touch',
+              paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+            }}
+          >
             <div className="flex gap-4 mb-6">
               <BookCover
                 custom_cover_url={userBook?.custom_cover_url || null}
@@ -411,8 +417,13 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
 
           {/* Footer with actions */}
           {(userBookId || onOpenRecap) && (
-            <div className="sticky bottom-0 bg-background-light border-t border-gray-200 px-6 py-4" style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}>
-              <div className="flex gap-3">
+            <div className="sticky bottom-0 bg-background-light border-t border-gray-200 rounded-b-3xl flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
+              <div 
+                className="px-6 py-3 flex gap-3"
+                style={{ 
+                  paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+                }}
+              >
                 {userBookId && onEditRequested && (
                   <button
                     onClick={onEditRequested}

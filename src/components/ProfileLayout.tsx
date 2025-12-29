@@ -196,8 +196,14 @@ export function ProfileLayout({
               </div>
             )}
           </div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">{profile.display_name}</h1>
-          <p className="text-text-sub-light text-sm mb-3">@{profile.username}</p>
+          <h1 className="text-2xl font-bold tracking-tight mb-1">
+            {profile.display_name || profile.username || 'Utilisateur'}
+          </h1>
+          {profile.username && (
+            <p className="text-sm text-text-sub-light mb-3">
+              @{profile.username}
+            </p>
+          )}
           {profile.bio && (
             <p className="text-text-sub-light text-sm max-w-md mb-4">{profile.bio}</p>
           )}
