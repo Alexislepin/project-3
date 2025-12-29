@@ -156,3 +156,11 @@ export function generateBookCoverPath(userId: string, bookId: string): string {
   return `user_covers/${userId}/${bookId}/${timestamp}_${random}.jpg`;
 }
 
+/**
+ * Generate a unique path for a user avatar
+ * Path format: <userId>.jpg (bucket prefix is handled by Supabase Storage)
+ */
+export function generateAvatarPath(userId: string): string {
+  return `${userId}.jpg`;
+}
+

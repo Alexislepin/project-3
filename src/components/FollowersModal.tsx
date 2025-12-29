@@ -97,7 +97,13 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div 
+          className="flex-1 overflow-y-auto min-h-0 p-4"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
+          }}
+        >
           {loading ? (
             <div className="text-center py-12 text-text-sub-light">Chargement...</div>
           ) : followers.length === 0 ? (

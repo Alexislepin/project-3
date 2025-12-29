@@ -21,13 +21,20 @@ interface LeaderboardUser {
 export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps) {
   const [users, setUsers] = useState<LeaderboardUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const { user } = useAuth();
+  const { user, profile: contextProfile } = useAuth();
   const currentUserRank = users.findIndex((u) => u.id === user?.id) + 1;
   const isCurrentUserFirst = currentUserRank === 1;
 
   useEffect(() => {
     loadLeaderboard();
   }, []);
+
+  // ✅ Rafraîchir le classement quand l'XP de l'utilisateur change
+  useEffect(() => {
+    if (contextProfile?.xp_total !== undefined) {
+      loadLeaderboard();
+    }
+  }, [contextProfile?.xp_total]);
 
   const loadLeaderboard = async () => {
     setLoading(true);
@@ -111,6 +118,7 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                         ? 'bg-primary/10 border-2 border-primary'
                         : 'hover:bg-stone-50 border border-transparent'
                     }`}
+                    style={isCurrentUser ? { color: 'inherit' } : undefined}
                   >
                     {/* Rank */}
                     <div className="flex-shrink-0 w-10 text-center">
@@ -133,7 +141,7 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                         />
                       ) : (
                         <span className="text-lg font-bold text-stone-600">
-                          {profile.display_name.charAt(0).toUpperCase()}
+                          {(profile.display_name || 'U').charAt(0).toUpperCase()}
                         </span>
                       )}
                     </div>
@@ -141,13 +149,13 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                     {/* User info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-stone-900">{profile.display_name}</h3>
+                        <h3 className="font-bold text-stone-900">{profile.display_name || 'Utilisateur'}</h3>
                         <LevelBadge xpTotal={profile.xp_total || 0} />
                         {isCurrentUser && (
-                          <span className="text-xs font-medium text-primary">(Vous)</span>
+                          <span className="text-xs font-medium !text-[#E6FF00]" style={{ color: '#E6FF00' }}>(Vous)</span>
                         )}
                       </div>
-                      <p className="text-sm text-stone-500">@{profile.username}</p>
+                      <p className="text-sm text-stone-500">@{profile.username || 'user'}</p>
                     </div>
 
                     {/* XP */}

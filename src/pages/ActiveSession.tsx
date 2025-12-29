@@ -301,6 +301,10 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             author: selectedBook.book.author,
             cover_url: selectedBook.book.cover_url,
             total_pages: selectedBook.book.total_pages,
+            isbn: selectedBook.book.isbn || null,
+            book_key: (selectedBook.book as any).book_key || (selectedBook.book as any).openlibrary_work_key || null,
+            openlibrary_key: (selectedBook.book as any).openlibrary_work_key || null,
+            google_books_id: selectedBook.book.google_books_id || null,
           }}
           uptoPage={selectedBook.current_page || 0}
         />

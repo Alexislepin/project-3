@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Lexu Brand Typography */
+/* Using Inter ExtraBold (800) as the brand font */
+/* Future: Replace with custom brand font (Söhne, General Sans, Geist, etc.) */
+/* The brand name is ALWAYS displayed as "LEXU." (uppercase with period) via BrandLogo component */
+
 @layer base {
   :root {
     --sat: env(safe-area-inset-top, 0px);
@@ -93,20 +98,20 @@
   
   /* Safe Area for iOS notch/Dynamic Island */
   .safe-area-top {
-    padding-top: env(safe-area-inset-top);
+    padding-top: max(12px, env(safe-area-inset-top));
   }
   .safe-area-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
   
   /* Safe top avec padding minimal */
   .safe-top {
-    padding-top: calc(var(--sat) + 8px);
+    padding-top: max(12px, var(--sat));
   }
   
   /* Safe bottom avec padding minimal */
   .safe-bottom {
-    padding-bottom: calc(var(--sab) + 12px);
+    padding-bottom: max(16px, var(--sab));
   }
   
   /* Sticky header avec safe-area intégrée */

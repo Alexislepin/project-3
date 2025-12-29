@@ -1,26 +1,27 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { signInWithGoogle } from '../lib/oauth';
+import { BrandLogo } from '../components/BrandLogo';
 
 export function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [username, setUsername] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ title?: string; message: string; action?: 'go_login' | 'go_signup' | 'none' } | string>('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const { signUp } = useAuth();
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: window.location.origin
-      }
-    });
-    // Note: setGoogleLoading(false) ne sera pas atteint car redirection
+    setError('');
+    
+    const { error } = await signInWithGoogle();
+    
+    if (error) {
+      setError(error.message || 'Erreur lors de la connexion Google');
+      setGoogleLoading(false);
+    }
+    // Note: Si succès, le loading restera true car redirection/navigation
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -34,13 +35,7 @@ export function SignupPage() {
       return;
     }
 
-    if (username.length < 3) {
-      setError('Le nom d\'utilisateur doit contenir au moins 3 caractères');
-      setLoading(false);
-      return;
-    }
-
-    const { error } = await signUp(email, password, username, displayName);
+    const { error } = await signUp(email, password);
 
     if (error) {
       setError(error.message || 'Erreur lors de la création du compte');
@@ -66,7 +61,9 @@ export function SignupPage() {
         <div className="flex items-center justify-center min-h-full p-4">
           <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold tracking-tight mb-2 text-text-main-light">Lexu</h1>
+          <div className="mb-2">
+            <BrandLogo size={48} color="#111" />
+          </div>
           <p className="text-text-sub-light">Commencez à construire votre élan</p>
         </div>
 
@@ -75,41 +72,22 @@ export function SignupPage() {
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">
-              {error}
+              <p className="font-semibold mb-1">
+                {typeof error === 'object' ? (error.title || 'Erreur') : 'Erreur'}
+              </p>
+              <p>{typeof error === 'object' ? error.message : error}</p>
+              {typeof error === 'object' && error.action === 'go_login' && (
+                <a
+                  href="/login"
+                  className="mt-2 inline-block text-sm font-semibold underline hover:text-red-800"
+                >
+                  Se connecter
+                </a>
+              )}
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-text-main-light mb-2">
-                Nom d'utilisateur
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s/g, ''))}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                placeholder="alexreader"
-                required
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-text-main-light mb-2">
-                Nom affiché
-              </label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                placeholder="Alex Reader"
-                required
-                disabled={loading}
-              />
-            </div>
-
             <div>
               <label className="block text-sm font-medium text-text-main-light mb-2">
                 Courriel
@@ -171,7 +149,7 @@ export function SignupPage() {
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
               </svg>
-              {googleLoading ? 'Connexion...' : 'Continuer avec Google'}
+              {googleLoading ? 'Connexion...' : 'S\'inscrire avec Google'}
             </button>
           </div>
 

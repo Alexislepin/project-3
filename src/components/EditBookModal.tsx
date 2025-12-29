@@ -287,7 +287,13 @@ export function EditBookModal({
             </button>
           </div>
 
-          <div className="overflow-y-auto px-4" style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom) + 88px)' }}>
+          <div 
+            className="flex-1 overflow-y-auto min-h-0 px-4" 
+            style={{ 
+              WebkitOverflowScrolling: 'touch',
+              paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+            }}
+          >
             <form id="edit-book-form" onSubmit={handleSubmit} className="space-y-4 py-4">
               <div>
             <label className="block text-sm font-semibold text-text-main-light mb-2">
@@ -432,8 +438,13 @@ export function EditBookModal({
             </form>
           </div>
 
-          <div className="sticky bottom-0 bg-white px-4 py-3 border-t border-gray-200" style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}>
-            <div className="flex gap-3">
+          <div className="sticky bottom-0 bg-white border-t border-gray-200 rounded-b-2xl flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
+            <div 
+              className="px-4 py-3 flex gap-3"
+              style={{ 
+                paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+              }}
+            >
               <button
                 type="button"
                 onClick={onClose}

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { debugError } from '../utils/logger';
 import { LogOut, Edit, Bell, UserPlus, Settings, Globe, BookOpen } from 'lucide-react';
 import { setAppLanguage } from '../lib/appLanguage';
 import { Clubs } from './Clubs';
@@ -23,6 +24,8 @@ import { computeStreakFromActivities } from '../lib/readingStreak';
 import { MyActivities } from './MyActivities';
 import { countRows } from '../lib/supabaseCounts';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
+import { XpHistoryModal } from '../components/XpHistoryModal';
+import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
 
 interface ProfileProps {
   onNavigateToLibrary: () => void;
@@ -30,9 +33,11 @@ interface ProfileProps {
 
 export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const { t } = useTranslation();
-  const [profile, setProfile] = useState<any>(null);
+  const { profile: contextProfile, refreshProfile, profileLoading: contextProfileLoading } = useAuth();
+  const [profile, setProfile] = useState<any>(contextProfile);
   const [stats, setStats] = useState({ followers: 0, following: 0, activities: 0, books: 0, likes: 0 });
   const [loading, setLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [showClubs, setShowClubs] = useState(false);
   const [clubCount, setClubCount] = useState(0);
@@ -45,11 +50,13 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [showFollowersModal, setShowFollowersModal] = useState(false);
   const [showFollowingModal, setShowFollowingModal] = useState(false);
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
+  const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [likedBooks, setLikedBooks] = useState<any[]>([]);
   const [showAllLikedBooks, setShowAllLikedBooks] = useState(false);
   const [selectedLikedBook, setSelectedLikedBook] = useState<any | null>(null);
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const [showXpHistory, setShowXpHistory] = useState(false);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [readingSpeed7d, setReadingSpeed7d] = useState<number | null>(null); // pages/h
   const [readingPace7d, setReadingPace7d] = useState<number | null>(null);  // min/page
@@ -70,10 +77,26 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const readingReqRef = useRef(0);
   const streakReqRef = useRef(0);
 
+  // Sync with context profile
+  useEffect(() => {
+    if (contextProfile) {
+      setProfile(contextProfile);
+      setProfileError(null);
+    }
+  }, [contextProfile]);
+
   useEffect(() => {
     if (!user?.id) return;
 
-    loadProfile();
+    // Use context profile if available, otherwise try to load
+    if (contextProfile) {
+      setProfile(contextProfile);
+      setLoading(false);
+    } else if (!contextProfileLoading) {
+      // Only load if context is not loading
+      loadProfile();
+    }
+
     loadStats();
     loadClubCount();
     loadWeeklyActivity();
@@ -100,10 +123,12 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
       loadStreak();
     };
 
-    const handleXpUpdated = (event: any) => {
-      setProfile((prev: any) =>
-        prev ? { ...prev, xp_total: event.detail.xp_total } : prev
-      );
+    const handleXpUpdated = async () => {
+      // ✅ Source de vérité unique : refresh depuis DB uniquement
+      // ❌ Ne pas modifier le state local directement
+      if (user?.id) {
+        await refreshProfile(user.id);
+      }
     };
 
     window.addEventListener('book-like-changed', handleBookLikeChanged);
@@ -117,21 +142,44 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
       window.removeEventListener('xp-updated', handleXpUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]); // ✅ RETIRER viewingUserId
+  }, [user?.id, contextProfile, contextProfileLoading]); // ✅ RETIRER viewingUserId
 
   const loadProfile = async () => {
     if (!user) return;
 
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
+    setLoading(true);
+    setProfileError(null);
 
-    if (data) {
-      setProfile(data);
+    try {
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (error) {
+        debugError('[Profile] Error loading profile:', error);
+        setProfileError('Erreur lors du chargement du profil');
+        // Try to refresh from context
+        await refreshProfile(user.id);
+      } else if (data) {
+        setProfile(data);
+        setProfileError(null);
+      } else {
+        setProfileError('Profil introuvable');
+        // Try to refresh from context
+        await refreshProfile(user.id);
+      }
+    } catch (err: any) {
+      debugError('[Profile] Error in loadProfile:', err);
+      setProfileError('Erreur lors du chargement du profil');
+      // Try to refresh from context
+      if (user?.id) {
+        await refreshProfile(user.id);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const loadStats = async () => {
@@ -266,47 +314,13 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     const reqId = ++weeklyReqRef.current;
 
     try {
-      const now = new Date();
-
-      // Start of week (Monday 00:00 local)
-      const startOfWeek = new Date(now);
-      const day = startOfWeek.getDay(); // 0=Sun ... 6=Sat
-      const diffToMonday = (day + 6) % 7; // Mon=0, Tue=1, ... Sun=6
-      startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
-      startOfWeek.setHours(0, 0, 0, 0);
-
-      const startISO = startOfWeek.toISOString();
-
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('pages_read, created_at, photos')
-        .eq('user_id', profileId)
-        .gte('created_at', startISO)
-        .order('created_at', { ascending: true });
+      // Use the centralized helper function
+      const result = await fetchWeeklyActivity(profileId);
 
       if (reqId !== weeklyReqRef.current) return; // ✅ ignore stale
 
-      if (error) {
-        console.error('[loadWeeklyActivity] Error:', error);
-        setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
-        return;
-      }
-
-      const weekData = [0, 0, 0, 0, 0, 0, 0]; // Mon..Sun
-
-      for (const a of activities ?? []) {
-        if (!a.created_at) continue;
-
-        const d = new Date(a.created_at);
-
-        // Convert to "Monday-based" index (Mon=0 ... Sun=6)
-        const js = d.getDay(); // Sun=0..Sat=6
-        const idx = (js + 6) % 7;
-
-        weekData[idx] += Number(a.pages_read) || 0;
-      }
-
-      if (reqId !== weeklyReqRef.current) return; // ✅ ignore stale
+      // Convert to pages array for backward compatibility
+      const weekData = weeklyActivityToPagesArray(result.days);
       setWeeklyActivity(weekData);
     } catch (e) {
       console.error('[loadWeeklyActivity] Unexpected:', e);
@@ -550,7 +564,43 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     return { label, tone: 'default' };
   };
 
-  if (loading || !profile) {
+  // Show loading only if context is loading or local loading (and no error)
+  if (contextProfileLoading || (loading && !profile && !profileError)) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background-light">
+        <div className="text-text-sub-light">{t('common.loadingProfile')}</div>
+      </div>
+    );
+  }
+
+  // Show error state if profile is missing and we have an error
+  if (!profile && profileError) {
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
+        <div className="text-center max-w-md">
+          <p className="text-text-main-light font-semibold mb-2">{profileError}</p>
+          <button
+            onClick={() => {
+              if (user?.id) {
+                setLoading(true);
+                setProfileError(null);
+                refreshProfile(user.id).then(() => {
+                  setLoading(false);
+                });
+              }
+            }}
+            className="mt-4 px-4 py-2 bg-primary text-black rounded-lg font-medium hover:brightness-95"
+          >
+            Réessayer
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback: if no profile and no error, try to load
+  if (!profile && !loading) {
+    loadProfile();
     return (
       <div className="flex items-center justify-center min-h-screen bg-background-light">
         <div className="text-text-sub-light">{t('common.loadingProfile')}</div>
@@ -636,9 +686,31 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         }}
       >
         {/* Level Progress Bar */}
-        {profile?.xp_total !== undefined && (
+        {contextProfile?.xp_total !== undefined && (
           <div className="px-4 pt-4 pb-2">
-            <LevelProgressBar xpTotal={profile.xp_total || 0} variant="full" />
+            <div
+              role="button"
+              tabIndex={0}
+              className="w-full cursor-pointer"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[Profile] Opening XP history modal');
+                setShowXpHistory(true);
+                requestAnimationFrame(() => {
+                  console.log('[Profile] showXpHistory should be true now');
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  console.log('[Profile] Opening XP history modal (keyboard)');
+                  setShowXpHistory(true);
+                }
+              }}
+            >
+              <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
+            </div>
           </div>
         )}
         
@@ -719,6 +791,19 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             setViewingUserId(userId);
             setShowNotifications(false);
           }}
+          onOpenMyActivity={(activityId, commentId, notifType) => {
+            // Ouvrir MON profil avec focus sur MON activité
+            setShowNotifications(false);
+            setViewingUserId(user?.id || null);
+            setActivityFocus({
+              ownerUserId: user?.id || '',
+              activityId,
+              commentId: commentId ?? null,
+              openComments: notifType === 'comment',
+              openMyActivities: true,
+              source: 'notification',
+            });
+          }}
         />
       )}
 
@@ -734,6 +819,15 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             await setAppLanguage(lang);
             setShowLanguageSelector(false);
           }}
+        />
+      )}
+
+      {showXpHistory && (
+        <XpHistoryModal
+          open={showXpHistory}
+          onClose={() => setShowXpHistory(false)}
+          userId={user?.id}
+          displayName={profile?.display_name ?? profile?.username ?? 'Toi'}
         />
       )}
 
@@ -871,12 +965,14 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             userId={viewingUserId}
             onClose={() => {
               setViewingUserId(null);
-              // loadStats(); // optionnel, mais maintenant c'est safe si self-only
+              setActivityFocus(null);
             }}
             onUserClick={(newUserId) => {
               setViewingUserId(newUserId);
               loadStats();
             }}
+            activityFocus={activityFocus}
+            onFocusConsumed={() => setActivityFocus(null)}
           />
         </div>
       )}

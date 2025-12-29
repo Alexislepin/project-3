@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { BrandLogo } from '../BrandLogo';
 
 interface SignupProps {
   onSwitchToLogin: () => void;
@@ -46,7 +47,9 @@ export function Signup({ onSwitchToLogin, onComplete }: SignupProps) {
     <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold tracking-tight mb-2">Lexu</h1>
+          <div className="mb-2">
+            <BrandLogo size={40} color="#111" />
+          </div>
           <p className="text-stone-600">Commencez à construire votre élan</p>
         </div>
 

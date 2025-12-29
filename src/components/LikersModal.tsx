@@ -53,9 +53,10 @@ export function LikersModal({
         </div>
 
         <div 
-          className="flex-1 overflow-y-auto"
+          className="flex-1 overflow-y-auto min-h-0"
           style={{
-            paddingBottom: 'calc(16px + env(safe-area-inset-bottom))',
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
           }}
         >
           {loading ? (

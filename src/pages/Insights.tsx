@@ -57,6 +57,8 @@ import { computeReadingStats, formatStatValue, formatDuration } from '../lib/rea
 import { LevelProgressBar } from '../components/LevelProgressBar';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { computeStreakFromActivities } from '../lib/readingStreak';
+import { last7DaysRangeISO } from '../utils/dateUtils';
+import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
 
 export function Insights() {
   const [goals, setGoals] = useState<any[]>([]);
@@ -87,10 +89,11 @@ export function Insights() {
   
   // Weekly activity bars (Mon..Sun)
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [weeklyActivityTotalPages, setWeeklyActivityTotalPages] = useState(0);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [streakDays, setStreakDays] = useState(0);
   
-  const { user } = useAuth();
+  const { user, profile: contextProfile, refreshProfile } = useAuth();
 
   const openLeaderboard = () => setShowLeaderboard(true);
   const closeLeaderboard = () => setShowLeaderboard(false);
@@ -105,19 +108,18 @@ export function Insights() {
 
   // 2) Listener XP (separate effect, no profile dependency)
   useEffect(() => {
-    const handleXpUpdated = (event: any) => {
-      const xp = event?.detail?.xp_total;
-      if (typeof xp === 'number') {
-        setProfile((p: any) => (p ? { ...p, xp_total: xp } : { xp_total: xp }));
-      } else {
-        loadInsightsData();
+    const handleXpUpdated = async (event: any) => {
+      // ✅ Source de vérité unique : refresh depuis DB uniquement
+      // ❌ Ne pas modifier le state local directement
+      if (user?.id) {
+        await refreshProfile(user.id);
       }
     };
 
     window.addEventListener('xp-updated', handleXpUpdated as EventListener);
     return () => window.removeEventListener('xp-updated', handleXpUpdated as EventListener);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, refreshProfile]);
 
   const loadStreak = async () => {
     if (!user) {
@@ -165,6 +167,8 @@ export function Insights() {
       return;
     }
 
+    console.log('[STATS] loadInsightsData user', user?.id);
+
     setLoading(true);
 
     try {
@@ -174,12 +178,20 @@ export function Insights() {
       const monthStart = new Date();
       monthStart.setDate(1);
       monthStart.setHours(0, 0, 0, 0);
-      const { since: last7dStart } = getLast7DaysRange();
+      
+      // Use the new helper function for last 7 days range (ISO)
+      const { start: last7dStartISO, end: last7dEndISO } = last7DaysRangeISO();
+
+      console.log('[STATS] loadInsightsData date ranges', { 
+        weekStart: weekStart.toISOString(), 
+        last7dStart: last7dStartISO,
+        last7dEnd: last7dEndISO 
+      });
 
       const todayKey = toLocalDateKey(today);
 
       // Fetch all data in parallel
-      const [goalsResult, profileResult, weekActivitiesResult, monthActivitiesResult, allReadingActivitiesResult] = await Promise.all([
+      const [goalsResult, profileResult, weekActivitiesResult, monthActivitiesResult, allReadingActivitiesResult, last7dActivitiesResult, weeklyActivityResult] = await Promise.all([
         supabase
       .from('user_goals')
       .select('*')
@@ -208,6 +220,16 @@ export function Insights() {
           .eq('type', 'reading')
           .order('created_at', { ascending: false })
           .limit(100), // For PR calculation
+        // Direct query for last 7 days with type 'reading'
+        supabase
+          .from('activities')
+          .select('created_at, pages_read, duration_minutes, type, reading_speed_pph, reading_pace_min_per_page, photos')
+          .eq('user_id', user.id)
+          .eq('type', 'reading')
+          .gte('created_at', last7dStartISO)
+          .lte('created_at', last7dEndISO),
+        // Fetch weekly activity using the helper function
+        fetchWeeklyActivity(user.id),
       ]);
 
       if (goalsResult.error) {
@@ -221,12 +243,28 @@ export function Insights() {
         setLoading(false);
       return;
     }
+      if (last7dActivitiesResult.error) {
+        console.error('[loadInsightsData] Last 7d activities error:', last7dActivitiesResult.error);
+      }
 
       const allWeekActivities = weekActivitiesResult.data || [];
       const allMonthActivities = monthActivitiesResult.data || [];
       const allReadingActivities = allReadingActivitiesResult.data || [];
+      const last7dActivities = last7dActivitiesResult.data || [];
       const dbGoals = goalsResult.data || [];
       const profileData = profileResult.data;
+
+      console.log('[STATS] loadInsightsData results', {
+        weekActivitiesCount: allWeekActivities.length,
+        last7dActivitiesCount: last7dActivities.length,
+        weeklyActivityTotalPages: weeklyActivityResult.totalPages,
+        weeklyActivityDays: weeklyActivityResult.days,
+      });
+
+      // Use the new weekly activity helper
+      const weekBars = weeklyActivityToPagesArray(weeklyActivityResult.days);
+      setWeeklyActivity(weekBars);
+      setWeeklyActivityTotalPages(weeklyActivityResult.totalPages);
 
       // Derive todayStats from fetched activities
       const todayActivities = allWeekActivities.filter(a => {
@@ -234,38 +272,35 @@ export function Insights() {
         return toLocalDateKey(activityDate) === todayKey;
       });
 
-      const todayPages = todayActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
-      const todayMinutes = todayActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+      const todayPages = todayActivities.reduce((sum, a) => sum + (Number(a.pages_read) ?? 0), 0);
+      const todayMinutes = todayActivities.reduce((sum, a) => sum + (Number(a.duration_minutes) ?? 0), 0);
       setTodayStats({ pages: todayPages, minutes: todayMinutes });
 
-      // Build weekly activity bars (Mon..Sun)
-      const weekBars = buildWeeklyBarsData(allWeekActivities);
-      setWeeklyActivity(weekBars);
-
       // Derive weekStats from fetched activities
-      const weekPages = allWeekActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
-      const weekMinutes = allWeekActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+      const weekPages = allWeekActivities.reduce((sum, a) => sum + (Number(a.pages_read) ?? 0), 0);
+      const weekMinutes = allWeekActivities.reduce((sum, a) => sum + (Number(a.duration_minutes) ?? 0), 0);
       setWeeklyStats({
         pages: weekPages,
         activities: allWeekActivities.length,
         totalMinutes: weekMinutes,
       });
 
-      // Calculate 7d stats (last 7 days, not week)
-      const last7dActivities = allWeekActivities.filter(a => {
-        if (!a.created_at) return false;
-        const activityDate = new Date(a.created_at);
-        return activityDate >= last7dStart;
-      });
-
+      // Calculate 7d stats using the direct query result
       // Check if there are any reading sessions in 7d
       const last7dReadingSessions = last7dActivities.filter(a => 
-        a.type === 'reading' && (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0)
+        (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0)
       );
       const hasSessions7d = last7dReadingSessions.length > 0;
 
-      const totalPages7d = last7dActivities.reduce((sum, a) => sum + (a.pages_read || 0), 0);
-      const totalMinutes7d = last7dActivities.reduce((sum, a) => sum + (a.duration_minutes || 0), 0);
+      const totalPages7d = last7dActivities.reduce((sum, a) => sum + (Number(a.pages_read) ?? 0), 0);
+      const totalMinutes7d = last7dActivities.reduce((sum, a) => sum + (Number(a.duration_minutes) ?? 0), 0);
+
+      console.log('[STATS] loadInsightsData 7d stats computed', {
+        totalPages7d,
+        totalMinutes7d,
+        hasSessions7d,
+        sessionsCount: last7dActivities.length
+      });
 
       // Compute stats with strict validation
       const stats7dComputed = computeReadingStats(totalPages7d, totalMinutes7d);
@@ -470,25 +505,32 @@ export function Insights() {
     loadInsightsData();
   };
 
-  const getGoalLabel = (type: string) => {
+  const getGoalLabel = (goal: any) => {
+    // For daily time goals (15min, 30min, 60min, daily_time), format as "Lire X minutes par jour"
+    if (goal.type === 'daily_15min' || goal.type === 'daily_30min' || goal.type === 'daily_60min') {
+      const minutes = goal.type === 'daily_15min' ? 15 : goal.type === 'daily_30min' ? 30 : 60;
+      return `Lire ${minutes} minutes par jour`;
+    }
+    if (goal.type === 'daily_time') {
+      return `Lire ${goal.target_value} minutes par jour`;
+    }
+    
     const labels: Record<string, string> = {
       daily_pages: 'Pages quotidiennes',
       weekly_workouts: 'Entraînements hebdomadaires',
-      daily_time: 'Temps quotidien',
       weekly_books: 'Livres hebdomadaires',
       weekly_pages: 'Pages hebdomadaires',
-      daily_15min: 'Lire 15 minutes par jour',
-      daily_60min: 'Lire 60 minutes par jour',
-      daily_30min: 'Lire 30 minutes par jour',
     };
-    return labels[type] || type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return labels[goal.type] || goal.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
 
   const getGoalUnit = (type: string) => {
-    if (type.includes('min')) return 'min';
+    // Ensure all time-based goals return 'min'
+    if (type.includes('min') || type === 'daily_time') return 'min';
     if (type.includes('pages')) return 'pages';
-    if (type.includes('books')) return 'books';
-    return '';
+    if (type.includes('books')) return 'livres';
+    if (type.includes('workouts')) return 'sessions';
+    return 'min'; // Default fallback to 'min' to avoid empty units
   };
 
   const generateCalendarDays = () => {
@@ -588,9 +630,9 @@ export function Insights() {
             }}
           >
             {/* Level Progress Bar */}
-            {profile?.xp_total !== undefined && (
+            {contextProfile?.xp_total !== undefined && (
               <div className="mb-6">
-                <LevelProgressBar xpTotal={profile.xp_total || 0} variant="compact" />
+                <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
                 {/* Leaderboard Button */}
                 <button
                   onClick={openLeaderboard}
@@ -616,9 +658,9 @@ export function Insights() {
               <p className="text-sm font-bold uppercase tracking-wider text-text-sub-light">
                 Jours de série
               </p>
-              {profile?.longest_streak > 0 && (
+              {contextProfile?.longest_streak && contextProfile.longest_streak > 0 && (
                 <p className="text-xs text-text-sub-light mt-1">
-                  Record: {profile.longest_streak} jours
+                  Record: {contextProfile.longest_streak} jours
                 </p>
               )}
             </div>
@@ -760,7 +802,7 @@ export function Insights() {
               Activité sur 7 jours
             </h4>
             <span className="text-xs font-semibold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">
-              {weeklyActivity.reduce((a, b) => a + b, 0)} pages
+              {weeklyActivityTotalPages} pages
             </span>
           </div>
 
@@ -871,13 +913,14 @@ export function Insights() {
                 const progress = Math.min((goal.current_value / goal.target_value) * 100, 100);
                 const unit = getGoalUnit(goal.type);
                 const remaining = Math.max(0, goal.target_value - goal.current_value);
+                const label = getGoalLabel(goal);
 
                 return (
                   <div key={goal.id} className="rounded-2xl bg-card-light border border-gray-200 p-5 shadow-sm">
                     <div className="mb-3 flex items-end justify-between">
                       <div className="flex items-center gap-2">
                         <Target className="w-5 h-5 text-text-sub-light" />
-                        <span className="font-medium">{getGoalLabel(goal.type)}</span>
+                        <span className="font-medium">{label}</span>
                         <span className="text-[10px] font-semibold bg-primary/20 text-text-main-light px-2 py-0.5 rounded-full">
                           Aujourd'hui
                         </span>
@@ -928,7 +971,7 @@ export function Insights() {
                   <div className="mb-3 flex items-end justify-between">
                     <div className="flex items-center gap-2">
                       <Target className="w-5 h-5 text-text-sub-light" />
-                      <span className="font-medium">{getGoalLabel(goal.type)}</span>
+                      <span className="font-medium">{getGoalLabel(goal)}</span>
                       <span className="text-[10px] font-semibold bg-primary/20 text-text-main-light px-2 py-0.5 rounded-full">
                         Semaine
                       </span>

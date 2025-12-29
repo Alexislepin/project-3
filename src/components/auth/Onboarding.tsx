@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { Check, Bell, BellOff, Settings } from 'lucide-react';
+import { BrandLogo } from '../BrandLogo';
 import { 
   checkNotificationPermission, 
   requestNotificationPermission, 
@@ -213,7 +214,9 @@ export function Onboarding({ onComplete }: OnboardingProps) {
         <div className="flex items-center justify-center min-h-full p-4 safe-area-top">
           <div className="w-full max-w-2xl">
             <div className="text-center mb-8">
-              <h1 className="text-4xl font-bold tracking-tight mb-2">Lexu</h1>
+              <div className="mb-2">
+                <BrandLogo size={40} color="#111" />
+              </div>
               <p className="text-stone-600">Bienvenue dans votre parcours de lecture</p>
             </div>
 

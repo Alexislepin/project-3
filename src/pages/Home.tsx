@@ -13,12 +13,14 @@ import { WeeklySummaryCarousel } from '../components/WeeklySummaryCarousel';
 import { StreakBadge } from '../components/StreakBadge';
 import { SocialFeed } from '../pages/SocialFeed';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
+import { last7DaysRangeISO } from '../utils/dateUtils';
 
 // Note: Bottom spacing is now handled by getScrollBottomPadding() in layoutConstants
 
@@ -41,6 +43,12 @@ export function Home() {
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
+
+  // Debug: log when selectedUserId changes
+  useEffect(() => {
+    console.log('[Home] selectedUserId changed to:', selectedUserId);
+  }, [selectedUserId]);
   const [showSocial, setShowSocial] = useState(false);
   const [likersActivityId, setLikersActivityId] = useState<string | null>(null);
   const [profile, setProfile] = useState<any>(null);
@@ -72,7 +80,7 @@ export function Home() {
   
   const REFRESH_THRESHOLD = 80; // Increased threshold for less sensitivity
   
-  const { user } = useAuth();
+  const { user, profile: contextProfile } = useAuth();
 
   const loadUnreadNotificationsCount = async () => {
     if (!user) return;
@@ -142,18 +150,34 @@ export function Home() {
   const loadWeeklySummary = async () => {
     if (!user) return;
 
+    console.log('[STATS] loadWeeklySummary user', user?.id);
+
     setWeeklySummaryLoading(true);
 
     try {
-      const weekStart = startOfLocalWeek();
-      const weekStartISO = weekStart.toISOString();
+      // Use last 7 days range (includes today + 6 previous days)
+      const { start, end } = last7DaysRangeISO();
+      
+      console.log('[STATS] loadWeeklySummary date range', { start, end });
 
+      // First, test query to see all activities
+      const { data: testData, error: testError } = await supabase
+        .from('activities')
+        .select('id, created_at, type, pages_read, duration_minutes')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+
+      console.log('[STATS] last activities (test)', { count: testData?.length, data: testData, error: testError });
+
+      // Main query: last 7 days with type 'reading'
       const { data: weekActivities, error } = await supabase
         .from('activities')
         .select('pages_read, duration_minutes, photos')
         .eq('user_id', user.id)
         .eq('type', 'reading')
-        .gte('created_at', weekStartISO);
+        .gte('created_at', start)
+        .lte('created_at', end);
 
       if (error) {
         console.error('[loadWeeklySummary] Error:', error);
@@ -162,9 +186,22 @@ export function Home() {
         return;
       }
 
+      console.log('[STATS] loadWeeklySummary result', { 
+        count: weekActivities?.length, 
+        activities: weekActivities,
+        start,
+        end 
+      });
+
+      if (weekActivities?.length === 0) {
+        console.warn('[STATS] No activities found for range', { start, end, type: 'reading' });
+      }
+
       const sessionsCount = weekActivities?.length || 0;
-      const totalMinutes = weekActivities?.reduce((sum, a) => sum + (Number(a.duration_minutes) || 0), 0) || 0;
-      const totalPages = weekActivities?.reduce((sum, a) => sum + (Number(a.pages_read) || 0), 0) || 0;
+      const totalMinutes = (weekActivities ?? []).reduce((sum, a) => sum + (Number(a.duration_minutes) ?? 0), 0);
+      const totalPages = (weekActivities ?? []).reduce((sum, a) => sum + (Number(a.pages_read) ?? 0), 0);
+
+      console.log('[STATS] loadWeeklySummary computed', { sessionsCount, totalMinutes, totalPages });
 
       setWeeklySummary({ sessionsCount, totalMinutes, totalPages });
     } catch (error) {
@@ -730,9 +767,9 @@ export function Home() {
             />
             
             {/* Level Progress Bar (compact) - aligned with cards */}
-            {profile?.xp_total !== undefined && (
+            {contextProfile?.xp_total !== undefined && (
               <div className="px-4">
-                <LevelProgressBar xpTotal={profile.xp_total || 0} variant="compact" />
+                <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
               </div>
             )}
           </div>
@@ -792,6 +829,21 @@ export function Home() {
           activityId={commentingActivityId}
           onClose={handleCloseComments}
           onCommentAdded={handleCommentAdded}
+          onUserClick={(userId) => {
+            console.log('[Home] ✅ CommentModal onUserClick called with userId:', userId, typeof userId);
+            if (!userId) {
+              console.error('[Home] ❌ No userId provided to onUserClick');
+              return;
+            }
+            // Clear activityFocus to prevent auto-opening "Mes activités"
+            setActivityFocus(null);
+            // Set selectedUserId immediately - this will open the profile
+            console.log('[Home] ✅ Setting selectedUserId to:', userId);
+            setSelectedUserId(userId);
+            console.log('[Home] ✅ selectedUserId set, UserProfileView should render');
+            // Close the comment modal immediately
+            handleCloseComments();
+          }}
         />
       )}
 
@@ -816,15 +868,40 @@ export function Home() {
             setSelectedUserId(id);
             setShowNotifications(false);
           }}
+          onOpenMyActivity={(activityId, commentId, notifType) => {
+            // Ouvrir MON profil avec focus sur MON activité
+            setShowNotifications(false);
+            setSelectedUserId(user?.id || null);
+            setActivityFocus({
+              ownerUserId: user?.id || '',
+              activityId,
+              commentId: commentId ?? null,
+              openComments: notifType === 'comment',
+              openMyActivities: true,
+              source: 'notification',
+            });
+          }}
         />
       )}
 
       {selectedUserId && (
-        <div className="fixed inset-0 bg-background-light z-[200] overflow-y-auto">
+        <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
+          {console.log('[Home] ✅ Rendering UserProfileView with userId:', selectedUserId)}
           <UserProfileView
             userId={selectedUserId}
-            onClose={() => setSelectedUserId(null)}
-            onUserClick={(id) => setSelectedUserId(id)}
+            onClose={() => {
+              console.log('[Home] Closing UserProfileView');
+              setSelectedUserId(null);
+              setActivityFocus(null);
+            }}
+            onUserClick={(id) => {
+              console.log('[Home] UserProfileView onUserClick called with id:', id);
+              // Clear activityFocus when navigating to a different user
+              setActivityFocus(null);
+              setSelectedUserId(id);
+            }}
+            activityFocus={activityFocus}
+            onFocusConsumed={() => setActivityFocus(null)}
           />
         </div>
       )}

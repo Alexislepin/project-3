@@ -10,14 +10,19 @@ import { ProfileLayout } from './ProfileLayout';
 import { computeReadingStats, computePR } from '../lib/readingStats';
 import { MyActivities } from '../pages/MyActivities';
 import { countRows } from '../lib/supabaseCounts';
+import { LevelProgressBar } from './LevelProgressBar';
+import { XpHistoryModal } from './XpHistoryModal';
+import { ActivityFocus } from '../lib/activityFocus';
 
 interface UserProfileViewProps {
   userId: string;
   onClose: () => void;
   onUserClick?: (userId: string) => void;
+  activityFocus?: ActivityFocus | null;
+  onFocusConsumed?: () => void;
 }
 
-export function UserProfileView({ userId, onClose, onUserClick }: UserProfileViewProps) {
+export function UserProfileView({ userId, onClose, onUserClick, activityFocus, onFocusConsumed }: UserProfileViewProps) {
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState({ followers: 0, following: 0, activities: 0, books: 0, likes: 0 });
   const [loading, setLoading] = useState(true);
@@ -28,6 +33,7 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
   const [showLibrary, setShowLibrary] = useState(false);
   const [showLikedBooks, setShowLikedBooks] = useState(false);
   const [showUserActivities, setShowUserActivities] = useState(false);
+  const [showXpHistory, setShowXpHistory] = useState(false);
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [readingSpeed7d, setReadingSpeed7d] = useState<number | null>(null);
@@ -82,6 +88,22 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
       mounted = false;
     };
   }, [userId, user?.id]);
+
+  // ✅ Auto-open "Mes activités" when coming from a notification focus
+  useEffect(() => {
+    if (!activityFocus) return;
+
+    // Only if focus targets THIS profile
+    if (!activityFocus.openMyActivities) return;
+    if (!activityFocus.ownerUserId) return;
+    if (activityFocus.ownerUserId !== userId) return;
+
+    // Wait until profile is loaded (avoid opening during initial loading state)
+    if (loading || !profile) return;
+
+    // Open MyActivities overlay
+    setShowUserActivities(true);
+  }, [activityFocus, userId, loading, profile]);
 
   const loadProfile = async () => {
     const { data } = await supabase
@@ -453,6 +475,15 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
         onClose={() => {
           setShowUserActivities(false);
           loadStats();
+          onFocusConsumed?.();
+        }}
+        focusActivityId={activityFocus?.activityId || null}
+        focusCommentId={activityFocus?.commentId || null}
+        autoOpenComments={activityFocus?.openComments || false}
+        onFocusConsumed={onFocusConsumed}
+        onUserClick={(clickedUserId) => {
+          handleUserClick(clickedUserId);
+          setShowUserActivities(false);
         }}
       />
     );
@@ -477,6 +508,35 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
           overscrollBehaviorX: 'none',
         }}
       >
+        {/* Level Progress Bar */}
+        {profile?.xp_total !== undefined && (
+          <div className="px-4 pt-4 pb-2">
+            <div
+              role="button"
+              tabIndex={0}
+              className="w-full cursor-pointer"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[UserProfileView] Opening XP history modal');
+                setShowXpHistory(true);
+                requestAnimationFrame(() => {
+                  console.log('[UserProfileView] showXpHistory should be true now');
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  console.log('[UserProfileView] Opening XP history modal (keyboard)');
+                  setShowXpHistory(true);
+                }
+              }}
+            >
+              <LevelProgressBar xpTotal={profile.xp_total || 0} variant="full" />
+            </div>
+          </div>
+        )}
+
         <ProfileLayout
         profile={profile}
         stats={stats}
@@ -548,6 +608,15 @@ export function UserProfileView({ userId, onClose, onUserClick }: UserProfileVie
               handleUserClick(clickedUserId);
               setShowFollowingModal(false);
             }}
+          />
+        )}
+
+        {showXpHistory && (
+          <XpHistoryModal
+            open={showXpHistory}
+            onClose={() => setShowXpHistory(false)}
+            userId={userId}
+            displayName={profile?.display_name ?? profile?.username ?? 'Cet utilisateur'}
           />
         )}
     </div>

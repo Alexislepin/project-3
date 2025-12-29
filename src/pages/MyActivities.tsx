@@ -14,9 +14,14 @@ interface MyActivitiesProps {
   onClose: () => void;
   userId?: string; // Optional: if not provided, uses current user
   title?: string; // Optional: custom title
+  focusActivityId?: string | null;
+  focusCommentId?: string | null;
+  autoOpenComments?: boolean;
+  onFocusConsumed?: () => void;
+  onUserClick?: (userId: string) => void; // Optional: callback when user clicks on a profile
 }
 
-export function MyActivities({ onClose, userId: targetUserId, title }: MyActivitiesProps) {
+export function MyActivities({ onClose, userId: targetUserId, title, focusActivityId, focusCommentId, autoOpenComments, onFocusConsumed, onUserClick }: MyActivitiesProps) {
   const { user } = useAuth();
   const userId = targetUserId || user?.id;
   const [activities, setActivities] = useState<any[]>([]);
@@ -27,6 +32,137 @@ export function MyActivities({ onClose, userId: targetUserId, title }: MyActivit
   const [likersActivityId, setLikersActivityId] = useState<string | null>(null);
   const [editingActivity, setEditingActivity] = useState<any>(null);
   const [deletingActivity, setDeletingActivity] = useState<any>(null);
+  const [highlightedActivityId, setHighlightedActivityId] = useState<string | null>(null);
+  const [focusConsumed, setFocusConsumed] = useState(false);
+
+  // Charger l'activité ciblée si elle n'est pas dans la liste
+  useEffect(() => {
+    if (focusActivityId && activities.length > 0 && !loading && !focusConsumed && userId) {
+      const activityExists = activities.some(a => a.id === focusActivityId);
+      
+      if (!activityExists) {
+        // L'activité n'est pas dans les résultats, on la charge séparément
+        const loadTargetActivity = async () => {
+          try {
+            const { data: activityData, error } = await supabase
+              .from('activities')
+              .select(`
+                *,
+                user_id,
+                photos,
+                user_profiles!activities_user_id_fkey(id, username, display_name, avatar_url),
+                books!activities_book_id_fkey(title, author, cover_url, openlibrary_cover_id, isbn)
+              `)
+              .eq('id', focusActivityId)
+              .eq('user_id', userId)
+              .single();
+
+            if (activityData && !error) {
+              // Charger custom_cover_url si book_id existe
+              if (activityData.book_id) {
+                const { data: userBookData } = await supabase
+                  .from('user_books')
+                  .select('custom_cover_url')
+                  .eq('book_id', activityData.book_id)
+                  .eq('user_id', userId)
+                  .maybeSingle();
+
+                if (userBookData?.custom_cover_url && activityData.books) {
+                  (activityData.books as any).custom_cover_url = userBookData.custom_cover_url;
+                }
+              }
+
+              // Charger les réactions et commentaires pour cette activité
+              const { data: reactions } = await supabase
+                .from('activity_reactions')
+                .select('activity_id, user_id')
+                .eq('activity_id', focusActivityId);
+
+              const { data: comments } = await supabase
+                .from('activity_comments')
+                .select('activity_id')
+                .eq('activity_id', focusActivityId);
+
+              const reactionsCount = reactions?.length || 0;
+              const userHasReacted = user?.id ? reactions?.some(r => r.user_id === user.id) || false : false;
+              const commentsCount = comments?.length || 0;
+
+              const activityWithCounts = {
+                id: activityData.id,
+                user: activityData.user_profiles,
+                user_id: activityData.user_id,
+                type: activityData.type,
+                title: activityData.title,
+                pages_read: activityData.pages_read,
+                duration_minutes: activityData.duration_minutes,
+                notes: activityData.notes,
+                quotes: activityData.quotes || [],
+                book: activityData.books,
+                created_at: activityData.created_at,
+                reactions_count: reactionsCount,
+                comments_count: commentsCount,
+                user_has_reacted: userHasReacted,
+              };
+
+              // Ajouter en haut de la liste
+              setActivities(prev => [activityWithCounts, ...prev]);
+            }
+          } catch (error) {
+            console.error('[MyActivities] Error loading target activity:', error);
+          }
+        };
+
+        loadTargetActivity();
+      }
+    }
+  }, [focusActivityId, activities.length, loading, focusConsumed, userId]);
+
+  // Focus sur l'activité après chargement
+  useEffect(() => {
+    if (focusActivityId && activities.length > 0 && !loading && !focusConsumed) {
+      // Vérifier que l'activité existe maintenant dans la liste
+      const activityExists = activities.some(a => a.id === focusActivityId);
+      
+      if (!activityExists) {
+        // Attendre un peu plus si l'activité est en cours de chargement
+        return;
+      }
+
+      // Attendre un peu pour que le DOM soit prêt
+      const timer = setTimeout(() => {
+        const element = document.getElementById(`my-activity-${focusActivityId}`);
+        if (element) {
+          // Scroll vers l'activité
+          requestAnimationFrame(() => {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          });
+          
+          // Highlight pendant 1.5s
+          setHighlightedActivityId(focusActivityId);
+          setTimeout(() => {
+            setHighlightedActivityId(null);
+          }, 1500);
+          
+          // Ouvrir le modal de commentaires si autoOpenComments
+          if (autoOpenComments) {
+            setCommentingActivityId(focusActivityId);
+          }
+          
+          // Marquer comme consommé après 500ms
+          setTimeout(() => {
+            setFocusConsumed(true);
+            onFocusConsumed?.();
+          }, 500);
+        } else {
+          // Si l'élément n'existe pas encore, réessayer après un délai
+          console.warn('[MyActivities] Activity element not found:', focusActivityId);
+          setFocusConsumed(true);
+          onFocusConsumed?.();
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [focusActivityId, activities.length, loading, autoOpenComments, focusConsumed, onFocusConsumed]);
 
   const loadActivities = useCallback(async () => {
     if (!userId) return;
@@ -272,15 +408,25 @@ export function MyActivities({ onClose, userId: targetUserId, title }: MyActivit
           ) : activities.length > 0 ? (
             <div className="space-y-2">
               {activities.map((activity) => (
-                <ActivityCard
-                  key={activity.id}
-                  activity={activity}
-                  onReact={() => handleReact(activity.id)}
-                  onComment={() => setCommentingActivityId(activity.id)}
-                  onOpenLikers={(id) => setLikersActivityId(id)}
-                  onEdit={isOwner ? handleEdit : undefined}
-                  onDelete={isOwner ? handleDelete : undefined}
-                />
+                <div 
+                  key={activity.id} 
+                  id={`my-activity-${activity.id}`}
+                  data-activity-id={activity.id}
+                  className={`transition-all duration-300 ${
+                    highlightedActivityId === activity.id
+                      ? 'ring-2 ring-primary/40 bg-neutral-50 rounded-xl p-1'
+                      : ''
+                  }`}
+                >
+                  <ActivityCard
+                    activity={activity}
+                    onReact={() => handleReact(activity.id)}
+                    onComment={() => setCommentingActivityId(activity.id)}
+                    onOpenLikers={(id) => setLikersActivityId(id)}
+                    onEdit={isOwner ? handleEdit : undefined}
+                    onDelete={isOwner ? handleDelete : undefined}
+                  />
+                </div>
               ))}
             </div>
           ) : (
@@ -326,6 +472,13 @@ export function MyActivities({ onClose, userId: targetUserId, title }: MyActivit
           onClose={() => {
             setCommentingActivityId(null);
             loadActivities();
+          }}
+          initialFocusCommentId={focusCommentId && commentingActivityId === focusActivityId ? focusCommentId : undefined}
+          onUserClick={(userId) => {
+            if (onUserClick) {
+              onUserClick(userId);
+              setCommentingActivityId(null);
+            }
           }}
         />
       )}

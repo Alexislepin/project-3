@@ -447,10 +447,13 @@ export function SessionSummary({
 
         <div className="space-y-6">
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <label className="block text-sm font-bold text-text-main-light">
-                Notes (facultatif)
-              </label>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <label className="block text-sm font-bold text-text-main-light">
+                  Note
+                </label>
+                <span className="text-xs text-text-sub-light">(facultatif)</span>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -459,12 +462,11 @@ export function SessionSummary({
                   setNoteTag(null);
                   setShowAddNoteModal(true);
                 }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 hover:bg-primary/20 transition-colors text-sm font-medium text-primary"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-transparent hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light"
               >
-                <Plus className="w-4 h-4" />
-                Ajouter une note
+                <Plus className="w-3.5 h-3.5" />
+                Ajouter
               </button>
-              <p className="text-xs text-text-sub-light mt-1">ex: citation, idée, résumé…</p>
             </div>
             <textarea
               value={notes}
