@@ -156,7 +156,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
 
   return (
     <div className="max-w-2xl mx-auto">
-      <div className="sticky top-0 bg-background-light z-10 border-b border-gray-200">
+      <div className="sticky top-0 bg-background-light z-10 border-b border-gray-200" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="p-4">
           <div className="flex items-center gap-3 mb-4">
             <button
