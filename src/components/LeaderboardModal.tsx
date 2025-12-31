@@ -105,13 +105,16 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                 return (
                   <button
                     key={profile.id}
-                    onClick={() => {
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
                       if (onUserClick) {
                         onUserClick(profile.id);
                       }
                       onClose();
                     }}
-                    className={`w-full flex items-center gap-3 p-4 rounded-2xl transition-colors text-left ${
+                    className={`w-full flex items-center gap-3 p-4 rounded-2xl transition-colors text-left cursor-pointer ${
                       isFirstPlace
                         ? 'bg-amber-50/60 border-2 border-amber-300/40 shadow-sm'
                         : isCurrentUser
