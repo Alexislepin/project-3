@@ -1,67 +1,112 @@
-import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
 import { BrandLogo } from '../components/BrandLogo';
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+
+function extractCode(url: string) {
+  try {
+    const u = new URL(url);
+    return u.searchParams.get('code') || '';
+  } catch {
+    return '';
+  }
+}
 
 export function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [status, setStatus] = useState<"idle" | "ready" | "saving" | "done" | "error">("idle");
   const [msg, setMsg] = useState<string>("");
+  const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
-    const initSession = async () => {
+    let sub: any;
+
+    const initFromUrl = async (url: string) => {
       try {
-        if (Capacitor.isNativePlatform()) {
-          // Native: wait for deep link (handled by App.tsx listener)
-          // Check if we already have a session from the deep link
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            setStatus("ready");
-          } else {
-            // No session yet, might be waiting for deep link
-            // Check URL hash in case it's already there
-            const hash = window.location.hash;
-            if (hash.includes('access_token') && hash.includes('type=recovery')) {
-              const { data, error } = await supabase.auth.getSessionFromUrl({ 
-                storeSession: true 
-              });
-              if (error || !data.session) {
-                setStatus("error");
-                setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
-              } else {
-                setStatus("ready");
-              }
-            } else {
-              setStatus("error");
-              setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
-            }
-          }
-        } else {
-          // Web: get session from URL
-          const { data, error } = await supabase.auth.getSessionFromUrl({ 
-            storeSession: true 
-          });
+        const code = extractCode(url);
+
+        // Supabase recovery / magic links now often use ?code=...
+        if (code) {
+          console.log('[ResetPassword] Exchanging code for session');
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
           
-          if (error || !data.session) {
-            setStatus("error");
-            setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
-          } else {
-            setStatus("ready");
+          // Verify session was established
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            throw new Error('Session non établie après échange du code');
           }
+          
+          setStatus("ready");
+          return;
         }
-      } catch (err: any) {
-        console.error('[ResetPassword] Error initializing session:', err);
+
+        // Fallback: some flows still send tokens in the hash
+        // ex: #access_token=...&refresh_token=...
+        const hash = url.split('#')[1] || '';
+        const params = new URLSearchParams(hash);
+        const access_token = params.get('access_token');
+        const refresh_token = params.get('refresh_token');
+
+        if (access_token && refresh_token) {
+          console.log('[ResetPassword] Setting session from tokens');
+          const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+          if (error) throw error;
+          
+          // Verify session was established
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            throw new Error('Session non établie après setSession');
+          }
+          
+          setStatus("ready");
+          return;
+        }
+
+        throw new Error('Lien invalide ou incomplet (pas de code/token).');
+      } catch (e: any) {
+        console.error('[ResetPassword] initFromUrl error', e);
+        setInitError(e?.message || "Erreur lors de l'initialisation. Réessaie depuis l'email.");
         setStatus("error");
-        setMsg("Erreur lors de l'initialisation. Réessaie depuis l'email.");
       }
     };
 
-    initSession();
+    (async () => {
+      // WEB
+      if (!Capacitor.isNativePlatform()) {
+        await initFromUrl(window.location.href);
+        return;
+      }
+
+      // NATIVE: on peut déjà tenter avec location.href (parfois rempli)
+      await initFromUrl(window.location.href);
+
+      // Et on écoute aussi les deep links entrants (plus fiable)
+      sub = CapApp.addListener('appUrlOpen', async ({ url }) => {
+        if (!url) return;
+        if (url.startsWith('lexu://reset-password')) {
+          await initFromUrl(url);
+        }
+      });
+    })();
+
+    return () => {
+      sub?.remove?.();
+    };
   }, []);
 
   const handleSave = async () => {
     setMsg("");
+
+    // Verify we have a session before updating password
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      setMsg("Session expirée. Réessaie depuis l'email.");
+      setStatus("error");
+      return;
+    }
 
     if (password.length < 8) {
       setMsg("Mot de passe trop court (8 caractères minimum).");
@@ -98,6 +143,31 @@ export function ResetPasswordPage() {
       setMsg(err?.message || "Une erreur inattendue est survenue.");
     }
   };
+
+  // Show error if initialization failed
+  if (initError) {
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="mb-2">
+              <BrandLogo size={48} color="#111" />
+            </div>
+          </div>
+          <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-6">
+            <h1 className="text-xl font-bold mb-2 text-text-main-light">Erreur</h1>
+            <p className="text-red-600 mb-4">{initError}</p>
+            <a
+              href="/login"
+              className="text-sm text-primary hover:underline font-medium"
+            >
+              ← Retour à la connexion
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
