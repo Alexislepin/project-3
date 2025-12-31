@@ -26,7 +26,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [error, setError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const { user, updateProfile, refreshProfile } = useAuth();
-  const { setIsPicking, isPickingRef } = useImagePicker();
+  const { setIsPicking, shouldBlockClose } = useImagePicker();
   const [avatarBlob, setAvatarBlob] = useState<Blob | null>(null);
   const [avatarExt, setAvatarExt] = useState<string>('jpg');
   const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -57,7 +57,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       return;
     }
     
-    if (uploadingAvatar || isPickingRef.current) {
+    if (uploadingAvatar || shouldBlockClose()) {
       return;
     }
     
@@ -306,13 +306,13 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     }
   };
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
+  const handleOverlayPointerDown = (e: React.PointerEvent) => {
     if (import.meta.env.DEV) {
-      console.log('[EditProfileModal] overlay click');
+      console.log('[EditProfileModal] overlay pointer down');
     }
     if (e.target === e.currentTarget) {
       // Prevent close during picker or upload
-      if (isPickingRef.current || uploadingAvatar) {
+      if (shouldBlockClose() || uploadingAvatar) {
         if (import.meta.env.DEV) {
           console.log('[EditProfileModal] Prevented close during picker/upload');
         }
@@ -328,14 +328,14 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={handleOverlayClick}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onPointerDown={handleOverlayPointerDown}>
       <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={handleModalContainerClick}>
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between">
           <h2 className="text-xl font-bold">Modifier le profil</h2>
           <button
             type="button"
             onClick={onClose}
-            disabled={uploadingAvatar || isPickingRef.current}
+            disabled={uploadingAvatar || shouldBlockClose()}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -358,7 +358,8 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
               <button
                 type="button"
                 onClick={handleChangeAvatar}
-                disabled={uploadingAvatar || saving || isPickingRef.current}
+                onPointerDown={(e) => e.stopPropagation()}
+                disabled={uploadingAvatar || saving || shouldBlockClose()}
                 className="relative flex-shrink-0"
               >
                 <div className="w-24 h-24 rounded-full bg-stone-200 flex items-center justify-center overflow-hidden">
@@ -384,7 +385,8 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                   <button
                     type="button"
                     onClick={handleChangeAvatar}
-                    disabled={uploadingAvatar || saving || isPickingRef.current}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    disabled={uploadingAvatar || saving || shouldBlockClose()}
                     className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
                   >
                     <ImageIcon className="w-4 h-4" />

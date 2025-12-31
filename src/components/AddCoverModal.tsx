@@ -25,7 +25,7 @@ export function AddCoverModal({
   onShowToast,
 }: AddCoverModalProps) {
   const { user } = useAuth();
-  const { setIsPicking, isPickingRef } = useImagePicker();
+  const { setIsPicking, shouldBlockClose } = useImagePicker();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
@@ -35,7 +35,7 @@ export function AddCoverModal({
   // Reset state when modal closes
   const handleClose = () => {
     // Prevent close during upload or picking
-    if (uploading || isPickingRef.current) {
+    if (uploading || shouldBlockClose()) {
       if (import.meta.env.DEV) {
         console.log('[AddCoverModal] Prevented close during upload/picking');
       }
@@ -59,8 +59,12 @@ export function AddCoverModal({
     };
   }, [previewUrl]);
 
-  const handleSelectCover = async () => {
-    if (uploading || isPickingRef.current) return;
+  const handleSelectCover = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (uploading || shouldBlockClose()) return;
 
     // Release previous blob URL if exists
     if (previewUrl && previewUrl.startsWith('blob:')) {
@@ -220,10 +224,10 @@ export function AddCoverModal({
 
   if (!open) return null;
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
+  const handleBackdropPointerDown = (e: React.PointerEvent) => {
     if (e.target === e.currentTarget) {
       // Prevent close during picking or uploading
-      if (isPickingRef.current || uploading) {
+      if (shouldBlockClose() || uploading) {
         if (import.meta.env.DEV) {
           console.log('[AddCoverModal] Ignoring backdrop click during picker/upload');
         }
@@ -241,7 +245,7 @@ export function AddCoverModal({
   return (
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={handleBackdropClick}
+      onPointerDown={handleBackdropPointerDown}
     >
       <div 
         className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
@@ -253,7 +257,7 @@ export function AddCoverModal({
           <button
             type="button"
             onClick={handleClose}
-            disabled={uploading || isPickingRef.current}
+            disabled={uploading || shouldBlockClose()}
             className="text-stone-400 hover:text-stone-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -287,7 +291,8 @@ export function AddCoverModal({
             <button
               type="button"
               onClick={handleSelectCover}
-              disabled={uploading || isPickingRef.current}
+              onPointerDown={(e) => e.stopPropagation()}
+              disabled={uploading || shouldBlockClose()}
               className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <ImageIcon className="w-5 h-5" />

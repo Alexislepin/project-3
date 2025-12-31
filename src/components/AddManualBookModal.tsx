@@ -25,7 +25,7 @@ interface AddManualBookModalProps {
 
 export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps) {
   const { user } = useAuth();
-  const { setIsPicking, isPickingRef } = useImagePicker();
+  const { setIsPicking, shouldBlockClose } = useImagePicker();
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [isbn, setIsbn] = useState('');
@@ -38,8 +38,12 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSelectCover = async () => {
-    if (!user || isPickingRef.current) return;
+  const handleSelectCover = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!user || shouldBlockClose()) return;
 
     setError(null);
     
@@ -238,10 +242,10 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
     }
   };
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
+  const handleBackdropPointerDown = (e: React.PointerEvent) => {
     if (e.target === e.currentTarget) {
       // Prevent close during picking or uploading
-      if (isPickingRef.current || uploadingCover || saving) {
+      if (shouldBlockClose() || uploadingCover || saving) {
         if (import.meta.env.DEV) {
           console.log('[AddManualBookModal] Prevented close during picker/upload');
         }
@@ -252,13 +256,14 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
   };
 
   const handleModalContentClick = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
   };
 
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      onClick={handleBackdropClick}
+      onPointerDown={handleBackdropPointerDown}
     >
       <div 
         className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
@@ -279,7 +284,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
           <button
             type="button"
             onClick={onClose}
-            disabled={isPickingRef.current || uploadingCover || saving}
+            disabled={shouldBlockClose() || uploadingCover || saving}
             className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-6 h-6" />
@@ -386,7 +391,8 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
               <button
                 type="button"
                 onClick={handleSelectCover}
-                disabled={isPickingRef.current || uploadingCover}
+                onPointerDown={(e) => e.stopPropagation()}
+                disabled={shouldBlockClose() || uploadingCover}
                 className="w-full h-40 border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center hover:border-primary hover:bg-primary/5 transition-colors text-text-sub-light disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ImageIcon className="w-10 h-10 mb-2" />
