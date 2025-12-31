@@ -137,7 +137,7 @@ function App() {
   useEffect(() => {
     const updateViewFromPath = () => {
       const path = window.location.pathname;
-      if (path === '/login' || path === '/signup') {
+      if (path === '/login' || path === '/signup' || path === '/reset-password') {
         // Les pages auth sont gérées séparément
         return;
       }
@@ -167,39 +167,44 @@ function App() {
   }, []);
 
   // Hook 12: Deep link handling for password reset (native only)
-  // ResetPasswordPage handles session initialization itself
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       // WEB: handled by ResetPasswordPage directly
       return;
     }
 
-    // NATIVE (iOS/Android): navigate to reset-password when deep link received
-    // ResetPasswordPage will handle the session initialization
+    // NATIVE (iOS/Android): handle deep links and navigate to reset-password
     let removeListener: (() => void) | null = null;
 
-    (async () => {
-      const navigateToReset = (url: string) => {
-        if (!url || !url.includes('reset-password') || !url.startsWith('lexu://')) return;
-        
-        console.log('[APP] Reset password deep link received, navigating to /reset-password');
-        
-        // Navigate to reset password page (SPA navigation)
-        // ResetPasswordPage will handle session initialization from the URL
-        window.history.replaceState({}, '', '/reset-password');
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      };
+    const handleUrl = (url: string) => {
+      if (!url || !url.startsWith('lexu://reset-password')) return;
+      
+      console.log('[APP] Reset password deep link received:', url);
+      
+      // Store the deep link URL for ResetPasswordPage
+      setDeepLinkUrl(url);
+      
+      // Force navigation to /reset-password with state
+      window.history.replaceState({ deepLinkUrl: url }, '', '/reset-password');
+      
+      // Force re-render by updating refreshKey
+      setRefreshKey(prev => prev + 1);
+      
+      // Also dispatch popstate to trigger routing update
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    };
 
+    (async () => {
       // ✅ Cold start
       const launch = await CapApp.getLaunchUrl();
       if (launch?.url) {
-        navigateToReset(launch.url);
+        handleUrl(launch.url);
       }
 
-      // ✅ App déjà ouverte
+      // ✅ App déjà ouverte (background)
       const l = await CapApp.addListener('appUrlOpen', ({ url }) => {
         if (!url) return;
-        navigateToReset(url);
+        handleUrl(url);
       });
 
       removeListener = () => l.remove();
@@ -283,8 +288,9 @@ function App() {
   const path = window.location.pathname;
   
   // Reset password page (public route, ResetPasswordPage handles session validation)
+  // MUST be before the !user check to allow access without authentication
   if (path === '/reset-password') {
-    return <ResetPasswordPage />;
+    return <ResetPasswordPage deepLinkUrl={deepLinkUrl} />;
   }
 
   // Pages auth accessibles sans protection

@@ -13,7 +13,11 @@ function extractCode(url: string) {
   }
 }
 
-export function ResetPasswordPage() {
+interface ResetPasswordPageProps {
+  deepLinkUrl?: string | null;
+}
+
+export function ResetPasswordPage({ deepLinkUrl }: ResetPasswordPageProps = {}) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [status, setStatus] = useState<"idle" | "ready" | "saving" | "done" | "error">("idle");
@@ -80,10 +84,13 @@ export function ResetPasswordPage() {
         return;
       }
 
-      // NATIVE: on peut déjà tenter avec location.href (parfois rempli)
-      await initFromUrl(window.location.href);
+      // NATIVE: use deepLinkUrl from App.tsx if available, otherwise try location.href
+      const urlToUse = deepLinkUrl || window.location.href;
+      if (urlToUse) {
+        await initFromUrl(urlToUse);
+      }
 
-      // Et on écoute aussi les deep links entrants (plus fiable)
+      // Also listen for deep links (in case App.tsx didn't catch it)
       sub = CapApp.addListener('appUrlOpen', async ({ url }) => {
         if (!url) return;
         if (url.startsWith('lexu://reset-password')) {
