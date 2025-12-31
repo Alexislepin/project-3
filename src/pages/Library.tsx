@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus, Sparkles } from 'lucide-react';
@@ -87,6 +87,8 @@ export function Library({}: LibraryProps) {
   const recapReqRef = useRef<string | null>(null);
   const [addCoverBookId, setAddCoverBookId] = useState<string | null>(null);
   const [addCoverBookTitle, setAddCoverBookTitle] = useState<string>('');
+  const searchBarRef = useRef<HTMLDivElement | null>(null);
+  const [searchBarHeight, setSearchBarHeight] = useState(0);
   const { user } = useAuth();
   const searchTimeoutRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -255,6 +257,16 @@ export function Library({}: LibraryProps) {
         type: 'error',
       });
       fatalError('USER_BOOKS ERROR (Library):', error);
+    }
+
+    // Debug logging for cover URLs
+    if (data && data.length > 0) {
+      data.forEach((row: any) => {
+        const title = row.book?.title || 'Unknown';
+        const custom_cover_url = row.custom_cover_url || null;
+        const book_cover_url = row.book?.cover_url || null;
+        console.log('[Library] cover debug', { title, custom_cover_url, book_cover_url });
+      });
     }
 
     // Fallback robuste: si des books sont null, les récupérer en batch
@@ -1384,7 +1396,8 @@ export function Library({}: LibraryProps) {
     }
     
     // ✅ Guard pour empêcher les doubles loads (StrictMode)
-    const reqId = crypto.randomUUID();
+    // Use safe fallback for iOS WebView compatibility
+    const reqId = `${Date.now()}-${Math.random()}`;
     recapReqRef.current = reqId;
     
     console.log('[Library] loadRecap called', { force, bookId: recapBook.book.id, uptoPage: recapBook.uptoPage });
@@ -1507,6 +1520,25 @@ export function Library({}: LibraryProps) {
       }));
     }
   }, [user, recapBook, recapUI.challengeSubmitting, recapUI.hasSubmittedChallenge, recapTabTouched]);
+
+  // Auto-load recap when modal opens (same as ActiveSession)
+  useEffect(() => {
+    if (recapOpen && recapBook && !recapTabTouched) {
+      loadRecap(false);
+    }
+  }, [recapOpen, recapBook, recapTabTouched, loadRecap]);
+
+  // Modal open flag for xp-updated guard (same as ActiveSession)
+  useEffect(() => {
+    if (recapOpen) {
+      document.body.dataset.modalOpen = '1';
+    } else {
+      document.body.dataset.modalOpen = '0';
+    }
+    return () => {
+      document.body.dataset.modalOpen = '0';
+    };
+  }, [recapOpen]);
 
   const handleChangeBookStatus = async (userBookId: string, newStatus: BookStatus) => {
     if (!user) return;
@@ -1736,30 +1768,39 @@ export function Library({}: LibraryProps) {
 
   // Ancienne logique d'ajout manuel via AddBookManuallyModal remplacée
 
+  // Measure search bar height dynamically
+  useLayoutEffect(() => {
+    const measureSearchBar = () => {
+      if (searchBarRef.current) {
+        const height = searchBarRef.current.getBoundingClientRect().height;
+        setSearchBarHeight(height);
+        debugLog('[Library] Search bar height measured', { height });
+      }
+    };
+
+    // Measure on mount
+    measureSearchBar();
+
+    // Measure on resize and orientation change
+    window.addEventListener('resize', measureSearchBar);
+    window.addEventListener('orientationchange', measureSearchBar);
+
+    return () => {
+      window.removeEventListener('resize', measureSearchBar);
+      window.removeEventListener('orientationchange', measureSearchBar);
+    };
+  }, []);
+
   // Debug: Log platform and search bar visibility
   useEffect(() => {
     const platform = Capacitor.getPlatform();
     debugLog('[Library] Component mounted', { 
       platform, 
       isNative: Capacitor.isNativePlatform(),
-      searchBarRendered: true // Always rendered, no conditional
+      searchBarRendered: true, // Always rendered, no conditional
+      searchBarHeight
     });
-    
-    // Check if search bar element exists
-    const searchBarEl = document.querySelector('[data-search-bar]');
-    if (searchBarEl) {
-      const rect = searchBarEl.getBoundingClientRect();
-      debugLog('[Library] Search bar element found', {
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height,
-        visible: rect.width > 0 && rect.height > 0
-      });
-    } else {
-      debugLog('[Library] Search bar element NOT found in DOM');
-    }
-  }, []);
+  }, [searchBarHeight]);
 
   return (
     <div className="h-screen max-w-2xl mx-auto font-sans text-neutral-900 overflow-hidden" style={{ isolation: 'isolate', position: 'relative' }}>
@@ -1780,6 +1821,7 @@ export function Library({}: LibraryProps) {
       {/* Fixed Search + Tabs section (below header) */}
       {/* Always visible on all platforms - no conditional rendering */}
       <div 
+        ref={searchBarRef}
         data-search-bar
         className="fixed left-0 right-0 bg-white border-b border-gray-100"
         style={{
@@ -1851,7 +1893,7 @@ export function Library({}: LibraryProps) {
       <div
         className="h-full overflow-y-auto"
         style={{
-          paddingTop: 'calc(130px + env(safe-area-inset-top))', // Header (56px + safe-area) + Search/Tabs section (~74px)
+          paddingTop: `${searchBarHeight}px`, // Only search bar height (header is sticky and takes space in flow)
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
@@ -2052,7 +2094,7 @@ export function Library({}: LibraryProps) {
             </button>
           </div>
         ) : !searchQuery && userBooks.length > 0 ? (
-          <div className="space-y-3" style={{ marginTop: '-6px' }}>
+          <div className="space-y-3">
             {(() => {
               // Dédupliquer les livres par book.id avant le render
               const uniqueBooks = Array.from(
@@ -2095,10 +2137,10 @@ export function Library({}: LibraryProps) {
                       setRecapBook({
                         book: {
                           id: book.id,
-                          title: book.title,
-                          author: book.author,
-                          cover_url: book.cover_url,
-                          total_pages: book.total_pages,
+                          title: displayTitle,
+                          author: displayAuthor,
+                          cover_url: displayCover,
+                          total_pages: displayPages,
                           isbn: (book as any).isbn || null,
                           book_key: (book as any).book_key || (book as any).openlibrary_work_key || null,
                           openlibrary_key: (book as any).openlibrary_work_key || null,
@@ -2121,7 +2163,8 @@ export function Library({}: LibraryProps) {
                   >
                     <BookCover
                       custom_cover_url={(userBook as any).custom_cover_url || null}
-                      coverUrl={book.cover_url || null}
+                      cacheKey={(userBook.updated_at || Date.now()).toString()}
+                      coverUrl={displayCover}
                       title={displayTitle}
                       author={displayAuthor || 'Auteur inconnu'}
                       isbn={(book as any).isbn || null}
@@ -2224,13 +2267,18 @@ export function Library({}: LibraryProps) {
             }}
             onOpenRecap={() => {
               if (userBook && userBook.book) {
+                const displayTitle = (userBook as any).custom_title ?? userBook.book.title;
+                const displayAuthor = (userBook as any).custom_author ?? userBook.book.author;
+                const displayPages = (userBook as any).custom_total_pages ?? userBook.book.total_pages ?? null;
+                const displayCover = (userBook as any).custom_cover_url ?? userBook.book.cover_url ?? null;
+                
                 setRecapBook({
                   book: {
                     id: userBook.book.id,
-                    title: userBook.book.title,
-                    author: userBook.book.author,
-                    cover_url: userBook.book.cover_url,
-                    total_pages: userBook.book.total_pages,
+                    title: displayTitle,
+                    author: displayAuthor,
+                    cover_url: displayCover,
+                    total_pages: displayPages,
                     isbn: userBook.book.isbn || null,
                     book_key: (userBook.book as any).book_key || (userBook.book as any).openlibrary_work_key || null,
                     openlibrary_key: (userBook.book as any).openlibrary_work_key || null,
@@ -2427,8 +2475,10 @@ export function Library({}: LibraryProps) {
           onClose={() => {
             setShowManualAdd(false);
           }}
-          onAdded={() => {
-            loadUserBooks();
+          onAdded={(book) => {
+            console.log('[Library] Manual book added, triggering status modal flow:', book);
+            setBookToAdd(book as any); // Triggers AddBookStatusModal -> ReadingSetupModal -> handleAddBookToLibrary
+            setShowManualAdd(false); // Close manual add modal
           }}
         />
       )}
@@ -2503,9 +2553,18 @@ export function Library({}: LibraryProps) {
             setAddCoverBookId(null);
             setAddCoverBookTitle('');
           }}
-          onUploaded={(newUrl) => {
-            // Reload user books to refresh custom cover
-            loadUserBooks();
+          onUploaded={(newPath) => {
+            // newPath can be either a storage path or URL (backward compatibility)
+            // Optimistic update: update UI instantly
+            if (addCoverBookId) {
+              setUserBooks(prev => prev.map(ub => 
+                ub.book?.id === addCoverBookId 
+                  ? { ...ub, custom_cover_url: newPath, updated_at: new Date().toISOString() }
+                  : ub
+              ));
+            }
+            // Then refresh from DB
+            loadUserBooks(filter as BookStatus);
             setAddCoverBookId(null);
             setAddCoverBookTitle('');
           }}

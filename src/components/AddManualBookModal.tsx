@@ -1,14 +1,24 @@
-import { useState, useRef } from 'react';
-import { X, Book, Camera, Image as ImageIcon } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Book, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { ensureBookInDB } from '../lib/booksUpsert';
-import { Camera as CapacitorCamera } from '@capacitor/camera';
-import { uploadImageToSupabase, generateBookCoverPath } from '../lib/storageUpload';
+import { pickImage, uploadImageToSupabase } from '../lib/imageUpload';
 
 interface AddManualBookModalProps {
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (book: {
+    id: string;
+    title: string;
+    author: string;
+    total_pages: number | null;
+    cover_url: string | null;
+    isbn?: string | null;
+    google_books_id?: string | null;
+    openlibrary_work_key?: string | null;
+    openlibrary_edition_key?: string | null;
+    openlibrary_cover_id?: number | null;
+  }) => void;
 }
 
 export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps) {
@@ -18,76 +28,54 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
   const [isbn, setIsbn] = useState('');
   const [totalPages, setTotalPages] = useState('');
   const [description, setDescription] = useState('');
-  const [coverUrl, setCoverUrl] = useState('');
-  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
+  const [coverExt, setCoverExt] = useState<string>('jpg');
   const [uploadingCover, setUploadingCover] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSelectCover = async () => {
     if (!user) return;
 
-    try {
-      // Try Capacitor Camera first (iOS/Android)
-      if (typeof window !== 'undefined' && (window as any).Capacitor) {
-        try {
-          const result = await CapacitorCamera.pickImages({
-            quality: 85,
-            limit: 1,
-          });
-
-          if (result.photos && result.photos.length > 0) {
-            const photo = result.photos[0];
-            const response = await fetch(photo.webPath!);
-            const blob = await response.blob();
-            const file = new File([blob], `cover_${Date.now()}.jpg`, { type: 'image/jpeg' });
-            setCoverFile(file);
-            setCoverPreview(photo.webPath!);
-            setCoverUrl(''); // Clear URL if file selected
-          }
-          return;
-        } catch (error) {
-          console.log('[AddManualBookModal] Capacitor Camera not available, using file input:', error);
-        }
-      }
-
-      // Fallback: Web file input
-      fileInputRef.current?.click();
-    } catch (error) {
-      console.error('[AddManualBookModal] Error selecting cover:', error);
-      setError('Erreur lors de la sélection de la couverture');
+    setError(null);
+    
+    // Release previous blob URL if exists
+    if (coverPreview && coverPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(coverPreview);
     }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setError('Veuillez sélectionner une image');
-      return;
+    
+    const result = await pickImage();
+    
+    if (!result) {
+      return; // User cancelled
     }
 
-    setCoverFile(file);
-    setCoverPreview(URL.createObjectURL(file));
-    setCoverUrl(''); // Clear URL if file selected
-
-    // Reset input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    const { blob, ext } = result;
+    setCoverBlob(blob);
+    setCoverExt(ext);
+    
+    // Create preview URL from blob
+    const previewUrl = URL.createObjectURL(blob);
+    setCoverPreview(previewUrl);
   };
 
   const removeCover = () => {
     if (coverPreview && coverPreview.startsWith('blob:')) {
       URL.revokeObjectURL(coverPreview);
     }
-    setCoverFile(null);
+    setCoverBlob(null);
     setCoverPreview(null);
-    setCoverUrl('');
   };
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (coverPreview && coverPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(coverPreview);
+      }
+    };
+  }, [coverPreview]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,6 +87,12 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
 
     if (!title.trim() || !author.trim()) {
       setError("Le titre et l'auteur sont obligatoires");
+      return;
+    }
+
+    // Total pages is REQUIRED in this modal
+    if (!totalPages.trim() || parseInt(totalPages, 10) <= 0) {
+      setError("Le nombre de pages est obligatoire et doit être supérieur à 0");
       return;
     }
 
@@ -118,129 +112,113 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
       }
 
       const userId = authData.user.id;
-      console.log('[AddManualBookModal] User ID:', userId);
 
       const isbnValue = isbn.trim() || null;
-      const totalPagesValue = totalPages ? (parseInt(totalPages, 10) > 0 ? parseInt(totalPages, 10) : null) : null;
+      const totalPagesValue = parseInt(totalPages, 10); // Already validated as > 0
       const descriptionValue = description.trim() || null;
 
-      // Upload cover if file selected
-      let coverUrlValue = coverUrl.trim() || null;
-      let customCoverPath = null;
-
-      if (coverFile) {
-        try {
-          // First ensure book exists to get bookId
-          const tempBookData: any = {
-            title: title.trim(),
-            author: author.trim(),
-            total_pages: totalPagesValue,
-            isbn: isbnValue,
-            description: descriptionValue,
-            cover_url: null, // Will be set after upload
-          };
-
-          const tempBookId = await ensureBookInDB(supabase, tempBookData);
-          const path = generateBookCoverPath(userId, tempBookId);
-          
-          const uploadedUrl = await uploadImageToSupabase(supabase, coverFile, {
-            bucket: 'book-covers',
-            path,
-            compress: true,
-            maxWidth: 800,
-            maxHeight: 1200,
-            quality: 0.85,
-          });
-
-          customCoverPath = path;
-          coverUrlValue = uploadedUrl;
-        } catch (uploadError) {
-          console.error('[AddManualBookModal] Error uploading cover:', uploadError);
-          setError('Erreur lors de l\'upload de la couverture. Le livre sera ajouté sans couverture.');
-          // Continue without cover
-        }
-      }
-
-      setUploadingCover(false);
-
-      // Build book object for ensureBookInDB (update with cover URL if uploaded)
-      const bookData: any = {
+      // First ensure book exists to get bookId
+      const tempBookData: any = {
         title: title.trim(),
         author: author.trim(),
         total_pages: totalPagesValue,
         isbn: isbnValue,
         description: descriptionValue,
-        cover_url: coverUrlValue,
+        cover_url: null, // Will be set after upload if needed
       };
 
-      console.log('[AddManualBookModal] Book data for ensureBookInDB:', bookData);
-
-      // Ensure book exists in DB
       let bookId: string;
       try {
-        bookId = await ensureBookInDB(supabase, bookData);
-        console.log('[AddManualBookModal] Book ID from ensureBookInDB:', bookId);
+        bookId = await ensureBookInDB(supabase, tempBookData);
       } catch (bookError: any) {
-        console.error('[AddManualBookModal] Error ensuring manual book in DB:', {
-          error: bookError,
-          message: bookError?.message,
-          code: bookError?.code,
-          details: bookError?.details,
-          hint: bookError?.hint,
-        });
+        console.error('[AddManualBookModal] Error ensuring book in DB:', bookError);
         const errorMessage = bookError?.message || "Impossible d'ajouter le livre";
         setError(errorMessage);
         setSaving(false);
         return;
       }
 
-      // Upsert into user_books (no progress_pct field, it doesn't exist)
-      const userBookData: any = {
-        user_id: userId,
-        book_id: bookId,
-        status: 'want_to_read',
-        current_page: 0,
-      };
+      // Upload cover if blob selected
+      let coverUrlValue: string | null = null;
 
-      // Add custom_cover_path if cover was uploaded
-      if (customCoverPath) {
-        userBookData.custom_cover_path = customCoverPath;
+      if (coverBlob) {
+        setUploadingCover(true);
+        try {
+          const ext = coverExt === 'jpg' ? 'jpg' : coverExt;
+          const path = `${userId}/${bookId}/cover.${ext}`;
+          const { path: uploadedPath } = await uploadImageToSupabase(supabase, {
+            bucket: 'book-covers',
+            path,
+            blob: coverBlob,
+            mime: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+          });
+          // Store the path (more robust than URL)
+          coverUrlValue = uploadedPath;
+          setUploadingCover(false);
+        } catch (uploadError: any) {
+          console.error('[AddManualBookModal] Error uploading cover:', uploadError);
+          setUploadingCover(false);
+          setError("Impossible d'importer l'image, le livre sera ajouté sans couverture.");
+          // Continue without cover
+        }
       }
 
-      console.log('[AddManualBookModal] User book data for upsert:', userBookData);
+      // Update book with cover URL if uploaded
+      if (coverUrlValue) {
+        // Get public URL for the cover
+        const { data: publicUrlData } = supabase.storage.from('book-covers').getPublicUrl(coverUrlValue);
+        const publicCoverUrl = publicUrlData?.publicUrl;
+        
+        if (publicCoverUrl) {
+          // Update book with cover URL
+          await supabase
+            .from('books')
+            .update({ cover_url: publicCoverUrl })
+            .eq('id', bookId);
+        }
+      }
 
-      const { data: userBookDataResult, error: userBookError } = await supabase
-        .from('user_books')
-        .upsert(userBookData, {
-          onConflict: 'user_id,book_id',
-        })
-        .select();
+      // Fetch the created book to return it
+      const { data: createdBook, error: fetchError } = await supabase
+        .from('books')
+        .select('id, title, author, total_pages, cover_url, isbn, google_books_id, openlibrary_work_key, openlibrary_edition_key, openlibrary_cover_id')
+        .eq('id', bookId)
+        .single();
 
-      console.log('[AddManualBookModal] User book upsert result:', {
-        data: userBookDataResult,
-        error: userBookError,
-        errorCode: (userBookError as any)?.code,
-        errorMessage: userBookError?.message,
-        errorDetails: (userBookError as any)?.details,
-        errorHint: (userBookError as any)?.hint,
-      });
-
-      if (userBookError) {
-        console.error('[AddManualBookModal] Error inserting manual user_book:', userBookError);
-        const errorMessage = userBookError.message || "Impossible d'ajouter le livre à votre bibliothèque";
-        setError(errorMessage);
+      if (fetchError || !createdBook) {
+        console.error('[AddManualBookModal] Error fetching created book:', fetchError);
+        setError("Livre créé mais erreur lors de la récupération");
         setSaving(false);
+        setUploadingCover(false);
         return;
       }
 
-      console.log('[AddManualBookModal] Successfully added book to library');
-      onAdded();
+      // Return the book object to parent (will trigger AddBookStatusModal flow)
+      // Format compatible with GoogleBook | UiBook expected by handleAddBookToLibrary
+      const dbBook = {
+        id: createdBook.id,
+        title: createdBook.title,
+        author: createdBook.author,
+        total_pages: createdBook.total_pages,
+        pageCount: createdBook.total_pages, // Also provide pageCount for compatibility
+        cover_url: createdBook.cover_url,
+        thumbnail: createdBook.cover_url, // Also provide thumbnail for compatibility
+        isbn: createdBook.isbn || null,
+        google_books_id: createdBook.google_books_id || null,
+        openlibrary_work_key: createdBook.openlibrary_work_key || null,
+        openlibrary_edition_key: createdBook.openlibrary_edition_key || null,
+        openlibrary_cover_id: createdBook.openlibrary_cover_id || null,
+      };
+
+      console.log('[AddManualBookModal] Book created successfully, calling onAdded:', dbBook);
+      onAdded(dbBook);
       onClose();
     } catch (err) {
       console.error('[AddManualBookModal] Unexpected error:', err);
       const errorMessage = err instanceof Error ? err.message : "Une erreur inattendue est survenue";
       setError(errorMessage);
       setSaving(false);
+      setUploadingCover(false);
     }
   };
 
@@ -327,7 +305,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
 
             <div>
               <label className="block text-sm font-semibold text-text-main-light mb-2">
-                Nombre de pages
+                Nombre de pages <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -336,6 +314,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
                 onChange={(e) => setTotalPages(e.target.value)}
                 placeholder="Ex: 320"
                 className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                required
               />
             </div>
           </div>
@@ -345,15 +324,6 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
               Couverture (optionnel)
             </label>
             
-            {/* Hidden file input for web fallback */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-
             {coverPreview ? (
               <div className="relative">
                 <div className="relative w-full aspect-[2/3] rounded-xl overflow-hidden border-2 border-gray-200">
@@ -384,21 +354,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
               >
                 <ImageIcon className="w-10 h-10 mb-2" />
                 <span className="text-sm font-medium">Ajouter une couverture</span>
-                <span className="text-xs mt-1">Caméra ou galerie</span>
               </button>
-            )}
-
-            {/* Fallback: URL input (optional, for backward compatibility) */}
-            {!coverPreview && (
-              <div className="mt-2">
-                <input
-                  type="url"
-                  value={coverUrl}
-                  onChange={(e) => setCoverUrl(e.target.value)}
-                  placeholder="Ou coller une URL d'image (optionnel)"
-                  className="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                />
-              </div>
             )}
           </div>
 
@@ -432,8 +388,8 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
             </button>
             <button
               type="submit"
-              className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-semibold hover:brightness-95 transition-all disabled:opacity-50"
-              disabled={saving}
+              className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-semibold hover:brightness-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={saving || !title.trim() || !author.trim() || !totalPages.trim() || parseInt(totalPages, 10) <= 0}
             >
               {saving ? 'Ajout en cours...' : 'Ajouter'}
             </button>
