@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
+import { X, Image as ImageIcon, Upload, Loader2, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { pickImageBlob } from '../lib/pickImage';
 import { UploadOverlay } from './UploadOverlay';
 import { Capacitor } from '@capacitor/core';
+import { useImagePicker } from '../hooks/useImagePicker';
 
 interface AddCoverModalProps {
   open: boolean;
@@ -24,19 +25,19 @@ export function AddCoverModal({
   onShowToast,
 }: AddCoverModalProps) {
   const { user } = useAuth();
+  const { setIsPicking, isPickingRef } = useImagePicker();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
   const [coverExt, setCoverExt] = useState<string>('jpg');
-  const ignoreBackdropRef = useRef(false);
   const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   // Reset state when modal closes
   const handleClose = () => {
-    // Prevent close during upload
-    if (uploading) {
+    // Prevent close during upload or picking
+    if (uploading || isPickingRef.current) {
       if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] Prevented close during upload');
+        console.log('[AddCoverModal] Prevented close during upload/picking');
       }
       return;
     }
@@ -59,50 +60,53 @@ export function AddCoverModal({
   }, [previewUrl]);
 
   const handleSelectCover = async () => {
-    if (uploading) return;
+    if (uploading || isPickingRef.current) return;
 
     // Release previous blob URL if exists
     if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
     }
 
-    // Prevent backdrop close during picker (iOS bug fix)
-    ignoreBackdropRef.current = true;
-    setTimeout(() => {
-      ignoreBackdropRef.current = false;
-    }, 800);
+    // Set global picking state (prevents modal closure)
+    setIsPicking(true);
 
     if (import.meta.env.DEV) {
       console.log('[AddCoverModal] Opening image picker');
     }
 
-    const result = await pickImageBlob();
-    
-    if (!result) {
-      if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] User cancelled image selection');
+    try {
+      const result = await pickImageBlob();
+      
+      if (!result) {
+        if (import.meta.env.DEV) {
+          console.log('[AddCoverModal] User cancelled image selection');
+        }
+        return; // User cancelled
       }
-      return; // User cancelled
+
+      const { blob, contentType, ext } = result;
+      setCoverBlob(blob);
+      setCoverExt(ext);
+      
+      // Create preview URL from blob
+      const preview = URL.createObjectURL(blob);
+      setPreviewUrl(preview);
+
+      if (import.meta.env.DEV) {
+        console.log('[AddCoverModal] Image selected', {
+          contentType,
+          size: blob.size,
+          ext,
+        });
+      }
+
+      // Don't auto-upload - user must click "Enregistrer"
+    } finally {
+      // Reset picking state after a delay (iOS needs time to settle)
+      setTimeout(() => {
+        setIsPicking(false);
+      }, 500);
     }
-
-    const { blob, contentType, ext } = result;
-    setCoverBlob(blob);
-    setCoverExt(ext);
-    
-    // Create preview URL from blob
-    const preview = URL.createObjectURL(blob);
-    setPreviewUrl(preview);
-
-    if (import.meta.env.DEV) {
-      console.log('[AddCoverModal] Image selected', {
-        contentType,
-        size: blob.size,
-        ext,
-      });
-    }
-
-    // Auto-upload immediately after selection (iOS-friendly)
-    handleUpload(blob, contentType, ext);
   };
 
   // Upload image to Supabase Storage
@@ -218,9 +222,10 @@ export function AddCoverModal({
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
-      if (ignoreBackdropRef.current) {
+      // Prevent close during picking or uploading
+      if (isPickingRef.current || uploading) {
         if (import.meta.env.DEV) {
-          console.log('[AddCoverModal] Ignoring backdrop click during picker');
+          console.log('[AddCoverModal] Ignoring backdrop click during picker/upload');
         }
         return;
       }
@@ -246,8 +251,9 @@ export function AddCoverModal({
         <div className="flex items-center justify-between p-6 border-b border-stone-200">
           <h2 className="text-xl font-semibold text-stone-900">Ajouter une couverture</h2>
           <button
+            type="button"
             onClick={handleClose}
-            disabled={uploading}
+            disabled={uploading || isPickingRef.current}
             className="text-stone-400 hover:text-stone-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -258,11 +264,15 @@ export function AddCoverModal({
         <div className="p-6 space-y-6" style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom) + 16px)' }}>
           {/* Preview */}
           {previewUrl && (
-            <div className="relative w-full aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden">
+            <div 
+              className="relative w-full aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
               <img
                 src={previewUrl}
                 alt="Aperçu"
                 className="w-full h-full object-cover"
+                onClick={(e) => e.stopPropagation()}
               />
             </div>
           )}
@@ -275,8 +285,9 @@ export function AddCoverModal({
             </div>
           ) : !previewUrl ? (
             <button
+              type="button"
               onClick={handleSelectCover}
-              disabled={uploading}
+              disabled={uploading || isPickingRef.current}
               className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <ImageIcon className="w-5 h-5" />
@@ -285,6 +296,16 @@ export function AddCoverModal({
           ) : (
             <div className="space-y-3">
               <button
+                type="button"
+                onClick={() => handleUpload()}
+                disabled={uploading || !coverBlob}
+                className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Check className="w-5 h-5" />
+                Enregistrer
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   if (previewUrl && previewUrl.startsWith('blob:')) {
                     URL.revokeObjectURL(previewUrl);

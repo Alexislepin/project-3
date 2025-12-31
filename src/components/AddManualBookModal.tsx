@@ -3,7 +3,9 @@ import { X, Book, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { ensureBookInDB } from '../lib/booksUpsert';
-import { pickImage, uploadImageToSupabase } from '../lib/imageUpload';
+import { pickImageBlob } from '../lib/pickImage';
+import { uploadImageToSupabase } from '../lib/imageUpload';
+import { useImagePicker } from '../hooks/useImagePicker';
 
 interface AddManualBookModalProps {
   onClose: () => void;
@@ -23,6 +25,7 @@ interface AddManualBookModalProps {
 
 export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps) {
   const { user } = useAuth();
+  const { setIsPicking, isPickingRef } = useImagePicker();
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [isbn, setIsbn] = useState('');
@@ -36,7 +39,7 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
   const [error, setError] = useState<string | null>(null);
 
   const handleSelectCover = async () => {
-    if (!user) return;
+    if (!user || isPickingRef.current) return;
 
     setError(null);
     
@@ -45,19 +48,32 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
       URL.revokeObjectURL(coverPreview);
     }
     
-    const result = await pickImage();
+    // Set global picking state (prevents modal closure)
+    setIsPicking(true);
     
-    if (!result) {
-      return; // User cancelled
-    }
+    try {
+      const result = await pickImageBlob();
+      
+      if (!result) {
+        return; // User cancelled
+      }
 
-    const { blob, ext } = result;
-    setCoverBlob(blob);
-    setCoverExt(ext);
-    
-    // Create preview URL from blob
-    const previewUrl = URL.createObjectURL(blob);
-    setCoverPreview(previewUrl);
+      const { blob, ext, contentType } = result;
+      setCoverBlob(blob);
+      setCoverExt(ext);
+      
+      // Create preview URL from blob
+      const previewUrl = URL.createObjectURL(blob);
+      setCoverPreview(previewUrl);
+    } catch (err: any) {
+      console.error('[AddManualBookModal] pick error', err);
+      setError('Erreur lors de la sélection de l\'image');
+    } finally {
+      // Reset picking state after a delay (iOS needs time to settle)
+      setTimeout(() => {
+        setIsPicking(false);
+      }, 500);
+    }
   };
 
   const removeCover = () => {
@@ -222,17 +238,31 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
     }
   };
 
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      // Prevent close during picking or uploading
+      if (isPickingRef.current || uploadingCover || saving) {
+        if (import.meta.env.DEV) {
+          console.log('[AddManualBookModal] Prevented close during picker/upload');
+        }
+        return;
+      }
+      onClose();
+    }
+  };
+
+  const handleModalContentClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose();
-        }
-      }}
+      onClick={handleBackdropClick}
     >
       <div 
         className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        onClick={handleModalContentClick}
       >
         <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between rounded-t-2xl z-10">
           <div className="flex items-center gap-3">
@@ -247,8 +277,10 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            disabled={isPickingRef.current || uploadingCover || saving}
+            className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-6 h-6" />
           </button>
@@ -326,11 +358,15 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
             
             {coverPreview ? (
               <div className="relative">
-                <div className="relative w-full aspect-[2/3] rounded-xl overflow-hidden border-2 border-gray-200">
+                <div 
+                  className="relative w-full aspect-[2/3] rounded-xl overflow-hidden border-2 border-gray-200"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <img
                     src={coverPreview}
                     alt="Couverture"
                     className="w-full h-full object-cover"
+                    onClick={(e) => e.stopPropagation()}
                   />
                   <button
                     type="button"
@@ -350,7 +386,8 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
               <button
                 type="button"
                 onClick={handleSelectCover}
-                className="w-full h-40 border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center hover:border-primary hover:bg-primary/5 transition-colors text-text-sub-light"
+                disabled={isPickingRef.current || uploadingCover}
+                className="w-full h-40 border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center hover:border-primary hover:bg-primary/5 transition-colors text-text-sub-light disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ImageIcon className="w-10 h-10 mb-2" />
                 <span className="text-sm font-medium">Ajouter une couverture</span>

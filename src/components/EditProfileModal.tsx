@@ -6,6 +6,7 @@ import { Toast } from './Toast';
 import { UploadOverlay } from './UploadOverlay';
 import { Capacitor } from '@capacitor/core';
 import { pickImageBlob } from '../lib/pickImage';
+import { useImagePicker } from '../hooks/useImagePicker';
 
 interface EditProfileModalProps {
   profile: any;
@@ -25,7 +26,9 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [error, setError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const { user, updateProfile, refreshProfile } = useAuth();
-  const ignoreBackdropRef = useRef(false);
+  const { setIsPicking, isPickingRef } = useImagePicker();
+  const [avatarBlob, setAvatarBlob] = useState<Blob | null>(null);
+  const [avatarExt, setAvatarExt] = useState<string>('jpg');
   const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   const handleAddInterest = () => {
@@ -54,18 +57,14 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       return;
     }
     
-    if (uploadingAvatar) {
+    if (uploadingAvatar || isPickingRef.current) {
       return;
     }
     
     setError('');
-    setUploadingAvatar(true);
-
-    // Prevent backdrop close during picker (iOS bug fix)
-    ignoreBackdropRef.current = true;
-    setTimeout(() => {
-      ignoreBackdropRef.current = false;
-    }, 800);
+    
+    // Set global picking state (prevents modal closure)
+    setIsPicking(true);
     
     try {
       if (import.meta.env.DEV) {
@@ -78,11 +77,12 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
         if (import.meta.env.DEV) {
           console.log('[EditProfileModal] pick cancelled');
         }
-        setUploadingAvatar(false);
         return;
       }
 
       const { blob, contentType, ext } = result;
+      setAvatarBlob(blob);
+      setAvatarExt(ext);
       
       if (import.meta.env.DEV) {
         console.log('[EditProfileModal] pick success', {
@@ -97,24 +97,43 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       const previewUrl = URL.createObjectURL(blob);
       setAvatarPreview(previewUrl);
       
+      // Don't auto-upload - user must click "Enregistrer la photo"
+    } catch (err: any) {
+      console.error('[EditProfileModal] pick error', err);
+      setToast({ message: 'Erreur lors de la sélection de la photo', type: 'error' });
+    } finally {
+      // Reset picking state after a delay (iOS needs time to settle)
+      setTimeout(() => {
+        setIsPicking(false);
+      }, 500);
+    }
+  };
+
+  const handleUploadAvatar = async () => {
+    if (!user?.id || !avatarBlob || uploadingAvatar) return;
+    
+    setError('');
+    setUploadingAvatar(true);
+    
+    try {
       // Upload to Supabase Storage with RLS-compatible path
-      const filePath = `${user.id}/avatar_${Date.now()}.${ext}`;
+      const filePath = `${user.id}/avatar_${Date.now()}.${avatarExt}`;
       
       if (import.meta.env.DEV) {
         console.log('[EditProfileModal] upload start', {
           bucket: 'avatars',
           path: filePath,
           userId: user.id,
-          contentType,
-          blobSize: blob.size,
+          contentType: `image/${avatarExt === 'jpg' ? 'jpeg' : avatarExt}`,
+          blobSize: avatarBlob.size,
         });
       }
       
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, blob, {
+        .upload(filePath, avatarBlob, {
           upsert: true,
-          contentType,
+          contentType: `image/${avatarExt === 'jpg' ? 'jpeg' : avatarExt}`,
         });
       
       if (uploadError) {
@@ -155,10 +174,11 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       }
       
       // Cleanup blob URL and update preview with public URL
-      if (previewUrl && previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(previewUrl);
+      if (avatarPreview && avatarPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(avatarPreview);
       }
       setAvatarPreview(publicUrl);
+      setAvatarBlob(null); // Clear blob after successful upload
       
       // Refresh profile in context
       await refreshProfile(user.id);
@@ -292,7 +312,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     }
     if (e.target === e.currentTarget) {
       // Prevent close during picker or upload
-      if (ignoreBackdropRef.current || uploadingAvatar) {
+      if (isPickingRef.current || uploadingAvatar) {
         if (import.meta.env.DEV) {
           console.log('[EditProfileModal] Prevented close during picker/upload');
         }
@@ -315,7 +335,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
           <button
             type="button"
             onClick={onClose}
-            disabled={uploadingAvatar}
+            disabled={uploadingAvatar || isPickingRef.current}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -338,12 +358,17 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
               <button
                 type="button"
                 onClick={handleChangeAvatar}
-                disabled={uploadingAvatar || saving}
+                disabled={uploadingAvatar || saving || isPickingRef.current}
                 className="relative flex-shrink-0"
               >
                 <div className="w-24 h-24 rounded-full bg-stone-200 flex items-center justify-center overflow-hidden">
                   {avatarPreview ? (
-                    <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+                    <img 
+                      src={avatarPreview} 
+                      alt="Avatar" 
+                      className="w-full h-full object-cover"
+                      onClick={(e) => e.stopPropagation()}
+                    />
                   ) : (
                     <span className="text-3xl font-bold text-stone-600">
                       {displayName.charAt(0).toUpperCase()}
@@ -355,15 +380,28 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                 <p className="text-sm text-stone-600 mb-2">
                   Choisissez une photo pour votre profil
                 </p>
-                <button
-                  type="button"
-                  onClick={handleChangeAvatar}
-                  disabled={uploadingAvatar || saving}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
-                >
-                  <ImageIcon className="w-4 h-4" />
-                  <span>Changer la photo</span>
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleChangeAvatar}
+                    disabled={uploadingAvatar || saving || isPickingRef.current}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                    <span>Choisir une photo</span>
+                  </button>
+                  {avatarBlob && (
+                    <button
+                      type="button"
+                      onClick={handleUploadAvatar}
+                      disabled={uploadingAvatar || saving}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition-colors disabled:opacity-50 text-sm"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>Enregistrer la photo</span>
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs text-stone-500 mt-2">
                   JPG, PNG ou GIF. Maximum 5 Mo.
                 </p>
