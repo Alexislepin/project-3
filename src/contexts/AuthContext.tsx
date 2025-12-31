@@ -4,6 +4,9 @@ import { supabase } from '../lib/supabase';
 import { scheduleGoalCheck } from '../utils/goalNotifications';
 import { debugLog, debugError } from '../utils/logger';
 import { mapAuthError, FriendlyAuthError } from '../lib/authErrors';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { handleOAuthCallback } from '../lib/oauth';
 
 // Safe timer management to prevent double-invoke issues with React StrictMode
 const endedTimers = new Set<string>();
@@ -169,6 +172,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isMounted = false;
       if (initTimeout) clearTimeout(initTimeout);
       subscription.unsubscribe();
+    };
+  }, []);
+
+  // Deep link handler for iOS/Android OAuth callbacks
+  useEffect(() => {
+    const isNative = Capacitor.isNativePlatform();
+    if (!isNative) return;
+
+    let listener: any = null;
+
+    const setupDeepLinkListener = async () => {
+      try {
+        // Handle cold start (app opened via deep link)
+        const launch = await CapacitorApp.getLaunchUrl();
+        if (launch?.url) {
+          debugLog('[AUTH] OAuth callback received (cold start)', { url: launch.url });
+          if (launch.url.startsWith('lexu://auth/callback')) {
+            const { error } = await handleOAuthCallback(launch.url);
+            if (error) {
+              debugError('[AUTH] OAuth callback error (cold start)', error);
+            } else {
+              debugLog('[AUTH] OAuth callback successful (cold start)');
+            }
+          }
+        }
+
+        // Listen for deep links when app is already running
+        listener = await CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
+          debugLog('[AUTH] OAuth callback received', { url });
+
+          if (!url) {
+            debugError('[AUTH] Deep link URL is undefined');
+            return;
+          }
+
+          if (url.startsWith('lexu://auth/callback')) {
+            const { error } = await handleOAuthCallback(url);
+            if (error) {
+              debugError('[AUTH] OAuth callback error', error);
+            } else {
+              debugLog('[AUTH] OAuth callback successful');
+            }
+          } else {
+            debugLog('[AUTH] Deep link ignored (not OAuth callback)', { url });
+          }
+        });
+
+        debugLog('[AUTH] Deep link listener registered');
+      } catch (error) {
+        debugError('[AUTH] Error setting up deep link listener', error);
+      }
+    };
+
+    setupDeepLinkListener();
+
+    return () => {
+      if (listener) {
+        listener.remove();
+      }
     };
   }, []);
 

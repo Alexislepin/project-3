@@ -15,7 +15,7 @@ export function LoginPage() {
     setGoogleLoading(true);
     setError('');
     
-    const { error } = await signInWithGoogle();
+    const { error } = await signInWithGoogle({ forceAccount: false });
     
     if (error) {
       setError(error.message || 'Erreur lors de la connexion Google');
@@ -142,6 +142,24 @@ export function LoginPage() {
               </svg>
               {googleLoading ? 'Connexion...' : 'Se connecter avec Google'}
             </button>
+
+            <div className="mt-3 text-center">
+              <button
+                onClick={async () => {
+                  setGoogleLoading(true);
+                  setError('');
+                  const { error } = await signInWithGoogle({ forceAccount: true });
+                  if (error) {
+                    setError(error.message || 'Erreur lors de la connexion Google');
+                    setGoogleLoading(false);
+                  }
+                }}
+                disabled={loading || googleLoading}
+                className="text-sm text-text-sub-light hover:text-text-main-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed underline"
+              >
+                Se connecter avec un autre compte
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 text-center">

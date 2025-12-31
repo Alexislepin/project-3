@@ -1,11 +1,11 @@
-import { useState, useRef } from 'react';
-import { X, Check, Camera, Image as ImageIcon } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Check, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { pickImage } from '../lib/imageUpload';
+import { uploadImageToBucket } from '../lib/storageUpload';
+import { Toast } from './Toast';
 import { Capacitor } from '@capacitor/core';
-import { uploadImageToSupabase, generateAvatarPath } from '../lib/storageUpload';
-import { debugError } from '../utils/logger';
 
 interface EditProfileModalProps {
   profile: any;
@@ -21,12 +21,13 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [newInterest, setNewInterest] = useState('');
   const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url || '');
   const [avatarPreview, setAvatarPreview] = useState(profile.avatar_url || '');
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarBlob, setAvatarBlob] = useState<Blob | null>(null);
+  const [avatarExt, setAvatarExt] = useState<string>('jpg');
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [error, setError] = useState('');
-  const { user, updateProfile } = useAuth();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const { user, updateProfile, refreshProfile } = useAuth();
 
   const handleAddInterest = () => {
     if (newInterest.trim() && !interests.includes(newInterest.trim())) {
@@ -39,181 +40,43 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     setInterests(interests.filter((i) => i !== interest));
   };
 
-  const handleCameraSource = async (cameraSource: CameraSource) => {
-    try {
-      setError('');
-      
-      if (!Capacitor.isNativePlatform()) {
-        fileInputRef.current?.click();
-        return;
-      }
-
-      // Check permissions first
-      try {
-        const { Camera } = await import('@capacitor/camera');
-        const permissions = await Camera.checkPermissions();
-        
-        if (cameraSource === CameraSource.Camera) {
-          if (permissions.camera !== 'granted') {
-            const requestResult = await Camera.requestPermissions({ permissions: ['camera'] });
-            if (requestResult.camera !== 'granted') {
-              setError('Permission caméra refusée. Ouvrez les Réglages pour autoriser l\'accès.');
-              return;
-            }
-          }
-        } else if (cameraSource === CameraSource.Photos) {
-          if (permissions.photos !== 'granted') {
-            const requestResult = await Camera.requestPermissions({ permissions: ['photos'] });
-            if (requestResult.photos !== 'granted') {
-              setError('Permission galerie refusée. Ouvrez les Réglages pour autoriser l\'accès.');
-              return;
-            }
-          }
-        }
-      } catch (permError: any) {
-        debugError('[EditProfileModal] Permission check error:', permError);
-        // Continue anyway, might work on some platforms
-      }
-
-      // Handle simulator fallback for camera
-      if (cameraSource === CameraSource.Camera && Capacitor.getPlatform() === 'ios') {
-        try {
-          const image = await CapacitorCamera.getPhoto({
-            quality: 80,
-            allowEditing: true,
-            resultType: CameraResultType.Uri,
-            source: CameraSource.Camera,
-          });
-
-          if (!image.webPath) {
-            return;
-          }
-
-          const response = await fetch(image.webPath);
-          const blob = await response.blob();
-          const file = new File([blob], 'avatar.jpg', { type: 'image/jpeg' });
-
-          setAvatarFile(file);
-          setAvatarPreview(image.webPath);
-        } catch (cameraError: any) {
-          // If camera fails (e.g., simulator), fallback to gallery
-          if (cameraError.message?.includes('not available') || cameraError.message?.includes('simulator')) {
-            setError('Caméra indisponible. Utilisation de la galerie...');
-            // Fallback to gallery
-            try {
-              const image = await CapacitorCamera.getPhoto({
-                quality: 80,
-                allowEditing: true,
-                resultType: CameraResultType.Uri,
-                source: CameraSource.Photos,
-              });
-
-              if (!image.webPath) {
-                return;
-              }
-
-              const response = await fetch(image.webPath);
-              const blob = await response.blob();
-              const file = new File([blob], 'avatar.jpg', { type: 'image/jpeg' });
-
-              setAvatarFile(file);
-              setAvatarPreview(image.webPath);
-              setError(''); // Clear error on success
-            } catch (galleryError: any) {
-              if (galleryError.message?.includes('cancel') || galleryError.message?.includes('User cancelled')) {
-                return;
-              }
-              debugError('[EditProfileModal] Gallery fallback error:', galleryError);
-              setError('Erreur lors de l\'accès à la galerie');
-            }
-          } else {
-            throw cameraError;
-          }
-        }
-      } else {
-        // Normal flow for gallery or non-iOS camera
-        const image = await CapacitorCamera.getPhoto({
-          quality: 80,
-          allowEditing: true,
-          resultType: CameraResultType.Uri,
-          source: cameraSource,
-        });
-
-        if (!image.webPath) {
-          return;
-        }
-
-        const response = await fetch(image.webPath);
-        const blob = await response.blob();
-        const file = new File([blob], 'avatar.jpg', { type: 'image/jpeg' });
-
-        setAvatarFile(file);
-        setAvatarPreview(image.webPath);
-      }
-    } catch (error: any) {
-      if (error.message?.includes('cancel') || error.message?.includes('User cancelled')) {
-        return;
-      }
-      if (error.message?.includes('Permission') || error.message?.includes('permission')) {
-        setError('Permission refusée. Ouvrez les Réglages pour autoriser l\'accès à la caméra ou à la galerie.');
-      } else {
-        debugError('[EditProfileModal] Camera error:', error);
-        setError('Erreur lors de la prise de photo. Veuillez réessayer.');
-      }
+  const handleChangeAvatar = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
     }
+    
+    console.log('[EditProfileModal] avatar click');
+    setError('');
+    
+    // Release previous blob URL if exists
+    if (avatarPreview && avatarPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(avatarPreview);
+    }
+    
+    const result = await pickImage();
+    
+    if (!result) {
+      return; // User cancelled
+    }
+
+    const { blob, ext } = result;
+    setAvatarBlob(blob);
+    setAvatarExt(ext);
+    
+    // Create preview URL from blob
+    const previewUrl = URL.createObjectURL(blob);
+    setAvatarPreview(previewUrl);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 5 * 1024 * 1024) {
-      setError('L\'image ne doit pas dépasser 5 Mo');
-      return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-      setError('Le fichier doit être une image');
-      return;
-    }
-
-    setAvatarFile(file);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setAvatarUrl(base64String);
-      setAvatarPreview(base64String);
-      setError('');
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (avatarPreview && avatarPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(avatarPreview);
+      }
     };
-    reader.readAsDataURL(file);
-  };
-
-  const uploadAvatar = async (): Promise<string | null> => {
-    if (!avatarFile || !user) return null;
-
-    setUploadingAvatar(true);
-    try {
-      const path = generateAvatarPath(user.id);
-      await uploadImageToSupabase(supabase, avatarFile, {
-        bucket: 'avatars',
-        path,
-        compress: true,
-        maxWidth: 512,
-        maxHeight: 512,
-        quality: 0.8,
-      });
-
-      const { data } = supabase.storage.from('avatars').getPublicUrl(path);
-      const avatarUrl = data?.publicUrl ? `${data.publicUrl}?t=${Date.now()}` : null;
-      setUploadingAvatar(false);
-      return avatarUrl;
-    } catch (err: any) {
-      debugError('[EditProfileModal] Avatar upload error:', err);
-      setUploadingAvatar(false);
-      setError('Erreur lors de l\'upload de l\'avatar');
-      return null;
-    }
-  };
+  }, [avatarPreview]);
 
   const handleSave = async () => {
     if (!user) return;
@@ -231,55 +94,118 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     setSaving(true);
     setError('');
 
-    // Upload avatar if a new file was selected
-    let finalAvatarUrl = avatarUrl;
-    if (avatarFile) {
-      const uploadedUrl = await uploadAvatar();
-      if (uploadedUrl) {
-        finalAvatarUrl = uploadedUrl;
-      } else {
-        setSaving(false);
-        return; // Error already set in uploadAvatar
+    try {
+      // Upload avatar if a new blob was selected
+      let finalAvatarUrl = profile.avatar_url || null;
+      if (avatarBlob) {
+        setUploadingAvatar(true);
+        try {
+          // Create blob URL for upload helper
+          const blobUrl = URL.createObjectURL(avatarBlob);
+          const ext = avatarExt === 'jpg' ? 'jpg' : avatarExt;
+          const path = `${user.id}/avatar.${ext}`;
+          
+          const { publicUrl } = await uploadImageToBucket({
+            bucket: 'avatars',
+            path,
+            fileUriOrUrl: blobUrl,
+            contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+            upsert: true,
+          });
+          
+          // Cleanup blob URL
+          URL.revokeObjectURL(blobUrl);
+          
+          finalAvatarUrl = publicUrl;
+          setUploadingAvatar(false);
+        } catch (err: any) {
+          console.error('[EditProfileModal] Avatar upload error:', err);
+          setUploadingAvatar(false);
+          setToast({ message: "Impossible d'importer l'image. Reconnecte-toi si besoin.", type: 'error' });
+          setSaving(false);
+          return;
+        }
       }
-    }
 
-    const { error: updateError } = await supabase
-      .from('user_profiles')
-      .update({
-        display_name: displayName.trim(),
+      // Only send allowed fields: username, display_name, bio, avatar_url
+      const updates = {
         username: username.trim().toLowerCase(),
+        display_name: displayName.trim(),
         bio: bio.trim() || null,
-        interests: interests.length > 0 ? interests : null,
         avatar_url: finalAvatarUrl || null,
-      })
-      .eq('id', user.id);
+      };
+      
+      console.log('[EditProfileModal] Updating profile with avatar_url:', finalAvatarUrl);
 
-    if (updateError) {
-      if (updateError.code === '23505') {
-        setError('Ce nom d\'utilisateur est déjà pris');
-      } else {
-        setError('Échec de la mise à jour du profil');
+      const { error: updateError } = await supabase
+        .from('user_profiles')
+        .update(updates)
+        .eq('id', user.id);
+
+      if (updateError) {
+        console.error('[EditProfileModal] DB update error', {
+          code: updateError.code,
+          message: updateError.message,
+        });
+        if (updateError.code === '23505') {
+          setError('Ce nom d\'utilisateur est déjà pris');
+        } else {
+          const errorMsg = `Erreur DB: ${updateError.code || 'unknown'} - ${updateError.message}`;
+          setError(errorMsg);
+          setToast({ message: errorMsg, type: 'error' });
+        }
+        setSaving(false);
+        return;
       }
+      
+      console.log('[EditProfileModal] Profile update OK');
+      
+      // Verify the saved value
+      const { data: savedProfile, error: selectError } = await supabase
+        .from('user_profiles')
+        .select('avatar_url')
+        .eq('id', user.id)
+        .maybeSingle();
+      
+      if (!selectError) {
+        console.log('[EditProfileModal] Saved avatar_url:', savedProfile?.avatar_url);
+      }
+
+      // Update via context and refresh profile
+      if (updateProfile) {
+        await updateProfile(updates);
+      }
+      await refreshProfile(user.id);
+
       setSaving(false);
-      return;
+      onSave();
+      onClose();
+    } catch (err: any) {
+      console.error('[EditProfileModal] Save error:', err);
+      setError('Erreur lors de la sauvegarde');
+      setSaving(false);
     }
+  };
 
-    // Also update via context if available
-    if (updateProfile && finalAvatarUrl) {
-      await updateProfile({ avatar_url: finalAvatarUrl });
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    console.log('[EditProfileModal] overlay click');
+    if (e.target === e.currentTarget) {
+      onClose();
     }
+  };
 
-    setSaving(false);
-    onSave();
-    onClose();
+  const handleModalContainerClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={handleOverlayClick}>
+      <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={handleModalContainerClick}>
         <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between">
           <h2 className="text-xl font-bold">Modifier le profil</h2>
           <button
+            type="button"
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
           >
@@ -300,7 +226,12 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
               Photo de profil
             </label>
             <div className="flex items-center gap-4">
-              <div className="relative">
+              <button
+                type="button"
+                onClick={handleChangeAvatar}
+                disabled={uploadingAvatar || saving}
+                className="relative flex-shrink-0"
+              >
                 <div className="w-24 h-24 rounded-full bg-stone-200 flex items-center justify-center overflow-hidden">
                   {avatarPreview ? (
                     <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
@@ -310,39 +241,20 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                     </span>
                   )}
                 </div>
-              </div>
+              </button>
               <div className="flex-1">
                 <p className="text-sm text-stone-600 mb-2">
                   Choisissez une photo pour votre profil
                 </p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleCameraSource(CameraSource.Camera)}
-                    disabled={uploadingAvatar || saving}
-                    className="flex-1 flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    <span>Caméra</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleCameraSource(CameraSource.Photos)}
-                    disabled={uploadingAvatar || saving}
-                    className="flex-1 flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
-                  >
-                    <ImageIcon className="w-4 h-4" />
-                    <span>Galerie</span>
-                  </button>
-                </div>
-                <input
-                  id="avatar-upload"
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                />
+                <button
+                  type="button"
+                  onClick={handleChangeAvatar}
+                  disabled={uploadingAvatar || saving}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
+                >
+                  <ImageIcon className="w-4 h-4" />
+                  <span>Changer la photo</span>
+                </button>
                 <p className="text-xs text-stone-500 mt-2">
                   JPG, PNG ou GIF. Maximum 5 Mo.
                 </p>
@@ -434,6 +346,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                   >
                     {interest}
                     <button
+                      type="button"
                       onClick={() => handleRemoveInterest(interest)}
                       className="hover:text-red-600 transition-colors"
                     >
@@ -449,12 +362,14 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
 
         <div className="flex-shrink-0 border-t border-stone-200 px-6 py-4 flex gap-3" style={{ paddingBottom: 'calc(2rem + env(safe-area-inset-bottom) + 24px)' }}>
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 px-4 py-3 border border-stone-300 text-stone-900 rounded-xl hover:bg-stone-50 transition-colors font-medium"
           >
             Annuler
           </button>
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving || !displayName.trim() || !username.trim()}
             className="flex-1 px-4 py-3 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
@@ -470,6 +385,14 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
           </button>
         </div>
       </div>
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   );
 }

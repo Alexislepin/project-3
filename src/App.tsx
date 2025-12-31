@@ -19,9 +19,6 @@ import { Debug } from './pages/Debug';
 import { ManageBook } from './pages/ManageBook';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
-import { handleOAuthCallback } from './lib/oauth';
-import { App as CapacitorApp } from '@capacitor/app';
-import { Capacitor } from '@capacitor/core';
 import { debugLog, debugError } from './utils/logger';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
@@ -162,55 +159,6 @@ function App() {
     initSwipeBack();
   }, []);
 
-  // Hook 12: Handle OAuth deep links (iOS/Android)
-  useEffect(() => {
-    // Only set up deep link listener on Capacitor platforms
-    if (!Capacitor.isNativePlatform()) {
-      return;
-    }
-
-    let listener: any = null;
-
-    const setupDeepLinkListener = async () => {
-      try {
-        listener = await CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
-          debugLog('[App] Deep link received', { url });
-
-          if (!url) {
-            debugError('[App] Deep link URL is undefined');
-            return;
-          }
-
-          if (url.startsWith('lexu://auth/callback')) {
-            debugLog('[App] Handling OAuth callback', { url });
-            const { error } = await handleOAuthCallback(url);
-            
-            if (error) {
-              debugError('[App] OAuth callback error', error);
-              // TODO: Show toast error to user
-            } else {
-              debugLog('[App] OAuth callback successful');
-            }
-          } else {
-            debugLog('[App] Deep link ignored (not OAuth callback)', { url });
-          }
-        });
-
-        debugLog('[App] Deep link listener registered');
-      } catch (error) {
-        debugError('[App] Error setting up deep link listener', error);
-      }
-    };
-
-    setupDeepLinkListener();
-
-    // Cleanup function
-    return () => {
-      if (listener) {
-        listener.remove();
-      }
-    };
-  }, []);
 
   // ============================================
   // HANDLERS (pas de hooks ici)

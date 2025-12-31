@@ -15,7 +15,7 @@ export function SignupPage() {
     setGoogleLoading(true);
     setError('');
     
-    const { error } = await signInWithGoogle();
+    const { error } = await signInWithGoogle({ forceAccount: true });
     
     if (error) {
       setError(error.message || 'Erreur lors de la connexion Google');
