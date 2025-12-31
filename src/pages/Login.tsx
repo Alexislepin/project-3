@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { signInWithGoogle } from '../lib/oauth';
 import { BrandLogo } from '../components/BrandLogo';
 import { supabase } from '../lib/supabase';
+import { Capacitor } from '@capacitor/core';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -56,8 +57,13 @@ export function LoginPage() {
       return;
     }
 
+    // Choose redirectTo based on platform
+    const redirectTo = Capacitor.isNativePlatform()
+      ? 'lexu://reset-password'
+      : `${window.location.origin}/reset-password`;
+
     const { error } = await supabase.auth.resetPasswordForEmail(resetPasswordEmail.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo,
     });
 
     if (error) {

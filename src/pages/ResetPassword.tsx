@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { BrandLogo } from '../components/BrandLogo';
-
-function parseHashParams(hash: string) {
-  const h = hash.startsWith("#") ? hash.slice(1) : hash;
-  const params = new URLSearchParams(h);
-  return Object.fromEntries(params.entries());
-}
+import { Capacitor } from '@capacitor/core';
 
 export function ResetPasswordPage() {
   const [password, setPassword] = useState("");
@@ -15,29 +10,54 @@ export function ResetPasswordPage() {
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
-    // Sur Supabase, les tokens arrivent dans le HASH (#...)
-    const params = parseHashParams(window.location.hash);
-    const access_token = params.access_token;
-    const refresh_token = params.refresh_token;
-    const type = params.type;
-
-    if (type !== "recovery" || !access_token || !refresh_token) {
-      setStatus("error");
-      setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
-      return;
-    }
-
-    // Important: on set la session pour autoriser updateUser()
-    supabase.auth
-      .setSession({ access_token, refresh_token })
-      .then(({ error }) => {
-        if (error) {
-          setStatus("error");
-          setMsg("Session de récupération invalide. Réessaie.");
+    const initSession = async () => {
+      try {
+        if (Capacitor.isNativePlatform()) {
+          // Native: wait for deep link (handled by App.tsx listener)
+          // Check if we already have a session from the deep link
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            setStatus("ready");
+          } else {
+            // No session yet, might be waiting for deep link
+            // Check URL hash in case it's already there
+            const hash = window.location.hash;
+            if (hash.includes('access_token') && hash.includes('type=recovery')) {
+              const { data, error } = await supabase.auth.getSessionFromUrl({ 
+                storeSession: true 
+              });
+              if (error || !data.session) {
+                setStatus("error");
+                setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
+              } else {
+                setStatus("ready");
+              }
+            } else {
+              setStatus("error");
+              setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
+            }
+          }
         } else {
-          setStatus("ready");
+          // Web: get session from URL
+          const { data, error } = await supabase.auth.getSessionFromUrl({ 
+            storeSession: true 
+          });
+          
+          if (error || !data.session) {
+            setStatus("error");
+            setMsg("Lien invalide ou expiré. Réessaie depuis l'email.");
+          } else {
+            setStatus("ready");
+          }
         }
-      });
+      } catch (err: any) {
+        console.error('[ResetPassword] Error initializing session:', err);
+        setStatus("error");
+        setMsg("Erreur lors de l'initialisation. Réessaie depuis l'email.");
+      }
+    };
+
+    initSession();
   }, []);
 
   const handleSave = async () => {
@@ -53,23 +73,30 @@ export function ResetPasswordPage() {
     }
 
     setStatus("saving");
-    const { error } = await supabase.auth.updateUser({ password });
-
-    if (error) {
-      setStatus("error");
-      setMsg(error.message || "Impossible de changer le mot de passe.");
-      return;
-    }
-
-    setStatus("done");
-    setMsg("Mot de passe mis à jour ✅ Tu peux te reconnecter.");
-    // Optionnel : logout pour forcer reconnexion propre
-    // await supabase.auth.signOut();
     
-    // Redirect to login after 2 seconds
-    setTimeout(() => {
-      window.location.href = '/login';
-    }, 2000);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+
+      if (error) {
+        setStatus("error");
+        setMsg(error.message || "Impossible de changer le mot de passe.");
+        return;
+      }
+
+      setStatus("done");
+      setMsg("Mot de passe mis à jour ✅");
+      
+      // Sign out to force clean reconnection
+      await supabase.auth.signOut();
+      
+      // Redirect to login after 2 seconds
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 2000);
+    } catch (err: any) {
+      setStatus("error");
+      setMsg(err?.message || "Une erreur inattendue est survenue.");
+    }
   };
 
   return (
@@ -84,9 +111,12 @@ export function ResetPasswordPage() {
           <h1 className="text-xl font-bold mb-2 text-text-main-light">Nouveau mot de passe</h1>
 
           {status === "idle" && <p className="text-text-sub-light">Chargement…</p>}
+          
           {status === "ready" && (
             <>
-              <label className="block text-sm font-medium mb-2 text-text-main-light">Nouveau mot de passe</label>
+              <label className="block text-sm font-medium mb-2 text-text-main-light">
+                Nouveau mot de passe
+              </label>
               <input
                 type="password"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
@@ -95,7 +125,9 @@ export function ResetPasswordPage() {
                 placeholder="••••••••"
                 autoFocus
               />
-              <label className="block text-sm font-medium mb-2 text-text-main-light">Confirmer</label>
+              <label className="block text-sm font-medium mb-2 text-text-main-light">
+                Confirmer
+              </label>
               <input
                 type="password"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
@@ -107,12 +139,13 @@ export function ResetPasswordPage() {
                 onClick={handleSave}
                 className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors"
               >
-                Enregistrer
+                Valider
               </button>
             </>
           )}
 
           {status === "saving" && <p className="text-text-sub-light">Enregistrement…</p>}
+          
           {status === "done" && (
             <div className="text-center">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -120,10 +153,29 @@ export function ResetPasswordPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <p className="text-text-main-light font-medium">{msg}</p>
+              <p className="text-text-main-light font-medium mb-4">{msg}</p>
+              <button
+                onClick={() => {
+                  window.location.href = '/login';
+                }}
+                className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors"
+              >
+                Se connecter
+              </button>
             </div>
           )}
-          {msg && status !== "done" && <p className="mt-3 text-sm text-red-600">{msg}</p>}
+          
+          {msg && status === "error" && (
+            <div className="mt-3">
+              <p className="text-sm text-red-600 mb-4">{msg}</p>
+              <a
+                href="/login"
+                className="text-sm text-primary hover:underline font-medium"
+              >
+                ← Retour à la connexion
+              </a>
+            </div>
+          )}
         </div>
       </div>
     </div>
