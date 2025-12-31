@@ -60,7 +60,7 @@ export function LoginPage() {
     // Choose redirectTo based on platform
     const redirectTo = Capacitor.isNativePlatform()
       ? 'lexu://reset-password'
-      : `${window.location.origin}/reset-password`;
+      : 'https://www.lexu.app/reset-password';
 
     const { error } = await supabase.auth.resetPasswordForEmail(resetPasswordEmail.trim(), {
       redirectTo,
