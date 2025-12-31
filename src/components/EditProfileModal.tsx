@@ -2,10 +2,9 @@ import { useState, useEffect } from 'react';
 import { X, Check, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { pickImage } from '../lib/imageUpload';
-import { uploadImageToBucket } from '../lib/storageUpload';
 import { Toast } from './Toast';
 import { Capacitor } from '@capacitor/core';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 
 interface EditProfileModalProps {
   profile: any;
@@ -19,10 +18,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [bio, setBio] = useState(profile.bio || '');
   const [interests, setInterests] = useState<string[]>(profile.interests || []);
   const [newInterest, setNewInterest] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url || '');
   const [avatarPreview, setAvatarPreview] = useState(profile.avatar_url || '');
-  const [avatarBlob, setAvatarBlob] = useState<Blob | null>(null);
-  const [avatarExt, setAvatarExt] = useState<string>('jpg');
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [error, setError] = useState('');
@@ -47,29 +43,142 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     }
     
     console.log('[EditProfileModal] avatar click');
+    
+    if (!user?.id) {
+      setToast({ message: 'Erreur: utilisateur non connecté', type: 'error' });
+      return;
+    }
+    
     setError('');
+    setUploadingAvatar(true);
     
-    // Release previous blob URL if exists
-    if (avatarPreview && avatarPreview.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
+    try {
+      console.log('[EditProfileModal] pick start');
+      
+      let blob: Blob;
+      let previewUrl: string;
+      
+      if (Capacitor.isNativePlatform()) {
+        // Use Capacitor Camera on native (iOS/Android)
+        const photo = await Camera.getPhoto({
+          source: CameraSource.Photos,
+          resultType: CameraResultType.Uri,
+          quality: 85,
+        });
+        
+        if (!photo.webPath) {
+          console.log('[EditProfileModal] pick cancelled or no webPath');
+          setUploadingAvatar(false);
+          return;
+        }
+        
+        console.log('[EditProfileModal] pick success', { webPath: photo.webPath });
+        
+        // Set preview immediately (local preview)
+        previewUrl = photo.webPath;
+        setAvatarPreview(previewUrl);
+        
+        // Convert photo.webPath to Blob
+        const res = await fetch(photo.webPath);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
+        }
+        blob = await res.blob();
+      } else {
+        // Web fallback: use file input
+        const file = await new Promise<File | null>((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/*';
+          input.onchange = (e) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            resolve(file || null);
+          };
+          input.oncancel = () => resolve(null);
+          input.click();
+        });
+        
+        if (!file) {
+          console.log('[EditProfileModal] pick cancelled');
+          setUploadingAvatar(false);
+          return;
+        }
+        
+        console.log('[EditProfileModal] pick success', { fileName: file.name });
+        
+        blob = file;
+        
+        // Set preview immediately (local preview)
+        previewUrl = URL.createObjectURL(file);
+        setAvatarPreview(previewUrl);
+      }
+      
+      // Upload to Supabase Storage with RLS-compatible path
+      const filePath = `${user.id}/avatar.jpg`;
+      
+      console.log('[EditProfileModal] upload start', { filePath, userId: user.id });
+      
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, blob, {
+          upsert: true,
+          contentType: blob.type || 'image/jpeg',
+        });
+      
+      if (uploadError) {
+        console.error('[EditProfileModal] upload error', uploadError);
+        throw uploadError;
+      }
+      
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+      const publicUrl = publicUrlData?.publicUrl;
+      
+      if (!publicUrl) {
+        throw new Error('Failed to get public URL');
+      }
+      
+      console.log('[EditProfileModal] upload success', { publicUrl });
+      
+      // Update user_profiles.avatar_url immediately
+      const { error: updateError } = await supabase
+        .from('user_profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+      
+      if (updateError) {
+        console.error('[EditProfileModal] DB update error', updateError);
+        throw updateError;
+      }
+      
+      // Update preview with public URL
+      setAvatarPreview(publicUrl);
+      
+      // Refresh profile in context
+      await refreshProfile(user.id);
+      
+      setToast({ message: 'Photo de profil mise à jour', type: 'success' });
+      console.log('[EditProfileModal] avatar update complete');
+      
+    } catch (err: any) {
+      console.error('[EditProfileModal] upload error', err);
+      
+      // Cleanup blob URL if created on web
+      if (avatarPreview && avatarPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(avatarPreview);
+      }
+      
+      // Reset preview to original on error
+      setAvatarPreview(profile.avatar_url || '');
+      
+      const errorMessage = err?.message || 'Erreur lors de l\'upload de la photo';
+      setToast({ message: errorMessage, type: 'error' });
+    } finally {
+      setUploadingAvatar(false);
     }
-    
-    const result = await pickImage();
-    
-    if (!result) {
-      return; // User cancelled
-    }
-
-    const { blob, ext } = result;
-    setAvatarBlob(blob);
-    setAvatarExt(ext);
-    
-    // Create preview URL from blob
-    const previewUrl = URL.createObjectURL(blob);
-    setAvatarPreview(previewUrl);
   };
 
-  // Cleanup blob URLs on unmount
+  // Cleanup blob URLs on unmount (if any)
   useEffect(() => {
     return () => {
       if (avatarPreview && avatarPreview.startsWith('blob:')) {
@@ -95,37 +204,11 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     setError('');
 
     try {
-      // Upload avatar if a new blob was selected
-      let finalAvatarUrl = profile.avatar_url || null;
-      if (avatarBlob) {
-        setUploadingAvatar(true);
-        try {
-          // Create blob URL for upload helper
-          const blobUrl = URL.createObjectURL(avatarBlob);
-          const ext = avatarExt === 'jpg' ? 'jpg' : avatarExt;
-          const path = `${user.id}/avatar.${ext}`;
-          
-          const { publicUrl } = await uploadImageToBucket({
-            bucket: 'avatars',
-            path,
-            fileUriOrUrl: blobUrl,
-            contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
-            upsert: true,
-          });
-          
-          // Cleanup blob URL
-          URL.revokeObjectURL(blobUrl);
-          
-          finalAvatarUrl = publicUrl;
-          setUploadingAvatar(false);
-        } catch (err: any) {
-          console.error('[EditProfileModal] Avatar upload error:', err);
-          setUploadingAvatar(false);
-          setToast({ message: "Impossible d'importer l'image. Reconnecte-toi si besoin.", type: 'error' });
-          setSaving(false);
-          return;
-        }
-      }
+      // Avatar is already uploaded and updated in handleChangeAvatar
+      // Just use the current preview URL (which is the public URL after upload)
+      const finalAvatarUrl = avatarPreview && avatarPreview.startsWith('http') 
+        ? avatarPreview 
+        : profile.avatar_url || null;
 
       // Only send allowed fields: username, display_name, bio, avatar_url
       const updates = {
