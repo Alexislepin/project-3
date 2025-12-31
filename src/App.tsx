@@ -173,30 +173,9 @@ function App() {
       const handleHashChange = async () => {
         const hash = window.location.hash;
         if (hash.includes('access_token') && hash.includes('type=recovery')) {
-          try {
-            const params = new URLSearchParams(hash.replace('#', ''));
-            const access_token = params.get('access_token');
-            const refresh_token = params.get('refresh_token');
-            const type = params.get('type');
-
-            if (type === 'recovery' && access_token && refresh_token) {
-              const { error } = await supabase.auth.setSession({
-                access_token,
-                refresh_token,
-              });
-
-              if (error) {
-                console.error('[APP] Error setting recovery session:', error);
-                window.location.href = '/login';
-              } else {
-                // Redirect to reset password page
-                window.location.href = '/reset-password';
-              }
-            }
-          } catch (e) {
-            console.error('[APP] Deep link error (web):', e);
-            window.location.href = '/login';
-          }
+          // Redirect to reset password page with hash preserved
+          // ResetPasswordPage will parse the hash and set the session
+          window.location.href = `/reset-password${hash}`;
         }
       };
 
@@ -215,27 +194,11 @@ function App() {
           // Example: lexu://reset-password#access_token=...&refresh_token=...&type=recovery
           if (url.includes('reset-password')) {
             const parsed = new URL(url.replace('lexu://', 'https://dummy/'));
-            const hash = parsed.hash.replace('#', '');
-            const params = new URLSearchParams(hash);
-
-            const access_token = params.get('access_token');
-            const refresh_token = params.get('refresh_token');
-            const type = params.get('type');
-
-            if (type === 'recovery' && access_token && refresh_token) {
-              const { error } = await supabase.auth.setSession({
-                access_token,
-                refresh_token,
-              });
-
-              if (error) {
-                console.error('[APP] Error setting recovery session:', error);
-                window.location.href = '/login';
-              } else {
-                // Redirect to reset password page
-                window.location.href = '/reset-password';
-              }
-            }
+            const hash = parsed.hash;
+            
+            // Redirect to reset password page with hash preserved
+            // ResetPasswordPage will parse the hash and set the session
+            window.location.href = `/reset-password${hash}`;
           }
         } catch (e) {
           console.error('[APP] Deep link error (native):', e);
