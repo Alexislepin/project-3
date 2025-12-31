@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { SplashScreen } from './components/SplashScreen';
+import { DeepLinkGate } from './components/DeepLinkGate';
 import App from './App.tsx';
 import './i18n';
 import { initializeAppLanguage } from './lib/appLanguage';
@@ -39,6 +40,7 @@ initializeAppLanguage().then(() => {
     <StrictMode>
       <SplashScreen>
         <BrowserRouter>
+          <DeepLinkGate />
           <AuthProvider>
             <App />
           </AuthProvider>
@@ -63,6 +65,7 @@ initializeAppLanguage().then(() => {
     <StrictMode>
       <SplashScreen>
         <BrowserRouter>
+          <DeepLinkGate />
           <AuthProvider>
             <App />
           </AuthProvider>

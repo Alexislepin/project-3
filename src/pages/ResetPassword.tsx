@@ -13,11 +13,7 @@ function extractCode(url: string) {
   }
 }
 
-interface ResetPasswordPageProps {
-  deepLinkUrl?: string | null;
-}
-
-export function ResetPasswordPage({ deepLinkUrl }: ResetPasswordPageProps = {}) {
+export function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [status, setStatus] = useState<"idle" | "ready" | "saving" | "done" | "error">("idle");
@@ -84,19 +80,22 @@ export function ResetPasswordPage({ deepLinkUrl }: ResetPasswordPageProps = {}) 
         return;
       }
 
-      // NATIVE: use deepLinkUrl from App.tsx if available, otherwise try location.href
-      const urlToUse = deepLinkUrl || window.location.href;
-      if (urlToUse) {
-        await initFromUrl(urlToUse);
+      // NATIVE: read deep link URL from sessionStorage (set by DeepLinkGate)
+      const deepLinkUrlFromStorage = sessionStorage.getItem("pending_deeplink");
+      if (deepLinkUrlFromStorage) {
+        sessionStorage.removeItem("pending_deeplink");
+        await initFromUrl(deepLinkUrlFromStorage);
+        return;
       }
 
-      // Also listen for deep links (in case App.tsx didn't catch it)
-      sub = CapApp.addListener('appUrlOpen', async ({ url }) => {
-        if (!url) return;
-        if (url.startsWith('lexu://reset-password')) {
-          await initFromUrl(url);
-        }
-      });
+      // Fallback: try window.location.href (might work in some cases)
+      if (window.location.href && window.location.href !== window.location.origin + '/reset-password') {
+        await initFromUrl(window.location.href);
+      } else {
+        // No URL available, show error
+        setInitError("Lien invalide ou expiré. Réessaie depuis l'email.");
+        setStatus("error");
+      }
     })();
 
     return () => {

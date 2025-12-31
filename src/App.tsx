@@ -166,54 +166,8 @@ function App() {
     initSwipeBack();
   }, []);
 
-  // Hook 12: Deep link handling for password reset (native only)
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) {
-      // WEB: handled by ResetPasswordPage directly
-      return;
-    }
-
-    // NATIVE (iOS/Android): handle deep links and navigate to reset-password
-    let removeListener: (() => void) | null = null;
-
-    const handleUrl = (url: string) => {
-      if (!url || !url.startsWith('lexu://reset-password')) return;
-      
-      console.log('[APP] Reset password deep link received:', url);
-      
-      // Store the deep link URL for ResetPasswordPage
-      setDeepLinkUrl(url);
-      
-      // Force navigation to /reset-password with state
-      window.history.replaceState({ deepLinkUrl: url }, '', '/reset-password');
-      
-      // Force re-render by updating refreshKey
-      setRefreshKey(prev => prev + 1);
-      
-      // Also dispatch popstate to trigger routing update
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    };
-
-    (async () => {
-      // ✅ Cold start
-      const launch = await CapApp.getLaunchUrl();
-      if (launch?.url) {
-        handleUrl(launch.url);
-      }
-
-      // ✅ App déjà ouverte (background)
-      const l = await CapApp.addListener('appUrlOpen', ({ url }) => {
-        if (!url) return;
-        handleUrl(url);
-      });
-
-      removeListener = () => l.remove();
-    })();
-
-    return () => {
-      if (removeListener) removeListener();
-    };
-  }, []);
+  // Hook 12: Deep link handling is now done by DeepLinkGate component (in main.tsx)
+  // This allows using React Router's useNavigate for proper navigation
 
 
   // ============================================
@@ -290,7 +244,7 @@ function App() {
   // Reset password page (public route, ResetPasswordPage handles session validation)
   // MUST be before the !user check to allow access without authentication
   if (path === '/reset-password') {
-    return <ResetPasswordPage deepLinkUrl={deepLinkUrl} />;
+    return <ResetPasswordPage />;
   }
 
   // Pages auth accessibles sans protection
