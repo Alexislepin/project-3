@@ -178,9 +178,13 @@ function App() {
 
     (async () => {
       const handleResetPasswordUrl = async (url: string) => {
-        if (!url?.startsWith('lexu://reset-password')) return;
+        if (!url) return;
+        // Check if URL contains reset-password (could be lexu://reset-password#...)
+        if (!url.includes('reset-password') || !url.startsWith('lexu://')) return;
 
         try {
+          console.log('[APP] Handling reset password deep link:', url);
+          
           // IMPORTANT: supabase expects full URL with tokens/hash/query
           // Convert lexu:// to https:// for getSessionFromUrl
           const httpsUrl = url.replace('lexu://', 'https://dummy/');
@@ -195,6 +199,8 @@ function App() {
             return;
           }
 
+          console.log('[APP] Session established, navigating to reset-password');
+          
           // Navigate to reset password page (SPA navigation)
           window.history.replaceState({}, '', '/reset-password');
           window.dispatchEvent(new PopStateEvent('popstate'));
