@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
 import { LoginPage } from './pages/Login';
@@ -62,6 +63,10 @@ function App() {
   
   // Hook 1: Auth context
   const { user, loading, profile, profileLoading, profileResolved, isOnboardingComplete } = useAuth();
+  
+  // Hook 1.5: Location (important: déclenche un re-render à chaque navigation)
+  const location = useLocation();
+  const path = location.pathname;
   
   // Hook 2-8: State hooks (toujours dans le même ordre)
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
@@ -133,33 +138,20 @@ function App() {
     }
   }, [user, needsLanguageOnboarding, profile, profileLoading, isOnboardingComplete]);
 
-  // Hook 10: Routing basé sur l'URL
+  // Hook 10: Routing basé sur l'URL (réactif à location.pathname)
   useEffect(() => {
-    const updateViewFromPath = () => {
-      const path = window.location.pathname;
-      if (path === '/login' || path === '/signup' || path === '/reset-password') {
-        // Les pages auth sont gérées séparément
-        return;
-      }
-      // Map paths to AppView
-      const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
-      if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
-        setCurrentView(viewFromPath);
-      } else if (path === '/') {
-        setCurrentView('home');
-      }
-    };
-
-    // Initial load
-    updateViewFromPath();
-
-    // Listen for popstate events (back/forward navigation and programmatic navigation)
-    window.addEventListener('popstate', updateViewFromPath);
-    
-    return () => {
-      window.removeEventListener('popstate', updateViewFromPath);
-    };
-  }, []);
+    if (path === '/login' || path === '/signup' || path === '/reset-password') {
+      // Les pages auth sont gérées séparément
+      return;
+    }
+    // Map paths to AppView
+    const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
+    if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
+      setCurrentView(viewFromPath);
+    } else if (path === '/') {
+      setCurrentView('home');
+    }
+  }, [path]);
 
   // Hook 11: Initialize iOS swipe back gesture
   useEffect(() => {
@@ -239,8 +231,6 @@ function App() {
   }
 
   // Public routes (accessible without auth)
-  const path = window.location.pathname;
-  
   // Reset password page (public route, ResetPasswordPage handles session validation)
   // MUST be before the !user check to allow access without authentication
   if (path === '/reset-password') {
