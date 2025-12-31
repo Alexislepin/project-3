@@ -293,30 +293,20 @@ function App() {
     );
   }
 
+  // Public routes (accessible without auth)
+  const path = window.location.pathname;
+  
+  // Reset password page (public route, ResetPasswordPage handles session validation)
+  if (path === '/reset-password') {
+    return <ResetPasswordPage />;
+  }
+
   // Pages auth accessibles sans protection
   if (!user) {
-    const path = window.location.pathname;
     if (path === '/signup') {
       return <SignupPage />;
     }
-    if (path === '/reset-password') {
-      // Check if we have a recovery session in the URL hash
-      const hash = window.location.hash;
-      if (hash.includes('access_token') && hash.includes('type=recovery')) {
-        // We'll handle this in the deep link hook, but show the page
-        return <ResetPasswordPage />;
-      }
-      // No valid recovery session, redirect to login
-      window.location.href = '/login';
-      return null;
-    }
     return <LoginPage />;
-  }
-
-  // Reset password page (user might have recovery session)
-  const path = window.location.pathname;
-  if (path === '/reset-password') {
-    return <ResetPasswordPage />;
   }
 
   // Language onboarding (first priority)
