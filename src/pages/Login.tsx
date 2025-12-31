@@ -57,10 +57,10 @@ export function LoginPage() {
       return;
     }
 
-    // Choose redirectTo based on platform
+    // Choose redirectTo based on platform (dev-friendly)
     const redirectTo = Capacitor.isNativePlatform()
       ? 'lexu://reset-password'
-      : 'https://www.lexu.app/reset-password';
+      : `${window.location.origin}/reset-password`; // => http://localhost:5173/reset-password ou 5174 etc.
 
     const { error } = await supabase.auth.resetPasswordForEmail(resetPasswordEmail.trim(), {
       redirectTo,
