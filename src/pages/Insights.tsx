@@ -92,6 +92,8 @@ export function Insights() {
   const [weeklyActivityTotalPages, setWeeklyActivityTotalPages] = useState(0);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [streakDays, setStreakDays] = useState(0);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
   
   const { user, profile: contextProfile, refreshProfile } = useAuth();
 
@@ -1100,10 +1102,29 @@ export function Insights() {
         <LeaderboardModal
           onClose={closeLeaderboard}
           onUserClick={(userId) => {
-            // Optionally handle user click (e.g., navigate to profile)
+            setSelectedUserId(userId);
             closeLeaderboard();
           }}
         />
+      )}
+
+      {/* User Profile View */}
+      {selectedUserId && (
+        <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
+          <UserProfileView
+            userId={selectedUserId}
+            onClose={() => {
+              setSelectedUserId(null);
+              setActivityFocus(null);
+            }}
+            onUserClick={(id) => {
+              setActivityFocus(null);
+              setSelectedUserId(id);
+            }}
+            activityFocus={activityFocus}
+            onFocusConsumed={() => setActivityFocus(null)}
+          />
+        </div>
       )}
     </div>
   );
