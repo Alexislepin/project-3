@@ -2554,8 +2554,8 @@ export function Library({}: LibraryProps) {
             setAddCoverBookTitle('');
           }}
           onUploaded={(newPath) => {
-            // newPath can be either a storage path or URL (backward compatibility)
-            // Optimistic update: update UI instantly
+            // newPath is now always a public URL (not a path)
+            // Optimistic update: update UI instantly without navigation
             if (addCoverBookId) {
               setUserBooks(prev => prev.map(ub => 
                 ub.book?.id === addCoverBookId 
@@ -2563,10 +2563,9 @@ export function Library({}: LibraryProps) {
                   : ub
               ));
             }
-            // Then refresh from DB
-            loadUserBooks(filter as BookStatus);
-            setAddCoverBookId(null);
-            setAddCoverBookTitle('');
+            // Don't call loadUserBooks - it might change the tab/filter
+            // Don't close modal automatically - let user decide
+            // The modal will stay open and show the updated cover
           }}
           onShowToast={(message, type) => {
             setToast({ message, type: type || 'info' });

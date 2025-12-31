@@ -3,6 +3,7 @@ import { X, Check, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from './Toast';
+import { UploadOverlay } from './UploadOverlay';
 import { Capacitor } from '@capacitor/core';
 import { pickImageBlob } from '../lib/pickImage';
 
@@ -25,6 +26,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const { user, updateProfile, refreshProfile } = useAuth();
   const ignoreBackdropRef = useRef(false);
+  const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   const handleAddInterest = () => {
     if (newInterest.trim() && !interests.includes(newInterest.trim())) {
@@ -161,7 +163,12 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       // Refresh profile in context
       await refreshProfile(user.id);
       
-      setToast({ message: 'Photo de profil mise à jour', type: 'success' });
+      // Show success toast (auto-dismiss after 1.2s)
+      setUploadToast({ type: 'success', msg: '✅ Photo mise à jour' });
+      setTimeout(() => {
+        setUploadToast(null);
+      }, 1200);
+      
       if (import.meta.env.DEV) {
         console.log('[EditProfileModal] avatar update complete');
       }
@@ -178,7 +185,10 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       setAvatarPreview(profile.avatar_url || '');
       
       const errorMessage = err?.message || 'Erreur lors de l\'upload de la photo';
-      setToast({ message: errorMessage, type: 'error' });
+      setUploadToast({ type: 'error', msg: `Échec de l'import: ${errorMessage}` });
+      setTimeout(() => {
+        setUploadToast(null);
+      }, 3000);
     } finally {
       setUploadingAvatar(false);
     }
@@ -281,15 +291,10 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       console.log('[EditProfileModal] overlay click');
     }
     if (e.target === e.currentTarget) {
-      if (ignoreBackdropRef.current) {
+      // Prevent close during picker or upload
+      if (ignoreBackdropRef.current || uploadingAvatar) {
         if (import.meta.env.DEV) {
-          console.log('[EditProfileModal] Ignoring backdrop click during picker');
-        }
-        return;
-      }
-      if (uploadingAvatar) {
-        if (import.meta.env.DEV) {
-          console.log('[EditProfileModal] Prevented close during upload');
+          console.log('[EditProfileModal] Prevented close during picker/upload');
         }
         return;
       }
@@ -310,7 +315,8 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
           <button
             type="button"
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
+            disabled={uploadingAvatar}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
           </button>
@@ -489,6 +495,24 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
         </div>
       </div>
 
+      {/* Upload overlay - blocks UI during upload */}
+      <UploadOverlay open={uploadingAvatar} label="Importation de la photo…" />
+
+      {/* Toast for upload result */}
+      {uploadToast && (
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[400] px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom-5"
+          style={{
+            backgroundColor: uploadToast.type === 'success' ? '#10b981' : '#ef4444',
+            color: 'white',
+            maxWidth: 'calc(100vw - 2rem)',
+          }}
+        >
+          <span className="text-sm font-medium">{uploadToast.msg}</span>
+        </div>
+      )}
+
+      {/* Regular toast for other errors */}
       {toast && (
         <Toast
           message={toast.message}

@@ -3,6 +3,7 @@ import { X, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { pickImageBlob } from '../lib/pickImage';
+import { UploadOverlay } from './UploadOverlay';
 import { Capacitor } from '@capacitor/core';
 
 interface AddCoverModalProps {
@@ -28,9 +29,11 @@ export function AddCoverModal({
   const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
   const [coverExt, setCoverExt] = useState<string>('jpg');
   const ignoreBackdropRef = useRef(false);
+  const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   // Reset state when modal closes
   const handleClose = () => {
+    // Prevent close during upload
     if (uploading) {
       if (import.meta.env.DEV) {
         console.log('[AddCoverModal] Prevented close during upload');
@@ -42,6 +45,7 @@ export function AddCoverModal({
     }
     setPreviewUrl(null);
     setCoverBlob(null);
+    setUploadToast(null);
     onClose();
   };
 
@@ -186,16 +190,25 @@ export function AddCoverModal({
       }
       setPreviewUrl(publicUrl);
 
-      onShowToast?.('Couverture ajoutée avec succès', 'success');
-      // Pass the public URL to onUploaded
+      // Show success toast (auto-dismiss after 1.2s)
+      setUploadToast({ type: 'success', msg: '✅ Couverture mise à jour' });
+      setTimeout(() => {
+        setUploadToast(null);
+      }, 1200);
+
+      // Pass the public URL to onUploaded (but don't close modal automatically)
       onUploaded(publicUrl);
-      handleClose();
+      
+      // Don't close automatically - let user decide
     } catch (error: any) {
       console.error('[AddCoverModal] Upload failed:', error);
       const errorMsg = error?.message 
-        ? `Upload impossible. ${error.message} Reconnecte-toi si besoin.`
-        : "Upload impossible. Reconnecte-toi si besoin.";
-      onShowToast?.(errorMsg, 'error');
+        ? `Échec de l'import: ${error.message}`
+        : "Échec de l'import";
+      setUploadToast({ type: 'error', msg: errorMsg });
+      setTimeout(() => {
+        setUploadToast(null);
+      }, 3000);
     } finally {
       setUploading(false);
     }
@@ -235,7 +248,7 @@ export function AddCoverModal({
           <button
             onClick={handleClose}
             disabled={uploading}
-            className="text-stone-400 hover:text-stone-600 disabled:opacity-50"
+            className="text-stone-400 hover:text-stone-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
           </button>
@@ -293,6 +306,23 @@ export function AddCoverModal({
           </p>
         </div>
       </div>
+
+      {/* Upload overlay - blocks UI during upload */}
+      <UploadOverlay open={uploading} label="Importation de la couverture…" />
+
+      {/* Toast for upload result */}
+      {uploadToast && (
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[400] px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom-5"
+          style={{
+            backgroundColor: uploadToast.type === 'success' ? '#10b981' : '#ef4444',
+            color: 'white',
+            maxWidth: 'calc(100vw - 2rem)',
+          }}
+        >
+          <span className="text-sm font-medium">{uploadToast.msg}</span>
+        </div>
+      )}
     </div>
   );
 }
