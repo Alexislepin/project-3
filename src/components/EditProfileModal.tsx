@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Check, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from './Toast';
 import { Capacitor } from '@capacitor/core';
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { pickImageBlob } from '../lib/pickImage';
 
 interface EditProfileModalProps {
   profile: any;
@@ -24,6 +24,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   const [error, setError] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const { user, updateProfile, refreshProfile } = useAuth();
+  const ignoreBackdropRef = useRef(false);
 
   const handleAddInterest = () => {
     if (newInterest.trim() && !interests.includes(newInterest.trim())) {
@@ -42,91 +43,86 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       e.stopPropagation();
     }
     
-    console.log('[EditProfileModal] avatar click');
+    if (import.meta.env.DEV) {
+      console.log('[EditProfileModal] avatar click');
+    }
     
     if (!user?.id) {
       setToast({ message: 'Erreur: utilisateur non connecté', type: 'error' });
       return;
     }
     
+    if (uploadingAvatar) {
+      return;
+    }
+    
     setError('');
     setUploadingAvatar(true);
+
+    // Prevent backdrop close during picker (iOS bug fix)
+    ignoreBackdropRef.current = true;
+    setTimeout(() => {
+      ignoreBackdropRef.current = false;
+    }, 800);
     
     try {
-      console.log('[EditProfileModal] pick start');
-      
-      let blob: Blob;
-      let previewUrl: string;
-      
-      if (Capacitor.isNativePlatform()) {
-        // Use Capacitor Camera on native (iOS/Android)
-        const photo = await Camera.getPhoto({
-          source: CameraSource.Photos,
-          resultType: CameraResultType.Uri,
-          quality: 85,
-        });
-        
-        if (!photo.webPath) {
-          console.log('[EditProfileModal] pick cancelled or no webPath');
-          setUploadingAvatar(false);
-          return;
-        }
-        
-        console.log('[EditProfileModal] pick success', { webPath: photo.webPath });
-        
-        // Set preview immediately (local preview)
-        previewUrl = photo.webPath;
-        setAvatarPreview(previewUrl);
-        
-        // Convert photo.webPath to Blob
-        const res = await fetch(photo.webPath);
-        if (!res.ok) {
-          throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
-        }
-        blob = await res.blob();
-      } else {
-        // Web fallback: use file input
-        const file = await new Promise<File | null>((resolve) => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.accept = 'image/*';
-          input.onchange = (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
-            resolve(file || null);
-          };
-          input.oncancel = () => resolve(null);
-          input.click();
-        });
-        
-        if (!file) {
-          console.log('[EditProfileModal] pick cancelled');
-          setUploadingAvatar(false);
-          return;
-        }
-        
-        console.log('[EditProfileModal] pick success', { fileName: file.name });
-        
-        blob = file;
-        
-        // Set preview immediately (local preview)
-        previewUrl = URL.createObjectURL(file);
-        setAvatarPreview(previewUrl);
+      if (import.meta.env.DEV) {
+        console.log('[EditProfileModal] pick start');
       }
       
-      // Upload to Supabase Storage with RLS-compatible path
-      const filePath = `${user.id}/avatar.jpg`;
+      const result = await pickImageBlob();
       
-      console.log('[EditProfileModal] upload start', { filePath, userId: user.id });
+      if (!result) {
+        if (import.meta.env.DEV) {
+          console.log('[EditProfileModal] pick cancelled');
+        }
+        setUploadingAvatar(false);
+        return;
+      }
+
+      const { blob, contentType, ext } = result;
+      
+      if (import.meta.env.DEV) {
+        console.log('[EditProfileModal] pick success', {
+          platform: Capacitor.getPlatform(),
+          contentType,
+          size: blob.size,
+          ext,
+        });
+      }
+      
+      // Set preview immediately (local preview from blob)
+      const previewUrl = URL.createObjectURL(blob);
+      setAvatarPreview(previewUrl);
+      
+      // Upload to Supabase Storage with RLS-compatible path
+      const filePath = `${user.id}/avatar_${Date.now()}.${ext}`;
+      
+      if (import.meta.env.DEV) {
+        console.log('[EditProfileModal] upload start', {
+          bucket: 'avatars',
+          path: filePath,
+          userId: user.id,
+          contentType,
+          blobSize: blob.size,
+        });
+      }
       
       const { error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(filePath, blob, {
           upsert: true,
-          contentType: blob.type || 'image/jpeg',
+          contentType,
         });
       
       if (uploadError) {
-        console.error('[EditProfileModal] upload error', uploadError);
+        console.error('[EditProfileModal] upload error', {
+          bucket: 'avatars',
+          path: filePath,
+          error: uploadError,
+          code: uploadError.statusCode,
+          message: uploadError.message,
+        });
         throw uploadError;
       }
       
@@ -138,7 +134,9 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
         throw new Error('Failed to get public URL');
       }
       
-      console.log('[EditProfileModal] upload success', { publicUrl });
+      if (import.meta.env.DEV) {
+        console.log('[EditProfileModal] upload success', { publicUrl });
+      }
       
       // Update user_profiles.avatar_url immediately
       const { error: updateError } = await supabase
@@ -147,23 +145,31 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
         .eq('id', user.id);
       
       if (updateError) {
-        console.error('[EditProfileModal] DB update error', updateError);
+        console.error('[EditProfileModal] DB update error', {
+          code: updateError.code,
+          message: updateError.message,
+        });
         throw updateError;
       }
       
-      // Update preview with public URL
+      // Cleanup blob URL and update preview with public URL
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
       setAvatarPreview(publicUrl);
       
       // Refresh profile in context
       await refreshProfile(user.id);
       
       setToast({ message: 'Photo de profil mise à jour', type: 'success' });
-      console.log('[EditProfileModal] avatar update complete');
+      if (import.meta.env.DEV) {
+        console.log('[EditProfileModal] avatar update complete');
+      }
       
     } catch (err: any) {
       console.error('[EditProfileModal] upload error', err);
       
-      // Cleanup blob URL if created on web
+      // Cleanup blob URL if created
       if (avatarPreview && avatarPreview.startsWith('blob:')) {
         URL.revokeObjectURL(avatarPreview);
       }
@@ -271,8 +277,22 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
   };
 
   const handleOverlayClick = (e: React.MouseEvent) => {
-    console.log('[EditProfileModal] overlay click');
+    if (import.meta.env.DEV) {
+      console.log('[EditProfileModal] overlay click');
+    }
     if (e.target === e.currentTarget) {
+      if (ignoreBackdropRef.current) {
+        if (import.meta.env.DEV) {
+          console.log('[EditProfileModal] Ignoring backdrop click during picker');
+        }
+        return;
+      }
+      if (uploadingAvatar) {
+        if (import.meta.env.DEV) {
+          console.log('[EditProfileModal] Prevented close during upload');
+        }
+        return;
+      }
       onClose();
     }
   };
