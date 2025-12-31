@@ -166,60 +166,40 @@ function App() {
     initSwipeBack();
   }, []);
 
-  // Hook 12: Deep link handling for password reset
+  // Hook 12: Deep link handling for password reset (native only)
+  // ResetPasswordPage handles session initialization itself
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
-      // WEB: handled by ResetPasswordPage via getSessionFromUrl
+      // WEB: handled by ResetPasswordPage directly
       return;
     }
 
-    // NATIVE (iOS/Android): handle deep links
+    // NATIVE (iOS/Android): navigate to reset-password when deep link received
+    // ResetPasswordPage will handle the session initialization
     let removeListener: (() => void) | null = null;
 
     (async () => {
-      const handleResetPasswordUrl = async (url: string) => {
-        if (!url) return;
-        // Check if URL contains reset-password (could be lexu://reset-password#...)
-        if (!url.includes('reset-password') || !url.startsWith('lexu://')) return;
-
-        try {
-          console.log('[APP] Handling reset password deep link:', url);
-          
-          // IMPORTANT: supabase expects full URL with tokens/hash/query
-          // Convert lexu:// to https:// for getSessionFromUrl
-          const httpsUrl = url.replace('lexu://', 'https://dummy/');
-          const { data, error } = await supabase.auth.getSessionFromUrl({ 
-            storeSession: true, 
-            url: httpsUrl 
-          });
-
-          if (error || !data.session) {
-            console.error('[APP] Error getting session from URL:', error);
-            window.location.href = '/login';
-            return;
-          }
-
-          console.log('[APP] Session established, navigating to reset-password');
-          
-          // Navigate to reset password page (SPA navigation)
-          window.history.replaceState({}, '', '/reset-password');
-          window.dispatchEvent(new PopStateEvent('popstate'));
-        } catch (e) {
-          console.error('[APP] Deep link error:', e);
-          window.location.href = '/login';
-        }
+      const navigateToReset = (url: string) => {
+        if (!url || !url.includes('reset-password') || !url.startsWith('lexu://')) return;
+        
+        console.log('[APP] Reset password deep link received, navigating to /reset-password');
+        
+        // Navigate to reset password page (SPA navigation)
+        // ResetPasswordPage will handle session initialization from the URL
+        window.history.replaceState({}, '', '/reset-password');
+        window.dispatchEvent(new PopStateEvent('popstate'));
       };
 
       // ✅ Cold start
       const launch = await CapApp.getLaunchUrl();
       if (launch?.url) {
-        await handleResetPasswordUrl(launch.url);
+        navigateToReset(launch.url);
       }
 
       // ✅ App déjà ouverte
-      const l = await CapApp.addListener('appUrlOpen', async ({ url }) => {
+      const l = await CapApp.addListener('appUrlOpen', ({ url }) => {
         if (!url) return;
-        await handleResetPasswordUrl(url);
+        navigateToReset(url);
       });
 
       removeListener = () => l.remove();
