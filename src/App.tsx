@@ -166,50 +166,58 @@ function App() {
     initSwipeBack();
   }, []);
 
-  // Hook 12: Deep link handling for password reset
+  // Hook 12: Deep link handling for password reset (cold start + no reload)
   useEffect(() => {
+    const goReset = (hash: string) => {
+      // Navigation SPA (pas de reload)
+      window.history.replaceState({}, '', `/reset-password${hash || ''}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+
+    const parseResetHashFromUrl = (rawUrl: string) => {
+      // lexu://reset-password#access_token=... -> on récupère "#..."
+      const u = new URL(rawUrl.replace('lexu://', 'https://dummy/'));
+      return u.hash || '';
+    };
+
     if (!Capacitor.isNativePlatform()) {
-      // Web: handle URL hash fragments
-      const handleHashChange = async () => {
+      // WEB
+      const handle = () => {
         const hash = window.location.hash;
         if (hash.includes('access_token') && hash.includes('type=recovery')) {
-          // Redirect to reset password page with hash preserved
-          // ResetPasswordPage will parse the hash and set the session
-          window.location.href = `/reset-password${hash}`;
+          goReset(hash);
         }
       };
+      handle();
+      window.addEventListener('hashchange', handle);
+      return () => window.removeEventListener('hashchange', handle);
+    }
 
-      // Check on mount
-      handleHashChange();
-      window.addEventListener('hashchange', handleHashChange);
-      return () => {
-        window.removeEventListener('hashchange', handleHashChange);
-      };
-    } else {
-      // Native: use Capacitor App plugin
-      const listener = CapApp.addListener('appUrlOpen', async ({ url }) => {
-        try {
-          if (!url.startsWith('lexu://')) return;
+    // NATIVE (iOS/Android)
+    let removeListener: (() => void) | null = null;
 
-          // Example: lexu://reset-password#access_token=...&refresh_token=...&type=recovery
-          if (url.includes('reset-password')) {
-            const parsed = new URL(url.replace('lexu://', 'https://dummy/'));
-            const hash = parsed.hash;
-            
-            // Redirect to reset password page with hash preserved
-            // ResetPasswordPage will parse the hash and set the session
-            window.location.href = `/reset-password${hash}`;
-          }
-        } catch (e) {
-          console.error('[APP] Deep link error (native):', e);
-          window.location.href = '/login';
+    (async () => {
+      // ✅ Cold start
+      const launch = await CapApp.getLaunchUrl();
+      if (launch?.url?.includes('reset-password')) {
+        goReset(parseResetHashFromUrl(launch.url));
+        return;
+      }
+
+      // ✅ App déjà ouverte
+      const l = await CapApp.addListener('appUrlOpen', ({ url }) => {
+        if (!url?.startsWith('lexu://')) return;
+        if (url.includes('reset-password')) {
+          goReset(parseResetHashFromUrl(url));
         }
       });
 
-      return () => {
-        listener.then(l => l.remove());
-      };
-    }
+      removeListener = () => l.remove();
+    })();
+
+    return () => {
+      if (removeListener) removeListener();
+    };
   }, []);
 
 
