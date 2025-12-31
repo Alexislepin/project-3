@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { BrandLogo } from '../components/BrandLogo';
-import { useNavigate } from 'react-router-dom';
 
 export function ResetPasswordPage() {
   const [newPassword, setNewPassword] = useState('');
@@ -9,7 +8,6 @@ export function ResetPasswordPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const navigate = useNavigate();
 
   // Check if user has a valid recovery session
   useEffect(() => {
