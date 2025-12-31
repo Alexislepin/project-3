@@ -3,6 +3,7 @@ import { useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
 import { LoginPage } from './pages/Login';
 import { SignupPage } from './pages/Signup';
+import { ResetPasswordPage } from './pages/ResetPassword';
 import { ProfileOnboarding } from './pages/ProfileOnboarding';
 import { Onboarding } from './components/auth/Onboarding';
 import { LanguageOnboarding } from './components/auth/LanguageOnboarding';
@@ -20,6 +21,8 @@ import { ManageBook } from './pages/ManageBook';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
 import { debugLog, debugError } from './utils/logger';
+import { App as CapApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
 
@@ -52,9 +55,13 @@ function App() {
     // Use safeTimeEnd to prevent double-invoke issues
     setTimeout(() => safeTimeEnd('FIRST_RENDER'), 0);
   }, []);
+
+  useEffect(() => {
+    console.log('✅ JS LOG TEST: App mounted');
+  }, []);
   
   // Hook 1: Auth context
-  const { user, loading, profile, profileLoading, isOnboardingComplete } = useAuth();
+  const { user, loading, profile, profileLoading, profileResolved, isOnboardingComplete } = useAuth();
   
   // Hook 2-8: State hooks (toujours dans le même ordre)
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
@@ -159,6 +166,89 @@ function App() {
     initSwipeBack();
   }, []);
 
+  // Hook 12: Deep link handling for password reset
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      // Web: handle URL hash fragments
+      const handleHashChange = async () => {
+        const hash = window.location.hash;
+        if (hash.includes('access_token') && hash.includes('type=recovery')) {
+          try {
+            const params = new URLSearchParams(hash.replace('#', ''));
+            const access_token = params.get('access_token');
+            const refresh_token = params.get('refresh_token');
+            const type = params.get('type');
+
+            if (type === 'recovery' && access_token && refresh_token) {
+              const { error } = await supabase.auth.setSession({
+                access_token,
+                refresh_token,
+              });
+
+              if (error) {
+                console.error('[APP] Error setting recovery session:', error);
+                window.location.href = '/login';
+              } else {
+                // Redirect to reset password page
+                window.location.href = '/reset-password';
+              }
+            }
+          } catch (e) {
+            console.error('[APP] Deep link error (web):', e);
+            window.location.href = '/login';
+          }
+        }
+      };
+
+      // Check on mount
+      handleHashChange();
+      window.addEventListener('hashchange', handleHashChange);
+      return () => {
+        window.removeEventListener('hashchange', handleHashChange);
+      };
+    } else {
+      // Native: use Capacitor App plugin
+      const listener = CapApp.addListener('appUrlOpen', async ({ url }) => {
+        try {
+          if (!url.startsWith('lexu://')) return;
+
+          // Example: lexu://reset-password#access_token=...&refresh_token=...&type=recovery
+          if (url.includes('reset-password')) {
+            const parsed = new URL(url.replace('lexu://', 'https://dummy/'));
+            const hash = parsed.hash.replace('#', '');
+            const params = new URLSearchParams(hash);
+
+            const access_token = params.get('access_token');
+            const refresh_token = params.get('refresh_token');
+            const type = params.get('type');
+
+            if (type === 'recovery' && access_token && refresh_token) {
+              const { error } = await supabase.auth.setSession({
+                access_token,
+                refresh_token,
+              });
+
+              if (error) {
+                console.error('[APP] Error setting recovery session:', error);
+                window.location.href = '/login';
+              } else {
+                // Redirect to reset password page
+                window.location.href = '/reset-password';
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[APP] Deep link error (native):', e);
+          window.location.href = '/login';
+        }
+      });
+
+      return () => {
+        listener.then(l => l.remove());
+      };
+    }
+  }, []);
+
 
   // ============================================
   // HANDLERS (pas de hooks ici)
@@ -234,7 +324,24 @@ function App() {
     if (path === '/signup') {
       return <SignupPage />;
     }
+    if (path === '/reset-password') {
+      // Check if we have a recovery session in the URL hash
+      const hash = window.location.hash;
+      if (hash.includes('access_token') && hash.includes('type=recovery')) {
+        // We'll handle this in the deep link hook, but show the page
+        return <ResetPasswordPage />;
+      }
+      // No valid recovery session, redirect to login
+      window.location.href = '/login';
+      return null;
+    }
     return <LoginPage />;
+  }
+
+  // Reset password page (user might have recovery session)
+  const path = window.location.pathname;
+  if (path === '/reset-password') {
+    return <ResetPasswordPage />;
   }
 
   // Language onboarding (first priority)
@@ -244,8 +351,23 @@ function App() {
 
   // Profile onboarding (username, display_name, bio, avatar) - NEW
   // CRITICAL: Never show Home if onboarding is not complete
-  if (user && profile && !isOnboardingComplete) {
+  // IMPORTANT: Wait for profileResolved to avoid premature redirects
+  if (user && profile && profileResolved && !isOnboardingComplete) {
+    debugLog('[APP] Gating onboarding:', {
+      userId: user.id,
+      profileResolved,
+      onboarding_completed: profile.onboarding_completed,
+    });
     return <ProfileOnboarding />;
+  }
+  
+  // Don't show onboarding if profile is not resolved yet (avoid flash/redirect)
+  if (user && !profileResolved && profileLoading) {
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center">
+        <div className="text-text-sub-light">Chargement du profil...</div>
+      </div>
+    );
   }
 
   // If user exists but profile is missing, try to refresh and show loading
