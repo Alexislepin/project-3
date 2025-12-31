@@ -300,8 +300,7 @@ function App() {
   }
 
   // Route dédiée pour la gestion d'un livre : /library/manage/:bookId
-  const routePath = window.location.pathname;
-  const manageMatch = routePath.match(/^\/library\/manage\/([^/]+)$/);
+  const manageMatch = path.match(/^\/library\/manage\/([^/]+)$/);
   if (manageMatch) {
     const [, bookId] = manageMatch;
     return <ManageBook bookId={bookId} />;
