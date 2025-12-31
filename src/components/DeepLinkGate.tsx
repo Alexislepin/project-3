@@ -35,6 +35,8 @@ export function DeepLinkGate() {
       // (optionnel) autres deeplinks...
     };
 
+    let removeListener: (() => void) | null = null;
+
     (async () => {
       // ✅ Cold start
       const launch = await CapApp.getLaunchUrl();
@@ -43,12 +45,13 @@ export function DeepLinkGate() {
       }
 
       // ✅ App déjà ouverte (background)
-      const sub = CapApp.addListener("appUrlOpen", ({ url }) => handleUrl(url));
-
-      return () => {
-        sub.remove();
-      };
+      const sub = await CapApp.addListener("appUrlOpen", ({ url }) => handleUrl(url));
+      removeListener = () => sub.remove();
     })();
+
+    return () => {
+      if (removeListener) removeListener();
+    };
   }, [navigate]);
 
   return null;
