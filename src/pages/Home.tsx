@@ -271,18 +271,30 @@ export function Home() {
         const userIds = [...new Set(data.map(a => a.user_id))] as string[];
         
         if (bookIds.length > 0 && userIds.length > 0) {
-          const { data: userBooksData } = await supabase
+          const { data: userBooksData, error: userBooksError } = await supabase
             .from('user_books')
             .select('book_id, user_id, custom_cover_url')
             .in('book_id', bookIds)
             .in('user_id', userIds);
+          
+          if (userBooksError) {
+            console.error('[Home] Error fetching custom covers:', userBooksError);
+          }
           
           // Create a map: `${user_id}:${book_id}` -> custom_cover_url
           const customCoverMap = new Map<string, string | null>();
           if (userBooksData) {
             userBooksData.forEach(ub => {
               const key = `${ub.user_id}:${ub.book_id}`;
-              customCoverMap.set(key, ub.custom_cover_url);
+              // custom_cover_url is already a public URL (stored as such in AddCoverModal)
+              // If it's a path (shouldn't happen, but safety check), convert to public URL
+              let coverUrl = ub.custom_cover_url;
+              if (coverUrl && !coverUrl.startsWith('http')) {
+                // It's a path, convert to public URL
+                const { data: publicUrlData } = supabase.storage.from('book-covers').getPublicUrl(coverUrl);
+                coverUrl = publicUrlData?.publicUrl || null;
+              }
+              customCoverMap.set(key, coverUrl);
             });
           }
           
