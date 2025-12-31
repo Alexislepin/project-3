@@ -56,6 +56,8 @@ function buildWeeklyBarsData(activities: any[]): number[] {
 import { computeReadingStats, formatStatValue, formatDuration } from '../lib/readingStats';
 import { LevelProgressBar } from '../components/LevelProgressBar';
 import { LeaderboardModal } from '../components/LeaderboardModal';
+import { UserProfileView } from '../components/UserProfileView';
+import { ActivityFocus } from '../lib/activityFocus';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { last7DaysRangeISO } from '../utils/dateUtils';
 import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
