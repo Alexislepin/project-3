@@ -4,13 +4,36 @@ import { BrandLogo } from '../components/BrandLogo';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 
-function extractCode(url: string) {
+type InitResult = { ok: true } | { ok: false; message: string };
+
+function parseParamsFromUrl(url: string) {
+  // Support query (?a=b) + hash (#a=b)
+  let query = '';
+  let hash = '';
   try {
     const u = new URL(url);
-    return u.searchParams.get('code') || '';
+    query = u.search || '';
+    hash = u.hash || '';
   } catch {
-    return '';
+    // For safety if URL parsing fails (shouldn't on iOS)
+    const qIdx = url.indexOf('?');
+    const hIdx = url.indexOf('#');
+    query = qIdx >= 0 ? url.slice(qIdx, hIdx >= 0 ? hIdx : undefined) : '';
+    hash = hIdx >= 0 ? url.slice(hIdx) : '';
   }
+
+  const searchParams = new URLSearchParams(query.startsWith('?') ? query.slice(1) : query);
+  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+
+  const get = (k: string) => searchParams.get(k) || hashParams.get(k) || '';
+
+  return {
+    code: get('code'),
+    access_token: get('access_token'),
+    refresh_token: get('refresh_token'),
+    token_hash: get('token_hash') || get('token'), // some templates use token_hash
+    type: get('type'),
+  };
 }
 
 export function ResetPasswordPage() {
@@ -21,92 +44,154 @@ export function ResetPasswordPage() {
   const [initError, setInitError] = useState<string | null>(null);
 
   useEffect(() => {
-    let sub: any;
+    let alive = true;
+    let sub: any = null;
+    let timeoutId: any = null;
 
-    const initFromUrl = async (url: string) => {
+    const initFromUrl = async (url: string): Promise<InitResult> => {
       try {
-        const code = extractCode(url);
+        const { code, access_token, refresh_token, token_hash, type } = parseParamsFromUrl(url);
 
-        // Supabase recovery / magic links now often use ?code=...
+        // 1) PKCE style: ?code=...
         if (code) {
           console.log('[ResetPassword] Exchanging code for session');
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) throw error;
-          
-          // Verify session was established
           const { data: { session } } = await supabase.auth.getSession();
-          if (!session) {
-            throw new Error('Session non établie après échange du code');
-          }
-          
-          setStatus("ready");
-          return;
+          if (!session) throw new Error('Session non établie après échange du code');
+          return { ok: true };
         }
 
-        // Fallback: some flows still send tokens in the hash
-        // ex: #access_token=...&refresh_token=...
-        const hash = url.split('#')[1] || '';
-        const params = new URLSearchParams(hash);
-        const access_token = params.get('access_token');
-        const refresh_token = params.get('refresh_token');
-
+        // 2) Implicit style: #access_token=...&refresh_token=...
         if (access_token && refresh_token) {
           console.log('[ResetPassword] Setting session from tokens');
           const { error } = await supabase.auth.setSession({ access_token, refresh_token });
           if (error) throw error;
-          
-          // Verify session was established
           const { data: { session } } = await supabase.auth.getSession();
-          if (!session) {
-            throw new Error('Session non établie après setSession');
-          }
-          
+          if (!session) throw new Error('Session non établie après setSession');
+          return { ok: true };
+        }
+
+        // 3) OTP recovery style: ?token_hash=...&type=recovery
+        // (some Supabase templates use token_hash for password recovery)
+        if (token_hash) {
+          const otpType = (type as any) || 'recovery';
+          console.log('[ResetPassword] Verifying OTP', { otpType });
+          const { error } = await supabase.auth.verifyOtp({
+            type: otpType,
+            token_hash,
+          } as any);
+          if (error) throw error;
+
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) throw new Error('Session non établie après verifyOtp');
+          return { ok: true };
+        }
+
+        return { ok: false, message: 'Lien invalide ou incomplet (pas de code/token).' };
+      } catch (e: any) {
+        return { ok: false, message: e?.message || "Erreur lors de l'initialisation. Réessaie depuis l'email." };
+      }
+    };
+
+    const tryInitWithStorageOrUrl = async () => {
+      // 1) Session storage (DeepLinkGate)
+      const fromStorage = sessionStorage.getItem("pending_deeplink");
+      if (fromStorage) {
+        // ⚠️ IMPORTANT: remove ONLY if init succeeds
+        const res = await initFromUrl(fromStorage);
+        if (!alive) return;
+
+        if (res.ok) {
+          sessionStorage.removeItem("pending_deeplink");
+          setInitError(null);
           setStatus("ready");
           return;
         }
 
-        throw new Error('Lien invalide ou incomplet (pas de code/token).');
-      } catch (e: any) {
-        console.error('[ResetPassword] initFromUrl error', e);
-        setInitError(e?.message || "Erreur lors de l'initialisation. Réessaie depuis l'email.");
-        setStatus("error");
+        // keep it for potential retry (do not remove)
+        console.warn('[ResetPassword] init failed from storage:', res.message);
       }
+
+      // 2) Web fallback
+      if (!Capacitor.isNativePlatform()) {
+        const res = await initFromUrl(window.location.href);
+        if (!alive) return;
+        if (res.ok) {
+          setInitError(null);
+          setStatus("ready");
+        } else {
+          setInitError(res.message);
+          setStatus("error");
+        }
+        return;
+      }
+
+      // 3) Native: try getLaunchUrl
+      try {
+        const launch = await CapApp.getLaunchUrl();
+        if (launch?.url) {
+          const res = await initFromUrl(launch.url);
+          if (!alive) return;
+
+          if (res.ok) {
+            setInitError(null);
+            setStatus("ready");
+            return;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // Still nothing -> stay idle and wait for appUrlOpen (up to 2s)
     };
 
     (async () => {
-      // WEB
-      if (!Capacitor.isNativePlatform()) {
-        await initFromUrl(window.location.href);
-        return;
-      }
+      setStatus("idle");
+      await tryInitWithStorageOrUrl();
+      if (!alive) return;
 
-      // NATIVE: read deep link URL from sessionStorage (set by DeepLinkGate)
-      const deepLinkUrlFromStorage = sessionStorage.getItem("pending_deeplink");
-      if (deepLinkUrlFromStorage) {
-        sessionStorage.removeItem("pending_deeplink");
-        await initFromUrl(deepLinkUrlFromStorage);
-        return;
-      }
+      if (!Capacitor.isNativePlatform()) return;
 
-      // Fallback: try window.location.href (might work in some cases)
-      if (window.location.href && window.location.href !== window.location.origin + '/reset-password') {
-        await initFromUrl(window.location.href);
-      } else {
-        // No URL available, show error
-        setInitError("Lien invalide ou expiré. Réessaie depuis l'email.");
-        setStatus("error");
-      }
+      // Listen for deep links arriving AFTER mount (cold start timing)
+      sub = await CapApp.addListener("appUrlOpen", async ({ url }) => {
+        if (!alive || !url) return;
+        console.log('[ResetPassword] appUrlOpen received:', url);
+
+        const res = await initFromUrl(url);
+        if (!alive) return;
+
+        if (res.ok) {
+          setInitError(null);
+          setStatus("ready");
+        } else {
+          // Don't instantly fail; could receive a non-reset link
+          console.warn('[ResetPassword] appUrlOpen init failed:', res.message);
+        }
+      });
+
+      // Final timeout: if still not ready after 2s, show error
+      timeoutId = setTimeout(() => {
+        if (!alive) return;
+        if (status !== "ready") {
+          setInitError("Lien invalide ou expiré. Réessaie depuis l'email.");
+          setStatus("error");
+        }
+      }, 2000);
     })();
 
     return () => {
+      alive = false;
+      if (timeoutId) clearTimeout(timeoutId);
       sub?.remove?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSave = async () => {
     setMsg("");
 
-    // Verify we have a session before updating password
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
       setMsg("Session expirée. Réessaie depuis l'email.");
@@ -124,10 +209,8 @@ export function ResetPasswordPage() {
     }
 
     setStatus("saving");
-    
     try {
       const { error } = await supabase.auth.updateUser({ password });
-
       if (error) {
         setStatus("error");
         setMsg(error.message || "Impossible de changer le mot de passe.");
@@ -136,11 +219,9 @@ export function ResetPasswordPage() {
 
       setStatus("done");
       setMsg("Mot de passe mis à jour ✅");
-      
-      // Sign out to force clean reconnection
+
       await supabase.auth.signOut();
-      
-      // Redirect to login after 2 seconds
+
       setTimeout(() => {
         window.location.href = '/login';
       }, 2000);
@@ -149,31 +230,6 @@ export function ResetPasswordPage() {
       setMsg(err?.message || "Une erreur inattendue est survenue.");
     }
   };
-
-  // Show error if initialization failed
-  if (initError) {
-    return (
-      <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <div className="mb-2">
-              <BrandLogo size={48} color="#111" />
-            </div>
-          </div>
-          <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-6">
-            <h1 className="text-xl font-bold mb-2 text-text-main-light">Erreur</h1>
-            <p className="text-red-600 mb-4">{initError}</p>
-            <a
-              href="/login"
-              className="text-sm text-primary hover:underline font-medium"
-            >
-              ← Retour à la connexion
-            </a>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
@@ -243,7 +299,7 @@ export function ResetPasswordPage() {
           
           {msg && status === "error" && (
             <div className="mt-3">
-              <p className="text-sm text-red-600 mb-4">{msg}</p>
+              <p className="text-sm text-red-600 mb-4">{initError || msg}</p>
               <a
                 href="/login"
                 className="text-sm text-primary hover:underline font-medium"
