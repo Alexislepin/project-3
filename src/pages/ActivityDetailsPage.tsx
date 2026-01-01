@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Dumbbell, Brain, Target } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,7 +20,7 @@ const activityLabels = {
 };
 
 export function ActivityDetailsPage() {
-  const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
   const [activity, setActivity] = useState<any>(null);
@@ -28,8 +28,26 @@ export function ActivityDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Extract ID from URL path or query string
+  const extractId = () => {
+    // Try path param first: /activity/:id
+    const pathMatch = location.pathname.match(/^\/activity\/([^/]+)$/);
+    if (pathMatch && pathMatch[1]) {
+      return pathMatch[1];
+    }
+    // Fallback: query string ?id=...
+    const searchParams = new URLSearchParams(location.search);
+    const queryId = searchParams.get('id');
+    if (queryId) {
+      return queryId;
+    }
+    return null;
+  };
+
   useEffect(() => {
-    if (!id) {
+    const activityId = extractId();
+    if (!activityId) {
+      console.error('[ActivityDetailsPage] No ID found in URL:', location.pathname, location.search);
       setError('ID d\'activité manquant');
       setLoading(false);
       return;
@@ -41,7 +59,7 @@ export function ActivityDetailsPage() {
         const { data: activityData, error: activityError } = await supabase
           .from('activities')
           .select('*')
-          .eq('id', id)
+          .eq('id', activityId)
           .single();
 
         if (activityError) {
@@ -83,7 +101,7 @@ export function ActivityDetailsPage() {
     };
 
     loadActivity();
-  }, [id]);
+  }, [location.pathname, location.search]);
 
   const ActivityIcon = activity ? activityIcons[activity.type as keyof typeof activityIcons] || BookOpen : BookOpen;
   const activityLabel = activity ? activityLabels[activity.type as keyof typeof activityLabels] || 'Activité' : 'Activité';
@@ -104,12 +122,12 @@ export function ActivityDetailsPage() {
     return (
       <div className="h-screen max-w-2xl mx-auto bg-background-light">
         <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center px-4">
-            <p className="text-stone-600 mb-2">{error || 'Activité introuvable'}</p>
+        <div className="flex items-center justify-center h-full px-4" style={{ paddingTop: '56px' }}>
+          <div className="text-center w-full max-w-md">
+            <p className="text-stone-600 mb-4">{error || 'Activité introuvable'}</p>
             <button
               onClick={() => navigate(-1)}
-              className="text-primary hover:underline text-sm"
+              className="px-6 py-3 rounded-xl bg-stone-900 text-white font-medium hover:bg-stone-800 transition-colors w-full"
             >
               Retour
             </button>
