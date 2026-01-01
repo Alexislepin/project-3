@@ -719,7 +719,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             </div>
             <button
               onClick={() => setShowLevelDetails(true)}
-              className="mt-3 text-base font-medium text-stone-600 underline hover:text-stone-800 transition-colors cursor-pointer w-full text-center"
+              className="mt-2 text-xs text-stone-500 underline hover:text-stone-700 transition-colors cursor-pointer"
               type="button"
             >
               Découvrir comment fonctionnent les niveaux
