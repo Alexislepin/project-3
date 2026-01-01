@@ -149,11 +149,27 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
                   {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
                 </div>
               </div>
+              
+              {/* Link to XP sources */}
+              <div className="text-center">
+                <button
+                  onClick={() => {
+                    const xpSection = document.getElementById('xp-sources-section');
+                    if (xpSection) {
+                      xpSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                  }}
+                  className="text-xs text-stone-500 underline hover:text-stone-700 transition-colors"
+                  type="button"
+                >
+                  Découvrir comment fonctionnent les niveaux
+                </button>
+              </div>
             </div>
           </div>
 
           {/* XP Sources Section */}
-          <div className="mb-6">
+          <div id="xp-sources-section" className="mb-6">
             <h3 className="text-lg font-bold text-stone-900 mb-4">Gagner de l'XP</h3>
             
             <div className="space-y-4">
