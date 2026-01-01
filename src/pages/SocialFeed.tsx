@@ -211,7 +211,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
             created_at: event.created_at,
           };
         })
-        .filter((event): event is BookEvent => event !== null) as BookEvent[];
+        .filter((event) => event !== null) as BookEvent[];
 
       // Group likes
       const grouped = groupSocialEvents(enrichedEvents as any);
