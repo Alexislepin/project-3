@@ -113,7 +113,7 @@ export function ActivityDetailsPage() {
   if (loading) {
     return (
       <div className="h-screen max-w-2xl mx-auto bg-background-light">
-        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
+        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
         <div className="flex items-center justify-center h-full">
           <div className="text-stone-500">Chargement...</div>
         </div>
@@ -124,12 +124,12 @@ export function ActivityDetailsPage() {
   if (error || !activity) {
     return (
       <div className="h-screen max-w-2xl mx-auto bg-background-light">
-        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
+        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
         <div className="flex items-center justify-center h-full px-4" style={{ paddingTop: '56px' }}>
           <div className="text-center w-full max-w-md">
             <p className="text-stone-600 mb-4">{error || 'Activité introuvable'}</p>
             <button
-              onClick={() => window.location.href = '/social'}
+              onClick={() => navigate(-1)}
               className="px-6 py-3 rounded-xl bg-stone-900 text-white font-medium hover:bg-stone-800 transition-colors w-full"
             >
               Retour
@@ -142,7 +142,7 @@ export function ActivityDetailsPage() {
 
   return (
     <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
-      <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
+      <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
       
       <div className="h-full overflow-y-auto" style={{ paddingTop: '56px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}>
         <div className="p-4 space-y-4">
