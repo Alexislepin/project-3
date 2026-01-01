@@ -41,7 +41,7 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         </span>
 
         {onClick && (
-          <span className="ml-1 text-xs font-semibold text-primary whitespace-nowrap">
+          <span className="ml-1 text-xs font-semibold text-stone-900 whitespace-nowrap">
             +XP
           </span>
         )}
