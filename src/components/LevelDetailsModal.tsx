@@ -145,13 +145,13 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
                     style={{ width: `${progress.progress}%` }}
                   />
                 </div>
-                <div className="text-center text-xs text-stone-500 mt-2">
+                <div className="text-center text-xs text-stone-500 mt-2 mb-3">
                   {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
                 </div>
               </div>
               
               {/* Link to XP sources */}
-              <div className="text-center mt-3">
+              <div className="text-center pt-2">
                 <button
                   onClick={() => {
                     const xpSection = document.getElementById('xp-sources-section');
@@ -159,7 +159,7 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
                       xpSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }
                   }}
-                  className="text-xs text-stone-500 underline hover:text-stone-700 transition-colors cursor-pointer"
+                  className="text-sm text-stone-600 underline hover:text-stone-800 transition-colors cursor-pointer"
                   type="button"
                 >
                   Découvrir comment fonctionnent les niveaux
