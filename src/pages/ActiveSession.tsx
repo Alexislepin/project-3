@@ -374,6 +374,39 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       return;
     }
 
+    // Award XP for reading session (if duration >= 5 minutes)
+    if (durationMinutes >= 5) {
+      try {
+        const { calculateReadingXp } = await import('../lib/calculateReadingXp');
+        const xp = calculateReadingXp(durationMinutes, pagesRead);
+        
+        console.log('[award_xp] awarded', { 
+          xp, 
+          durationMinutes, 
+          pagesRead 
+        });
+        
+        if (xp > 0) {
+          const { data: xpResult, error: xpError } = await supabase.rpc('award_xp', {
+            p_user_id: user.id,
+            p_amount: xp,
+            p_source: 'reading',
+          });
+
+          if (xpError) {
+            console.error('[award_xp] failed', xpError);
+          } else if (xpResult) {
+            // Dispatch xp-updated event to refresh UI
+            window.dispatchEvent(new CustomEvent('xp-updated', {
+              detail: { xp_total: xpResult }
+            }));
+          }
+        }
+      } catch (error) {
+        console.error('[handleFinish] Error awarding XP:', error);
+      }
+    }
+
     setSaving(false);
     setShowSummary(true);
   };
