@@ -16,7 +16,7 @@ import { LevelProgressBar } from '../components/LevelProgressBar';
 import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
-import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
+import { Bell, UserPlus, Heart, RefreshCw, Trophy } from 'lucide-react';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -786,6 +786,26 @@ export function Home() {
                   variant="compact"
                   onClick={() => setShowLevelDetails(true)}
                 />
+                {/* Leaderboard Button */}
+                <button
+                  onClick={() => setShowLeaderboard(true)}
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
+                  type="button"
+                >
+                  <Trophy className="w-4 h-4" />
+                  Classement
+                </button>
+                {/* Help text with link */}
+                <p className="mt-2 text-center text-xs text-stone-500">
+                  💡 Les niveaux évoluent avec ton activité.{' '}
+                  <button
+                    onClick={() => setShowLevelDetails(true)}
+                    className="text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 transition-colors"
+                    type="button"
+                  >
+                    Découvrir comment fonctionnent les niveaux →
+                  </button>
+                </p>
               </div>
             )}
           </div>
