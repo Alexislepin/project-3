@@ -151,7 +151,7 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
               </div>
               
               {/* Link to XP sources */}
-              <div className="text-center">
+              <div className="text-center mt-3">
                 <button
                   onClick={() => {
                     const xpSection = document.getElementById('xp-sources-section');
@@ -159,7 +159,7 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
                       xpSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }
                   }}
-                  className="text-xs text-stone-500 underline hover:text-stone-700 transition-colors"
+                  className="text-xs text-stone-500 underline hover:text-stone-700 transition-colors cursor-pointer"
                   type="button"
                 >
                   Découvrir comment fonctionnent les niveaux
