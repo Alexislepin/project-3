@@ -1105,6 +1105,11 @@ export function Insights() {
         </div>
       </div>
 
+      {/* Level Details Modal */}
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
+      )}
+
       {/* Leaderboard Modal */}
       {showLeaderboard && (
         <LeaderboardModal
