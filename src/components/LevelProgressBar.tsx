@@ -57,15 +57,6 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
           <span className="text-sm font-semibold text-[#111]">Niveau {progress.level}</span>
           <span className="text-xs font-normal text-stone-500">({formatXp(progress.xpTotal)} XP total)</span>
         </div>
-        {onClick && (
-          <button
-            onClick={onClick}
-            className="text-xs text-primary hover:underline font-medium"
-            type="button"
-          >
-            Comment gagner de l'XP ?
-          </button>
-        )}
       </div>
       
       <div className="flex items-center gap-2.5 mb-2">
