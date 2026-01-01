@@ -436,18 +436,20 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   // Measure header and tabs height dynamically
   useLayoutEffect(() => {
     const compute = () => {
-      // Use requestAnimationFrame to ensure DOM is fully rendered
-      requestAnimationFrame(() => {
-        const h = headerRef.current?.offsetHeight ?? 0;
-        const t = tabsRef.current?.offsetHeight ?? 0;
-        setHeaderHeight(h);
-        setTopOffset(h + t);
-      });
+      const h = headerRef.current?.offsetHeight ?? 0;
+      const t = tabsRef.current?.offsetHeight ?? 0;
+      console.log('[SocialFeed] Height calculation:', { header: h, tabs: t, total: h + t });
+      setHeaderHeight(h);
+      setTopOffset(h + t);
     };
     
-    // Initial computation with a small delay to ensure elements are rendered
-    const timeoutId = setTimeout(compute, 0);
-    compute();
+    // Initial computation - use requestAnimationFrame to ensure DOM is rendered
+    requestAnimationFrame(() => {
+      compute();
+      
+      // Also compute after a small delay to catch any late renders
+      setTimeout(compute, 100);
+    });
 
     // Observe resize of header and tabs
     const ro = new ResizeObserver(() => {
@@ -461,7 +463,6 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     window.addEventListener('resize', compute);
     
     return () => {
-      clearTimeout(timeoutId);
       ro.disconnect();
       window.removeEventListener('resize', compute);
     };
