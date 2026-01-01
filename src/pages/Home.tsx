@@ -13,6 +13,7 @@ import { WeeklySummaryCarousel } from '../components/WeeklySummaryCarousel';
 import { StreakBadge } from '../components/StreakBadge';
 import { SocialFeed } from '../pages/SocialFeed';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';

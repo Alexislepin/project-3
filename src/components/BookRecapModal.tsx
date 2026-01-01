@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from './Toast';
 import { CenteredModalShell } from './ui/CenteredModalShell';
+import { RecapUIState } from '../lib/recapUI';
 
 type RecapData = {
   summary: string;
@@ -51,49 +52,75 @@ interface BookRecapModalProps {
     google_books_id?: string | null;
   };
   uptoPage: number;
+  // Optional controlled mode props (if provided, use controlled mode)
+  ui?: RecapUIState;
+  setUI?: (updater: (prev: RecapUIState) => RecapUIState) => void;
+  loadRecap?: (force?: boolean) => Promise<void>;
+  onTabChange?: (tab: 'personnages' | 'takeaways' | 'detaille' | 'defi') => void;
 }
 
-export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModalProps) {
+export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadRecap: externalLoadRecap, onTabChange }: BookRecapModalProps) {
   const { user, profile } = useAuth();
-  const [recapLoading, setRecapLoading] = useState(false);
-  const [recapData, setRecapData] = useState<RecapData | null>(null);
-  const [recapTab, setRecapTab] = useState<'personnages' | 'takeaways' | 'detaille' | 'defi'>('personnages');
-  const [userChallengeAnswer, setUserChallengeAnswer] = useState('');
-  const [challengeResult, setChallengeResult] = useState<null | {
+  const isControlled = !!ui && !!setUI;
+  
+  // Local state (used when not in controlled mode)
+  const [localRecapLoading, setLocalRecapLoading] = useState(false);
+  const [localRecapData, setLocalRecapData] = useState<RecapData | null>(null);
+  const [localRecapTab, setLocalRecapTab] = useState<'personnages' | 'takeaways' | 'detaille' | 'defi'>('personnages');
+  const [localUserChallengeAnswer, setLocalUserChallengeAnswer] = useState('');
+  const [localChallengeResult, setLocalChallengeResult] = useState<null | {
     verdict: 'correct' | 'partial' | 'incorrect';
     points: number;
     feedback: string;
     answer: string;
     explanation?: string;
   }>(null);
-  const [challengeSubmitting, setChallengeSubmitting] = useState(false);
+  const [localChallengeSubmitting, setLocalChallengeSubmitting] = useState(false);
+  const [localRecapError, setLocalRecapError] = useState<{ message: string; requestId: string } | null>(null);
+  
+  // Use controlled state if provided, otherwise use local state
+  const recapLoading = isControlled ? (ui?.recapLoading ?? false) : localRecapLoading;
+  const recapData = isControlled ? (ui?.recapData ?? null) : localRecapData;
+  const recapTab = isControlled ? (ui?.tab ?? 'personnages') : localRecapTab;
+  const userChallengeAnswer = isControlled ? (ui?.userAnswerDraft ?? '') : localUserChallengeAnswer;
+  const challengeResult = isControlled ? (ui?.challengeResult ?? null) : localChallengeResult;
+  const challengeSubmitting = isControlled ? (ui?.challengeSubmitting ?? false) : localChallengeSubmitting;
+  const recapError = isControlled ? (ui?.recapError ?? null) : localRecapError;
+  const hasSubmittedChallenge = isControlled ? (ui?.hasSubmittedChallenge ?? false) : false;
+  
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
-  const [recapError, setRecapError] = useState<{ message: string; requestId: string } | null>(null);
 
-  // Load recap when modal opens
+  // Load recap when modal opens (only in non-controlled mode)
   useEffect(() => {
-    if (open && user) {
+    if (open && user && !isControlled && !externalLoadRecap) {
       loadRecap(false);
     }
-  }, [open, user]);
+  }, [open, user, isControlled, externalLoadRecap]);
 
-  // Reset states when modal closes
+  // Reset states when modal closes (only in non-controlled mode)
   useEffect(() => {
-    if (!open) {
-      setRecapData(null);
-      setRecapTab('personnages');
-      setUserChallengeAnswer('');
-      setChallengeResult(null);
-      setRecapError(null);
+    if (!open && !isControlled) {
+      setLocalRecapData(null);
+      setLocalRecapTab('personnages');
+      setLocalUserChallengeAnswer('');
+      setLocalChallengeResult(null);
+      setLocalRecapError(null);
     }
-  }, [open]);
+  }, [open, isControlled]);
 
   const loadRecap = async (force = false) => {
     if (!user) return;
+    
+    // Use external loadRecap if provided (controlled mode)
+    if (externalLoadRecap) {
+      await externalLoadRecap(force);
+      return;
+    }
 
-    setRecapLoading(true);
-    setRecapData(null);
-    setRecapError(null);
+    // Local mode
+    setLocalRecapLoading(true);
+    setLocalRecapData(null);
+    setLocalRecapError(null);
 
     try {
       // ✅ Build payload with all available identifiers
@@ -127,10 +154,15 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
         console.warn('[BookRecapModal] Supabase invoke error:', { error, requestId });
         console.log('[BookRecapModal] requestId', requestId);
         const errorMessage = error.message || 'Erreur serveur';
-        setRecapError({ 
+        const errorObj = { 
           message: errorMessage,
           requestId,
-        });
+        };
+        if (isControlled && setUI) {
+          setUI(s => ({ ...s, recapError: errorObj, recapLoading: false }));
+        } else {
+          setLocalRecapError(errorObj);
+        }
         setToast({ 
           message: `${errorMessage} · Code: ${requestId}`, 
           type: 'error' 
@@ -183,7 +215,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
         const requestId = data.meta?.requestId || 'unknown';
         console.log('[BookRecapModal] Recap loaded:', { requestId });
         console.log('[BookRecapModal] requestId', requestId);
-        setRecapData({
+        const newRecapData = {
           summary: data.summary || '',
           ultra_20s: data.ultra_20s,
           takeaways: data.takeaways || '',
@@ -198,11 +230,17 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
           characters: data.characters || [],
           uptoPage: data.uptoPage || data.meta?.uptoPage || uptoPage,
           meta: data.meta,
-        });
-        setRecapTab('personnages');
-        setUserChallengeAnswer('');
-        setChallengeResult(null);
-        setRecapError(null);
+        };
+        
+        if (isControlled && setUI) {
+          setUI(s => ({ ...s, recapData: newRecapData, recapLoading: false, recapError: null, tab: 'personnages', userAnswerDraft: '' }));
+        } else {
+          setLocalRecapData(newRecapData);
+          setLocalRecapTab('personnages');
+          setLocalUserChallengeAnswer('');
+          setLocalChallengeResult(null);
+          setLocalRecapError(null);
+        }
       } else {
         // ✅ No ultra_20s but no error either (shouldn't happen, but handle gracefully)
         const requestId = data?.meta?.requestId || 'unknown';
@@ -227,7 +265,9 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
         type: 'error' 
       });
     } finally {
-      setRecapLoading(false);
+      if (!isControlled) {
+        setLocalRecapLoading(false);
+      }
     }
   };
 
@@ -239,7 +279,11 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
     const question = recapData?.challenge?.question || recapData?.question;
     if (!user || !question) return;
     
-    setChallengeSubmitting(true);
+    if (isControlled && setUI) {
+      setUI(s => ({ ...s, challengeSubmitting: true }));
+    } else {
+      setLocalChallengeSubmitting(true);
+    }
     try {
       const { data, error } = await supabase.functions.invoke('book_challenge_answer_v1', {
         body: {
@@ -257,13 +301,26 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
       if (error) throw error;
 
       if (data) {
-        setChallengeResult({
+        const result = {
           verdict: data.verdict,
           points: data.points_awarded || 0,
           feedback: data.feedback || '',
           answer: data.answer || '',
           explanation: data.explanation,
-        });
+        };
+        
+        if (isControlled && setUI) {
+          setUI(s => ({ 
+            ...s, 
+            challengeResult: result,
+            hasSubmittedChallenge: true, // IMPORTANT: prevent modal from closing
+            challengeSubmitting: false,
+            submittedAnswer: userChallengeAnswer,
+            frozenQuestion: question,
+          }));
+        } else {
+          setLocalChallengeResult(result);
+        }
 
         // Award XP + log event (even for 0 XP)
         const amount = Number(data.points_awarded) || 0;
@@ -291,6 +348,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
           console.error('[BookRecapModal] Error awarding XP:', xpError);
           setToast({ message: "Erreur lors de l'attribution des XP", type: 'error' });
         } else {
+          // Dispatch xp-updated event (but modal stays open in controlled mode)
           window.dispatchEvent(new CustomEvent('xp-updated', {
             detail: { xp_total: newXpTotal },
           }));
@@ -308,7 +366,11 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
         type: 'error',
       });
     } finally {
-      setChallengeSubmitting(false);
+      if (isControlled && setUI) {
+        setUI(s => ({ ...s, challengeSubmitting: false }));
+      } else {
+        setLocalChallengeSubmitting(false);
+      }
     }
   };
 
@@ -379,9 +441,14 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
                   key={tab}
                   type="button"
                   onClick={() => {
-                    setRecapTab(tab);
-                    setUserChallengeAnswer('');
-                    setChallengeResult(null);
+                    if (isControlled && setUI && onTabChange) {
+                      onTabChange(tab);
+                      setUI(s => ({ ...s, tab, userAnswerDraft: '', challengeResult: null }));
+                    } else {
+                      setLocalRecapTab(tab);
+                      setLocalUserChallengeAnswer('');
+                      setLocalChallengeResult(null);
+                    }
                   }}
                   disabled={recapLoading}
                   className={`flex-1 py-2 px-2 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
@@ -579,7 +646,13 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
                               </label>
                               <textarea
                                 value={userChallengeAnswer}
-                                onChange={(e) => setUserChallengeAnswer(e.target.value)}
+                                onChange={(e) => {
+                                  if (isControlled && setUI) {
+                                    setUI(s => ({ ...s, userAnswerDraft: e.target.value }));
+                                  } else {
+                                    setLocalUserChallengeAnswer(e.target.value);
+                                  }
+                                }}
                                 placeholder="Ta réponse (optionnel)"
                                 rows={2}
                                 className="w-full px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary outline-none resize-none text-sm text-text-main-light bg-white"
@@ -662,8 +735,12 @@ export function BookRecapModal({ open, onClose, book, uptoPage }: BookRecapModal
                             <button
                               type="button"
                               onClick={() => {
-                                setChallengeResult(null);
-                                setUserChallengeAnswer('');
+                                if (isControlled && setUI) {
+                                  setUI(s => ({ ...s, challengeResult: null, userAnswerDraft: '' }));
+                                } else {
+                                  setLocalChallengeResult(null);
+                                  setLocalUserChallengeAnswer('');
+                                }
                               }}
                               className="w-full py-2.5 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
                             >

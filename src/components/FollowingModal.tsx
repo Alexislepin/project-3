@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 import { LevelBadge } from '../components/LevelProgressBar';
 import { useScrollLock } from '../hooks/useScrollLock';
 
@@ -123,17 +124,21 @@ export function FollowingModal({ userId, onClose, onUserClick }: FollowingModalP
                   className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-stone-50 transition-colors text-left"
                 >
                   <div className="w-12 h-12 bg-stone-200 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {profile.avatar_url ? (
-                      <img
-                        src={profile.avatar_url}
-                        alt={profile.display_name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="text-lg font-bold text-stone-600">
-                        {profile.display_name.charAt(0).toUpperCase()}
-                      </span>
-                    )}
+                    {(() => {
+                      const avatarUrl = resolveAvatarUrl(profile.avatar_url || null, supabase);
+                      const bustedUrl = addCacheBuster(avatarUrl, profile.updated_at);
+                      return bustedUrl ? (
+                        <img
+                          src={bustedUrl}
+                          alt={profile.display_name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-lg font-bold text-stone-600">
+                          {profile.display_name.charAt(0).toUpperCase()}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   <div className="flex-1 min-w-0">

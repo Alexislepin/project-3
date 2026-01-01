@@ -64,6 +64,7 @@ export async function signInWithGoogle(options?: { forceAccount?: boolean }): Pr
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         },
       });

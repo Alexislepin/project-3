@@ -1,11 +1,10 @@
-import { useState, useRef } from 'react';
-import { X, Edit3, Camera, Image as ImageIcon } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Edit3, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from './Toast';
 import { useScrollLock } from '../hooks/useScrollLock';
-import { Camera as CapacitorCamera } from '@capacitor/camera';
-import { uploadImageToSupabase, generateBookCoverPath } from '../lib/storageUpload';
+import { pickImage, uploadImageToSupabase } from '../lib/imageUpload';
 
 interface EditBookModalProps {
   userBookId: string;
@@ -35,77 +34,55 @@ export function EditBookModal({
     initialTotalPages && initialTotalPages > 0 ? String(initialTotalPages) : '',
   );
   const [description, setDescription] = useState(initialDescription ?? '');
-  const [coverUrl, setCoverUrl] = useState(initialCoverUrl ?? '');
-  const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(initialCoverUrl ?? null);
+  const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
+  const [coverExt, setCoverExt] = useState<string>('jpg');
   const [uploadingCover, setUploadingCover] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSelectCover = async () => {
     if (!user) return;
 
-    try {
-      // Try Capacitor Camera first (iOS/Android)
-      if (typeof window !== 'undefined' && (window as any).Capacitor) {
-        try {
-          const result = await CapacitorCamera.pickImages({
-            quality: 85,
-            limit: 1,
-          });
-
-          if (result.photos && result.photos.length > 0) {
-            const photo = result.photos[0];
-            const response = await fetch(photo.webPath!);
-            const blob = await response.blob();
-            const file = new File([blob], `cover_${Date.now()}.jpg`, { type: 'image/jpeg' });
-            setCoverFile(file);
-            setCoverPreview(photo.webPath!);
-            setCoverUrl(''); // Clear URL if file selected
-          }
-          return;
-        } catch (error) {
-          console.log('[EditBookModal] Capacitor Camera not available, using file input:', error);
-        }
-      }
-
-      // Fallback: Web file input
-      fileInputRef.current?.click();
-    } catch (error) {
-      console.error('[EditBookModal] Error selecting cover:', error);
-      setError('Erreur lors de la sélection de la couverture');
+    setError(null);
+    
+    // Release previous blob URL if exists
+    if (coverPreview && coverPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(coverPreview);
     }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setError('Veuillez sélectionner une image');
-      return;
+    
+    const result = await pickImage();
+    
+    if (!result) {
+      return; // User cancelled
     }
 
-    setCoverFile(file);
-    setCoverPreview(URL.createObjectURL(file));
-    setCoverUrl(''); // Clear URL if file selected
-
-    // Reset input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    const { blob, ext } = result;
+    setCoverBlob(blob);
+    setCoverExt(ext);
+    
+    // Create preview URL from blob
+    const previewUrl = URL.createObjectURL(blob);
+    setCoverPreview(previewUrl);
   };
 
   const removeCover = () => {
     if (coverPreview && coverPreview.startsWith('blob:')) {
       URL.revokeObjectURL(coverPreview);
     }
-    setCoverFile(null);
+    setCoverBlob(null);
     setCoverPreview(null);
-    setCoverUrl('');
   };
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (coverPreview && coverPreview.startsWith('blob:')) {
+        URL.revokeObjectURL(coverPreview);
+      }
+    };
+  }, [coverPreview]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,41 +119,34 @@ export function EditBookModal({
 
       const bookId = userBookData.book_id;
 
-      // Upload cover if file selected
-      let coverUrlValue = coverUrl.trim() || null;
-      let customCoverPath = null;
+      // Upload cover if blob selected
+      let coverUrlValue: string | null = null;
 
-      if (coverFile) {
+      if (coverBlob) {
+        setUploadingCover(true);
         try {
-          const path = generateBookCoverPath(user.id, bookId);
-          await uploadImageToSupabase(supabase, coverFile, {
+          const ext = coverExt === 'jpg' ? 'png' : coverExt;
+          const path = `${user.id}/${bookId}/cover.${ext}`;
+          const { path: uploadedPath } = await uploadImageToSupabase(supabase, {
             bucket: 'book-covers',
             path,
-            compress: true,
-            maxWidth: 800,
-            maxHeight: 1200,
-            quality: 0.85,
+            blob: coverBlob,
+            mime: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
           });
-
-          // Generate public URL from the path
-          const { data: { publicUrl } } = supabase.storage
-            .from('book-covers')
-            .getPublicUrl(path);
-
-          if (!publicUrl) {
-            throw new Error('Failed to get public URL');
-          }
-
-          customCoverPath = path;
-          coverUrlValue = publicUrl;
-        } catch (uploadError) {
+          // Store the path (more robust than URL)
+          coverUrlValue = uploadedPath;
+          setUploadingCover(false);
+        } catch (uploadError: any) {
           console.error('[EditBookModal] Error uploading cover:', uploadError);
-          setError('Erreur lors de l\'upload de la couverture. Les autres modifications seront sauvegardées.');
-          // Continue without cover
+          setUploadingCover(false);
+          setToast({ message: "Impossible d'importer l'image, réessaie.", type: 'error' });
+          setSaving(false);
+          return;
         }
+      } else {
+        // If no new cover selected, keep existing cover URL
+        coverUrlValue = initialCoverUrl || null;
       }
-
-      setUploadingCover(false);
 
       // Prepare payload
       const payload: any = {
@@ -187,36 +157,14 @@ export function EditBookModal({
         custom_cover_url: coverUrlValue,
       };
 
-      // Add custom_cover_path if cover was uploaded
-      if (customCoverPath) {
-        payload.custom_cover_path = customCoverPath;
-      }
-
-      console.log('[EditBookModal] Saving custom fields:', {
-        userBookId,
-        userId: user.id,
-        payload,
-      });
-
-      const { data, error: updateError } = await supabase
+      const { error: updateError } = await supabase
         .from('user_books')
         .update(payload)
         .eq('id', userBookId)
-        .eq('user_id', user.id) // Extra safety: ensure user owns this user_book
-        .select()
-        .single();
-
-      console.log('[EditBookModal] Update result:', {
-        data,
-        error: updateError,
-        errorCode: (updateError as any)?.code,
-        errorMessage: updateError?.message,
-        errorDetails: (updateError as any)?.details,
-        errorHint: (updateError as any)?.hint,
-      });
+        .eq('user_id', user.id);
 
       if (updateError) {
-        console.error('[EditBookModal] Error updating user_books custom fields:', updateError);
+        console.error('[EditBookModal] Error updating user_books:', updateError);
         const errorMessage = updateError.message || "Une erreur est survenue lors de l'enregistrement";
         setError(errorMessage);
         setToast({ message: errorMessage, type: 'error' });
@@ -224,7 +172,6 @@ export function EditBookModal({
         return;
       }
 
-      console.log('[EditBookModal] Successfully updated user_books');
       setToast({ message: 'Livre modifié avec succès', type: 'success' });
       
       // Call onSaved callback to refresh UI
@@ -355,15 +302,6 @@ export function EditBookModal({
               Couverture personnalisée
             </label>
             
-            {/* Hidden file input for web fallback */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-
             {coverPreview ? (
               <div className="relative">
                 <div className="relative w-full aspect-[2/3] rounded-xl overflow-hidden border-2 border-gray-200">
@@ -400,7 +338,7 @@ export function EditBookModal({
                   onClick={handleSelectCover}
                   className="mt-2 w-full py-2 px-4 bg-primary/10 hover:bg-primary/20 text-black rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
                 >
-                  <Camera className="w-4 h-4" />
+                  <ImageIcon className="w-4 h-4" />
                   Changer la couverture
                 </button>
               </div>
@@ -412,21 +350,7 @@ export function EditBookModal({
               >
                 <ImageIcon className="w-10 h-10 mb-2" />
                 <span className="text-sm font-medium">Ajouter une couverture</span>
-                <span className="text-xs mt-1">Caméra ou galerie</span>
               </button>
-            )}
-
-            {/* Fallback: URL input (optional, for backward compatibility) */}
-            {!coverPreview && !initialCoverUrl && (
-              <div className="mt-2">
-                <input
-                  type="url"
-                  value={coverUrl}
-                  onChange={(e) => setCoverUrl(e.target.value)}
-                  placeholder="Ou coller une URL d'image (optionnel)"
-                  className="w-full px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                />
-              </div>
             )}
           </div>
 

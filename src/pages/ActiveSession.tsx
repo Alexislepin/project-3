@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Flame, Clock, Pause, Play, X, Plus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SessionSummary } from './SessionSummary';
 import { BookCover } from '../components/BookCover';
 import { AppHeader } from '../components/AppHeader';
-import { updateStreakAfterActivity } from '../utils/streak';
 import { Toast } from '../components/Toast';
 import { BookRecapModal } from '../components/BookRecapModal';
+import { RecapUIState, DEFAULT_RECAP_UI } from '../lib/recapUI';
 
 
 type NoteTag = 'citation' | 'idee' | 'question' | null;
@@ -22,14 +22,26 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const [userBooks, setUserBooks] = useState<any[]>([]);
   const [showBookSelect, setShowBookSelect] = useState(true);
   const [showSummary, setShowSummary] = useState(false);
-  const [seconds, setSeconds] = useState(0);
+  const [tickNow, setTickNow] = useState(Date.now());
   const [isRunning, setIsRunning] = useState(false);
   const [startPage, setStartPage] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState('');
   const [saving, setSaving] = useState(false);
   const [currentStreak, setCurrentStreak] = useState(0);
-  const [showRecapModal, setShowRecapModal] = useState(false);
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [pausedTotalSeconds, setPausedTotalSeconds] = useState(0);
+  const [lastPauseAt, setLastPauseAt] = useState<string | null>(null);
+  
+  // BookRecapModal states (same pattern as Library)
+  const [recapOpen, setRecapOpen] = useState(false);
+  const [recapBook, setRecapBook] = useState<{
+    book: { id: string; title: string; author?: string; cover_url?: string | null; total_pages?: number | null; book_key?: string | null; isbn?: string | null; openlibrary_key?: string | null; google_books_id?: string | null };
+    uptoPage: number;
+  } | null>(null);
+  const [recapUI, setRecapUI] = useState<RecapUIState>(DEFAULT_RECAP_UI);
+  const [recapTabTouched, setRecapTabTouched] = useState(false);
+  const recapReqRef = useRef<string | null>(null);
   const [notePage, setNotePage] = useState<string>('');
   const [noteText, setNoteText] = useState('');
   const [noteTag, setNoteTag] = useState<NoteTag>(null);
@@ -41,17 +53,23 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   useEffect(() => {
     loadUserBooks();
     loadUserStreak();
+    loadActiveSession();
   }, []);
 
+  // Tick for rerender (not source of truth)
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isRunning) {
-      interval = setInterval(() => {
-        setSeconds((s) => s + 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isRunning]);
+    if (!activityId || !startedAt) return;
+    const t = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [activityId, startedAt]);
+
+  // Calculate displaySeconds (source of truth for display)
+  const displaySeconds = (() => {
+    if (!startedAt) return 0;
+    const base = Math.floor((tickNow - new Date(startedAt).getTime()) / 1000);
+    const pauseLive = lastPauseAt ? Math.floor((tickNow - new Date(lastPauseAt).getTime()) / 1000) : 0;
+    return Math.max(0, base - pausedTotalSeconds - pauseLive);
+  })();
 
   const loadUserBooks = async () => {
     if (!user) return;
@@ -65,6 +83,11 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         book_id,
         created_at,
         updated_at,
+        custom_title,
+        custom_author,
+        custom_total_pages,
+        custom_cover_url,
+        custom_description,
         book:books (
           id,
           title,
@@ -74,7 +97,8 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
           description,
           isbn,
           google_books_id,
-          edition
+          edition,
+          openlibrary_cover_id
         )
       `)
       .eq('user_id', user.id)
@@ -114,45 +138,182 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
     }
   };
 
-  const startSession = () => {
-    if (selectedBook) {
-      // Store starting page when session begins
-      setStartPage(selectedBook.current_page || 0);
+  const loadActiveSession = async () => {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from('activities')
+      .select('id, book_id, started_at, paused_total_seconds, last_pause_at')
+      .eq('user_id', user.id)
+      .eq('type', 'reading')
+      .eq('visibility', 'private')
+      .is('ended_at', null)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[loadActiveSession] Error:', error);
+      return;
+    }
+
+    if (data) {
+      setActivityId(data.id);
+      setStartedAt(data.started_at);
+      setPausedTotalSeconds(data.paused_total_seconds || 0);
+      setLastPauseAt(data.last_pause_at);
+      setIsRunning(data.last_pause_at === null);
       setShowBookSelect(false);
+
+      // Load selectedBook from user_books
+      const { data: userBookData } = await supabase
+        .from('user_books')
+        .select(`
+          id,
+          status,
+          current_page,
+          book_id,
+          created_at,
+          updated_at,
+          custom_title,
+          custom_author,
+          custom_total_pages,
+          custom_cover_url,
+          custom_description,
+          book:books (
+            id,
+            title,
+            author,
+            cover_url,
+            total_pages,
+            description,
+            isbn,
+            google_books_id,
+            edition,
+            openlibrary_cover_id
+          )
+        `)
+        .eq('user_id', user.id)
+        .eq('book_id', data.book_id)
+        .eq('status', 'reading')
+        .maybeSingle();
+
+      if (userBookData) {
+        setSelectedBook(userBookData);
+        setStartPage(userBookData.current_page || 0);
+      }
+    }
+  };
+
+  const startSession = async () => {
+    if (!user || !selectedBook) return;
+
+    const now = new Date().toISOString();
+    const activityData: any = {
+      user_id: user.id,
+      type: 'reading',
+      visibility: 'private',
+      book_id: selectedBook.book_id,
+      title: selectedBook.book ? `Read ${selectedBook.book.title}` : 'Reading session',
+      started_at: now,
+      ended_at: null,
+      paused_total_seconds: 0,
+      last_pause_at: null,
+    };
+
+    const { data: activityResult, error: activityError } = await supabase
+      .from('activities')
+      .insert(activityData)
+      .select('id, started_at, paused_total_seconds, last_pause_at')
+      .single();
+
+    if (activityError || !activityResult) {
+      console.error('[startSession] Failed to insert activity:', activityError);
+      return;
+    }
+
+    setActivityId(activityResult.id);
+    setStartedAt(activityResult.started_at);
+    setPausedTotalSeconds(activityResult.paused_total_seconds || 0);
+    setLastPauseAt(activityResult.last_pause_at);
+    setStartPage(selectedBook.current_page || 0);
+    setShowBookSelect(false);
+    setIsRunning(true);
+  };
+
+  const togglePause = async () => {
+    if (!user || !activityId) return;
+
+    const now = new Date().toISOString();
+
+    if (isRunning) {
+      // Pause
+      const { error } = await supabase
+        .from('activities')
+        .update({ last_pause_at: now })
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('[togglePause] Failed to pause:', error);
+        return;
+      }
+
+      setLastPauseAt(now);
+      setIsRunning(false);
+    } else {
+      // Resume
+      if (!lastPauseAt) return;
+
+      const pauseSeconds = Math.floor((Date.now() - new Date(lastPauseAt).getTime()) / 1000);
+      const newPausedTotal = pausedTotalSeconds + pauseSeconds;
+
+      const { error } = await supabase
+        .from('activities')
+        .update({
+          paused_total_seconds: newPausedTotal,
+          last_pause_at: null,
+        })
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('[togglePause] Failed to resume:', error);
+        return;
+      }
+
+      setPausedTotalSeconds(newPausedTotal);
+      setLastPauseAt(null);
       setIsRunning(true);
     }
   };
 
-  const togglePause = () => {
-    setIsRunning(!isRunning);
-  };
-
   const handleFinish = async () => {
-    if (!user || !selectedBook || startPage === null) return;
+    if (!user || !selectedBook || startPage === null || !activityId) return;
 
     setSaving(true);
 
     const endPage = parseInt(currentPage) || startPage;
     const pagesRead = Math.max(0, endPage - startPage);
-    const durationMinutes = Math.max(1, Math.floor(seconds / 60));
+    const durationMinutes = Math.max(1, Math.floor(displaySeconds / 60));
 
     // Check if book is completed
     const totalPages = selectedBook.book?.total_pages;
     const isCompleted = totalPages && endPage >= totalPages;
 
     // Update user_books current_page and status if completed
-    const updateData: any = {
+    const userBookUpdateData: any = {
       current_page: endPage,
       updated_at: new Date().toISOString(),
     };
     if (isCompleted) {
-      updateData.status = 'completed';
-      updateData.completed_at = new Date().toISOString();
+      userBookUpdateData.status = 'completed';
+      userBookUpdateData.completed_at = new Date().toISOString();
     }
 
     await supabase
       .from('user_books')
-      .update(updateData)
+      .update(userBookUpdateData)
       .eq('user_id', user.id)
       .eq('book_id', selectedBook.book_id);
 
@@ -181,37 +342,51 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
     const { pagesPerHour, minPerPage } = calcReadingPace(pagesRead, durationMinutes);
     const wpm = calcWPM(pagesRead, durationMinutes, 250); // ou une value user/profile
 
-    // Insert activity as DRAFT (visibility='private') - will be updated in SessionSummary
-    const activityData: any = {
-      user_id: user.id,
-      type: 'reading',
-      title: selectedBook.book ? `Read ${selectedBook.book.title}` : 'Reading session',
-      book_id: selectedBook.book_id,
+    // Update the existing activity row
+    const now = new Date().toISOString();
+    const updateData: any = {
+      ended_at: now,
       pages_read: pagesRead,
       duration_minutes: durationMinutes,
       reading_speed_pph: pagesPerHour,
       reading_pace_min_per_page: minPerPage,
       reading_speed_wpm: wpm,
-      visibility: 'private', // DRAFT - will be updated in SessionSummary
+      title: selectedBook.book ? `Read ${selectedBook.book.title}` : 'Reading session',
     };
 
-    const { data: activityResult, error: activityError } = await supabase
-      .from('activities')
-      .insert(activityData)
-      .select('id')
-      .single();
+    // If still paused, add the current pause time
+    if (lastPauseAt) {
+      const pauseSeconds = Math.floor((Date.now() - new Date(lastPauseAt).getTime()) / 1000);
+      updateData.paused_total_seconds = pausedTotalSeconds + pauseSeconds;
+      updateData.last_pause_at = null;
+    }
 
-    if (activityError || !activityResult) {
-      console.error('[handleFinish] Failed to insert activity:', activityError);
+    const { error: activityError } = await supabase
+      .from('activities')
+      .update(updateData)
+      .eq('id', activityId)
+      .eq('user_id', user.id);
+
+    if (activityError) {
+      console.error('[handleFinish] Failed to update activity:', activityError);
       setSaving(false);
-      // Don't show summary if insert failed
+      // Don't show summary if update failed
       return;
     }
 
     setSaving(false);
-    // Store activityId to pass to SessionSummary
-    setActivityId(activityResult.id);
     setShowSummary(true);
+  };
+
+  // Helper to get display fields (same as Library)
+  const getDisplayFields = (userBook: any) => {
+    const book = userBook.book;
+    return {
+      displayTitle: userBook.custom_title ?? book?.title ?? 'Titre inconnu',
+      displayAuthor: userBook.custom_author ?? book?.author ?? 'Auteur inconnu',
+      displayPages: userBook.custom_total_pages ?? book?.total_pages ?? null,
+      displayCover: userBook.custom_cover_url ?? book?.cover_url ?? null,
+    };
   };
 
   const formatTime = (totalSeconds: number) => {
@@ -221,8 +396,175 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   };
 
   const handleRecapClick = () => {
-    setShowRecapModal(true);
+    if (!selectedBook?.book) return;
+    
+    const { displayTitle, displayAuthor, displayPages, displayCover } = getDisplayFields(selectedBook);
+    const book = selectedBook.book;
+    
+    setRecapBook({
+      book: {
+        id: selectedBook.book_id,
+        title: displayTitle,
+        author: displayAuthor,
+        cover_url: displayCover,
+        total_pages: displayPages,
+        isbn: book.isbn || null,
+        book_key: (book as any).book_key || (book as any).openlibrary_work_key || null,
+        openlibrary_key: (book as any).openlibrary_work_key || null,
+        google_books_id: book.google_books_id || null,
+      },
+      uptoPage: selectedBook.current_page || 0,
+    });
+    setRecapOpen(true);
   };
+  
+  // Load recap function (same pattern as Library)
+  const loadRecap = useCallback(async (force = false) => {
+    if (!user || !recapBook) return;
+    
+    const isValidBook = Boolean(recapBook.book?.id && recapBook.book.id !== 'noop' && recapBook.book.title);
+    if (!isValidBook) {
+      console.log('[ActiveSession] loadRecap blocked: invalid book');
+      return;
+    }
+    
+    // Block if challenge is submitting or already submitted
+    if (recapUI.challengeSubmitting || recapUI.hasSubmittedChallenge) {
+      console.log('[ActiveSession] loadRecap blocked', { 
+        challengeSubmitting: recapUI.challengeSubmitting,
+        hasSubmittedChallenge: recapUI.hasSubmittedChallenge
+      });
+      return;
+    }
+    
+    // Guard against stale requests
+    const reqId = `${Date.now()}-${Math.random()}`;
+    recapReqRef.current = reqId;
+    
+    console.log('[ActiveSession] loadRecap called', { force, bookId: recapBook.book.id, uptoPage: recapBook.uptoPage });
+    
+    setRecapUI(s => ({ ...s, recapLoading: true, recapError: null }));
+    
+    try {
+      const payload: any = {
+        bookId: recapBook.book.id,
+        uptoPage: recapBook.uptoPage,
+        current_page: recapBook.uptoPage,
+        language: 'fr',
+        force,
+      };
+      
+      if (recapBook.book.book_key) {
+        payload.book_key = recapBook.book.book_key;
+      } else if (recapBook.book.openlibrary_key) {
+        payload.book_key = recapBook.book.openlibrary_key;
+      }
+      
+      if (recapBook.book.isbn) {
+        payload.isbn = recapBook.book.isbn;
+      }
+      
+      const { data, error } = await supabase.functions.invoke('book_recap_v2', {
+        body: payload,
+      });
+      
+      if (reqId !== recapReqRef.current) {
+        console.log('[ActiveSession] loadRecap stale response ignored');
+        return;
+      }
+      
+      if (error) {
+        const requestId = data?.requestId || data?.meta?.requestId || 'unknown';
+        setRecapUI(s => ({ 
+          ...s, 
+          recapLoading: false,
+          recapError: { message: error.message || 'Erreur serveur', requestId }
+        }));
+        return;
+      }
+      
+      if (data && data.ok === false && data.status !== 'no_data') {
+        const requestId = data.requestId || data.meta?.requestId || 'unknown';
+        setRecapUI(s => ({ 
+          ...s, 
+          recapLoading: false,
+          recapError: { message: data.error || 'Impossible de charger le rappel', requestId }
+        }));
+        return;
+      }
+      
+      if (data && data.status === 'no_data') {
+        setRecapUI(s => ({ 
+          ...s, 
+          recapLoading: false,
+          recapData: null,
+          recapError: null
+        }));
+        return;
+      }
+      
+      if (data && data.ultra_20s) {
+        const recapData = {
+          summary: data.summary || '',
+          ultra_20s: data.ultra_20s,
+          takeaways: data.takeaways || '',
+          question: data.question,
+          answer: data.answer,
+          explanation: data.explanation,
+          key_takeaways: data.key_takeaways,
+          key_moments: data.key_moments,
+          challenge: data.challenge,
+          chapters: data.chapters,
+          detailed: data.detailed,
+          characters: data.characters || [],
+          uptoPage: data.uptoPage || data.meta?.uptoPage || recapBook.uptoPage,
+          meta: data.meta,
+        };
+        
+        setRecapUI(s => ({ 
+          ...s,
+          recapData,
+          recapLoading: false,
+          recapError: null,
+          tab: 'personnages',
+          userAnswerDraft: '',
+        }));
+      } else {
+        setRecapUI(s => ({ 
+          ...s, 
+          recapLoading: false,
+          recapError: { message: 'Réponse invalide du serveur', requestId: data?.meta?.requestId || 'unknown' }
+        }));
+      }
+    } catch (err: any) {
+      if (reqId !== recapReqRef.current) return;
+      console.error('[ActiveSession] loadRecap error:', err);
+      setRecapUI(s => ({ 
+        ...s, 
+        recapLoading: false,
+        recapError: { message: err.message || 'Erreur inattendue', requestId: 'unknown' }
+      }));
+    }
+  }, [user, recapBook, recapUI.challengeSubmitting, recapUI.hasSubmittedChallenge]);
+  
+  // Auto-load recap when modal opens
+  useEffect(() => {
+    if (recapOpen && recapBook && !recapTabTouched) {
+      loadRecap(false);
+    }
+  }, [recapOpen, recapBook, recapTabTouched, loadRecap]);
+  
+  // Set modalOpen flag to prevent navigation on xp-updated
+  useEffect(() => {
+    if (recapOpen) {
+      document.body.dataset.modalOpen = '1';
+    } else {
+      document.body.dataset.modalOpen = '0';
+    }
+    return () => {
+      document.body.dataset.modalOpen = '0';
+    };
+  }, [recapOpen]);
 
   const handleAddNote = async () => {
     if (!user || !selectedBook || !noteText.trim()) return;
@@ -290,23 +632,28 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   // Render modals and toast in a wrapper that's always visible
   const renderModalsAndToast = () => (
     <>
-      {/* Modal de rappel v2 */}
-      {showRecapModal && selectedBook?.book && (
+      {/* Modal de rappel v2 (controlled mode, same as Library) */}
+      {recapOpen && recapBook && (
         <BookRecapModal
-          open={showRecapModal}
-          onClose={() => setShowRecapModal(false)}
-          book={{
-            id: selectedBook.book_id,
-            title: selectedBook.book.title,
-            author: selectedBook.book.author,
-            cover_url: selectedBook.book.cover_url,
-            total_pages: selectedBook.book.total_pages,
-            isbn: selectedBook.book.isbn || null,
-            book_key: (selectedBook.book as any).book_key || (selectedBook.book as any).openlibrary_work_key || null,
-            openlibrary_key: (selectedBook.book as any).openlibrary_work_key || null,
-            google_books_id: selectedBook.book.google_books_id || null,
+          open={recapOpen}
+          onClose={() => {
+            setRecapOpen(false);
+            // Reset UI state only if challenge hasn't been submitted
+            if (!recapUI.hasSubmittedChallenge) {
+              setRecapUI(DEFAULT_RECAP_UI);
+              setRecapTabTouched(false);
+            }
+            setRecapBook(null);
           }}
-          uptoPage={selectedBook.current_page || 0}
+          book={recapBook.book}
+          uptoPage={recapBook.uptoPage}
+          ui={recapUI}
+          setUI={setRecapUI}
+          onTabChange={(tab) => {
+            setRecapTabTouched(true);
+            setRecapUI(s => ({ ...s, tab }));
+          }}
+          loadRecap={loadRecap}
         />
       )}
       
@@ -425,7 +772,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   if (showSummary && selectedBook && selectedBook.book && startPage !== null) {
     const endPage = parseInt(currentPage) || startPage;
     const pagesRead = Math.max(0, endPage - startPage);
-    const durationMinutes = Math.max(1, Math.floor(seconds / 60)); // ✅ Fix: prevent division by 0
+    const durationMinutes = Math.max(1, Math.floor(displaySeconds / 60)); // ✅ Fix: prevent division by 0
     
     const calcReadingPace = (pagesRead: number, durationMinutes: number) => {
       const mins = Math.max(1, durationMinutes);
@@ -441,13 +788,16 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
     };
     
     const { pagesPerHour, minPerPage } = calcReadingPace(pagesRead, durationMinutes);
+    const { displayTitle, displayAuthor, displayCover } = getDisplayFields(selectedBook);
+    
     return (
       <>
         {activityId && (
           <SessionSummary
-            bookTitle={selectedBook.book.title}
-            bookAuthor={selectedBook.book.author}
+            bookTitle={displayTitle}
+            bookAuthor={displayAuthor}
             bookId={selectedBook.book_id}
+            coverUrl={displayCover}
             pagesRead={pagesRead}
             durationMinutes={durationMinutes}
             currentPage={endPage}
@@ -506,6 +856,8 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                     console.warn('UserBook without book data:', ub);
                     return null;
                   }
+                  const { displayTitle, displayAuthor, displayCover } = getDisplayFields(ub);
+                  const book = ub.book;
                   return (
                     <button
                       key={ub.book_id}
@@ -517,15 +869,23 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                       }`}
                     >
                       <BookCover
-                        coverUrl={ub.book.cover_url}
-                        title={ub.book.title}
-                        author={ub.book.author || 'Auteur inconnu'}
+                        custom_cover_url={ub.custom_cover_url || null}
+                        coverUrl={displayCover}
+                        title={displayTitle}
+                        author={displayAuthor}
+                        isbn={(book as any)?.isbn || null}
+                        isbn13={(book as any)?.isbn13 || null}
+                        isbn10={(book as any)?.isbn10 || null}
+                        cover_i={(book as any)?.openlibrary_cover_id || null}
+                        openlibrary_cover_id={(book as any)?.openlibrary_cover_id || null}
+                        googleCoverUrl={(book as any)?.google_books_id ? `https://books.google.com/books/content?id=${(book as any).google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                         className="w-12 h-16 rounded-lg flex-shrink-0"
+                        bookId={book?.id}
                       />
                       <div className="flex-1 text-left">
-                        <h4 className="font-bold text-base">{ub.book.title}</h4>
+                        <h4 className="font-bold text-base">{displayTitle}</h4>
                         <p className={`text-sm ${selectedBook?.book_id === ub.book_id ? 'text-black/70' : 'text-text-sub-light'}`}>
-                          {ub.book.author}
+                          {displayAuthor}
                         </p>
                       </div>
                     </button>
@@ -610,24 +970,36 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         <div className="flex flex-col items-center justify-center min-h-full py-6">
           <div className="w-full mb-10">
             <div className="flex items-center gap-4 bg-card-light p-3 pr-6 rounded-full shadow-sm border border-gray-200">
-              {selectedBook?.book && (
-                <>
-                  <BookCover
-                    coverUrl={selectedBook.book.cover_url}
-                    title={selectedBook.book.title}
-                    author={selectedBook.book.author || 'Auteur inconnu'}
-                    className="size-12 rounded-full shrink-0"
-                  />
-                  <div className="flex flex-col justify-center flex-1 min-w-0">
-                    <p className="text-base font-bold leading-none truncate mb-1">
-                      {selectedBook.book.title}
-                    </p>
-                    <p className="text-text-sub-light text-xs font-medium truncate">
-                      Page {selectedBook?.current_page || 0} {selectedBook.book.total_pages ? `of ${selectedBook.book.total_pages}` : ''}
-                    </p>
-                  </div>
-                </>
-              )}
+              {selectedBook?.book && (() => {
+                const { displayTitle, displayAuthor, displayPages, displayCover } = getDisplayFields(selectedBook);
+                const book = selectedBook.book;
+                return (
+                  <>
+                    <BookCover
+                      custom_cover_url={selectedBook.custom_cover_url || null}
+                      coverUrl={displayCover}
+                      title={displayTitle}
+                      author={displayAuthor}
+                      isbn={(book as any)?.isbn || null}
+                      isbn13={(book as any)?.isbn13 || null}
+                      isbn10={(book as any)?.isbn10 || null}
+                      cover_i={(book as any)?.openlibrary_cover_id || null}
+                      openlibrary_cover_id={(book as any)?.openlibrary_cover_id || null}
+                      googleCoverUrl={(book as any)?.google_books_id ? `https://books.google.com/books/content?id=${(book as any).google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
+                      className="size-12 rounded-full shrink-0"
+                      bookId={book?.id}
+                    />
+                    <div className="flex flex-col justify-center flex-1 min-w-0">
+                      <p className="text-base font-bold leading-none truncate mb-1">
+                        {displayTitle}
+                      </p>
+                      <p className="text-text-sub-light text-xs font-medium truncate">
+                        Page {selectedBook?.current_page || 0} {displayPages ? `of ${displayPages}` : ''}
+                      </p>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             {/* Boutons "Voir le rappel" et "+ Note" dans le header de la session active */}
             {selectedBook?.book && (
@@ -653,7 +1025,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
           <div className="flex flex-col items-center justify-center mb-12 w-full">
             <div className="text-[5rem] leading-none font-bold tabular-nums tracking-tighter text-text-main-light">
-              {formatTime(seconds)}
+              {formatTime(displaySeconds)}
             </div>
             <p className="text-text-sub-light text-base font-medium mt-2">Session active</p>
           </div>
@@ -666,7 +1038,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             </div>
             <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-card-light">
               <Clock className="w-5 h-5 text-text-sub-light mb-1" />
-              <p className="text-2xl font-bold">{Math.floor(seconds / 60)}m</p>
+              <p className="text-2xl font-bold">{Math.floor(displaySeconds / 60)}m</p>
               <p className="text-xs font-medium text-text-sub-light uppercase tracking-wide">Durée</p>
             </div>
           </div>

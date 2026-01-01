@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Camera } from "lucide-react";
 import { BookQuickActions } from "./BookQuickActions";
+import { supabase } from "../lib/supabase";
+import { addCacheBuster } from "../lib/resolveImageUrl";
 
 // Cache mémoire global pour les covers (évite de retenter les URLs qui ont échoué)
 const coverCache = new Map<string, { ok: boolean; ts: number }>();
@@ -19,6 +21,8 @@ type BookCoverProps = {
   author?: string;
   coverUrl?: string | null; // Initial cover URL (can be from any source)
   custom_cover_url?: string | null; // User-specific custom cover (highest priority)
+  customCoverUrl?: string | null; // Alias for custom_cover_url (for compatibility)
+  cacheKey?: string; // Cache-busting key (e.g., updated_at timestamp)
   isbn?: string | null;
   isbn13?: string | null;
   isbn10?: string | null;
@@ -52,6 +56,8 @@ export function BookCover({
   author,
   coverUrl,
   custom_cover_url,
+  customCoverUrl,
+  cacheKey,
   openlibrary_cover_id,
   className = "",
   likes = 0,
@@ -72,6 +78,37 @@ export function BookCover({
   bookId,
   showAddCoverButton = false,
 }: BookCoverProps) {
+  // Get custom cover URL (support both prop names)
+  const customCover = custom_cover_url ?? customCoverUrl ?? null;
+  
+  /**
+   * Resolve cover URL: converts storage path to public URL if needed
+   * Rejects local URIs (file://, capacitor://) and returns null
+   */
+  const resolveCoverUrl = (input: string | null): string | null => {
+    if (!input) return null;
+    
+    // Reject local URIs - these should never be stored in DB
+    if (input.startsWith('file://') || input.startsWith('capacitor://')) {
+      console.warn('[BookCover] Rejected local URI:', input);
+      return null;
+    }
+    
+    // If it's already an HTTP(S) URL, use it directly
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+      return input;
+    }
+    
+    // Otherwise, treat it as a storage path and resolve to public URL
+    const { data } = supabase.storage.from('book-covers').getPublicUrl(input);
+    return data?.publicUrl || null;
+  };
+  
+  // Resolve custom cover (path -> URL if needed)
+  const resolvedCustomCover = resolveCoverUrl(customCover);
+  
+  // Add cache-buster
+  const bustedCustomCover = addCacheBuster(resolvedCustomCover, cacheKey);
   // Refs pour éviter les reloads inutiles et le "despawn"
   const resolvedSrcRef = useRef<string | null>(null);
   const lastIdentityRef = useRef<string>('');
@@ -82,9 +119,10 @@ export function BookCover({
   const [imgSrc, setImgSrc] = useState<string>('/placeholder-cover.svg');
   
   // Construire une identity stable (UNIQUEMENT sur ce qui change vraiment l'image)
+  // Include cacheKey so cache-buster changes trigger reload
   const identity = useMemo(() => {
     return [
-      custom_cover_url || '',
+      bustedCustomCover || '',
       coverUrl || '',
       isbn13 || '',
       isbn10 || '',
@@ -92,8 +130,9 @@ export function BookCover({
       cover_i ? String(cover_i) : '',
       openlibrary_cover_id ? String(openlibrary_cover_id) : '',
       googleCoverUrl || '',
+      cacheKey || '',
     ].join('|');
-  }, [custom_cover_url, coverUrl, isbn13, isbn10, isbn, cover_i, openlibrary_cover_id, googleCoverUrl]);
+  }, [bustedCustomCover, coverUrl, isbn13, isbn10, isbn, cover_i, openlibrary_cover_id, googleCoverUrl, cacheKey]);
 
   // Helper: vérifier si une URL contient archive.org (interdit)
   const isArchiveOrgUrl = (url: string): boolean => {
@@ -105,15 +144,13 @@ export function BookCover({
     const sourcesList: CoverSource[] = [];
 
     // Priority 1: Custom cover URL (user-specific manual cover) - HIGHEST PRIORITY
-    if (custom_cover_url && custom_cover_url.trim().length > 0 && !isArchiveOrgUrl(custom_cover_url)) {
-      const url = custom_cover_url.trim();
-      const cached = coverCache.get(url);
-      const now = Date.now();
-      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-        sourcesList.push({ type: 'initial', url }); // Use 'initial' type for custom covers
-      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-        log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
-      }
+    // If custom cover exists, use it DIRECTLY and DO NOT attempt OpenLibrary/Google fallbacks
+    if (bustedCustomCover && bustedCustomCover.trim().length > 0 && !isArchiveOrgUrl(bustedCustomCover)) {
+      const url = bustedCustomCover.trim();
+      // For custom covers, skip cache check (always use the URL directly)
+      sourcesList.push({ type: 'initial', url });
+      // Return early - don't add any fallback sources
+      return sourcesList;
     }
 
     // Priority 2: Cover URL from books table
@@ -179,6 +216,22 @@ export function BookCover({
   // Main effect: charger l'image uniquement si identity change
   useEffect(() => {
     const reqId = ++reqIdRef.current;
+
+    // If we have a custom cover, use it directly without fallback logic
+    if (bustedCustomCover && bustedCustomCover.trim().length > 0 && !isArchiveOrgUrl(bustedCustomCover)) {
+      const customUrl = bustedCustomCover.trim();
+      
+      // For custom covers, set directly without cache or fallback
+      if (lastIdentityRef.current !== identity) {
+        lastIdentityRef.current = identity;
+        resolvedSrcRef.current = null;
+      }
+      
+      // Set the custom cover URL directly
+      resolvedSrcRef.current = customUrl;
+      setImgSrc(customUrl);
+      return;
+    }
 
     // Si identity n'a pas changé et qu'on a déjà une image résolue, ne rien faire
     if (lastIdentityRef.current === identity && resolvedSrcRef.current) {
@@ -317,7 +370,7 @@ export function BookCover({
         timeoutIdRef.current = null;
       }
     };
-  }, [identity]); // <- dépendance MINIMALE
+  }, [identity, bustedCustomCover]); // <- dépendance MINIMALE
 
   const isPlaceholder = imgSrc === '/placeholder-cover.svg' && !resolvedSrcRef.current;
 

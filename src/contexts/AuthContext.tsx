@@ -7,6 +7,7 @@ import { mapAuthError, FriendlyAuthError } from '../lib/authErrors';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { handleOAuthCallback } from '../lib/oauth';
+import { registerPush } from '../lib/push';
 
 // Safe timer management to prevent double-invoke issues with React StrictMode
 const endedTimers = new Set<string>();
@@ -38,6 +39,7 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   profileLoading: boolean;
+  profileResolved: boolean;
   loading: boolean;
   signUp: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
@@ -54,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -109,7 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       safeTimeEnd('AUTH_INIT');
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       
       console.log(`[AUTH] Auth state changed: ${event}`, {
@@ -133,7 +136,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (event === 'SIGNED_OUT') {
         console.log('[AUTH] SIGNED_OUT: User signed out');
       } else if (event === 'TOKEN_REFRESHED') {
-        console.log('[AUTH] TOKEN_REFRESHED: Access token refreshed');
+        console.log('[AUTH] TOKEN_REFRESHED: Access token refreshed successfully');
+      }
+      
+      // Intercepter les erreurs de refresh token
+      // Si on a une session null inattendue (pas un SIGNED_OUT explicite) ou une erreur de refresh
+      if (!session && event !== 'SIGNED_OUT' && user) {
+        console.error('[AUTH] Session lost unexpectedly, possible refresh token error');
+        // Vérifier explicitement si c'est une erreur de refresh token
+        try {
+          const { data: { session: currentSession }, error: sessionError } = await supabase.auth.getSession();
+          if (sessionError || !currentSession) {
+            console.error('[AUTH] Refresh token error detected:', sessionError);
+            // Émettre un événement personnalisé pour que les composants puissent afficher un toast
+            window.dispatchEvent(new CustomEvent('auth:session-expired', {
+              detail: { message: 'Session expirée, reconnecte-toi' }
+            }));
+            // Forcer signOut propre
+            await supabase.auth.signOut();
+            return;
+          }
+        } catch (err) {
+          console.error('[AUTH] Error checking session after state change:', err);
+          // Si erreur, forcer signOut
+          window.dispatchEvent(new CustomEvent('auth:session-expired', {
+            detail: { message: 'Session expirée, reconnecte-toi' }
+          }));
+          await supabase.auth.signOut();
+          return;
+        }
       }
       
       setSession(session);
@@ -165,6 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         console.log('[AUTH] No active session');
         setProfile(null);
+        setProfileResolved(false);
       }
     });
 
@@ -262,11 +294,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data) {
         debugLog('[AUTH] Profile fetched successfully');
         setProfile(data as UserProfile);
+        setProfileResolved(true);
         setProfileLoading(false);
+        // Register for push notifications if enabled
+        if ((data as any).notifications_enabled && user?.id) {
+          registerPush(user.id);
+        }
         return;
       }
 
       // Step 4: Profile doesn't exist, create minimal one using upsert
+      // IMPORTANT: Use minimal payload to avoid overwriting existing profile fields
       debugLog('[AUTH] Profile not found, creating minimal profile...');
       
       // Determine has_password based on auth provider
@@ -274,37 +312,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const provider = authUser?.user?.app_metadata?.provider || 'email';
       const hasPassword = provider === 'email';
 
+      // Minimal payload: only id and has_password (don't overwrite sensitive fields)
       const { data: upsertedProfile, error: upsertError } = await supabase
         .from('user_profiles')
         .upsert(
           {
             id: targetUserId,
-            username: null,
-            display_name: null,
-            bio: null,
-            avatar_url: null,
-            onboarding_completed: false,
             has_password: hasPassword,
-            interests: [],
-            xp_total: 0,
-            current_streak: 0,
           },
           {
             onConflict: 'id',
             ignoreDuplicates: false,
           }
         )
-        .select()
+        .select('onboarding_completed')
         .single();
 
       if (upsertError) {
         debugError('[AUTH] Error upserting profile:', upsertError);
-        setProfile(null);
-      } else if (upsertedProfile) {
-        debugLog('[AUTH] Profile created/updated successfully');
-        setProfile(upsertedProfile as UserProfile);
+        // Try to fetch existing profile
+        const { data: existingProfile } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', targetUserId)
+          .maybeSingle();
+        
+        if (existingProfile) {
+          setProfile(existingProfile as UserProfile);
+          setProfileResolved(true);
+        } else {
+          setProfile(null);
+        }
       } else {
-        // Fallback: try to fetch again
+        // Re-fetch full profile after upsert to get actual state
         const { data: fetchedProfile } = await supabase
           .from('user_profiles')
           .select('*')
@@ -312,7 +352,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
         
         if (fetchedProfile) {
+          debugLog('[AUTH] Profile created/updated successfully, re-fetched state');
           setProfile(fetchedProfile as UserProfile);
+          setProfileResolved(true);
+          // Register for push notifications if enabled
+          if ((fetchedProfile as any).notifications_enabled && user?.id) {
+            registerPush(user.id);
+          }
         } else {
           setProfile(null);
         }
@@ -320,6 +366,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err: any) {
       debugError('[AUTH] Error in refreshProfile:', err);
       setProfile(null);
+      setProfileResolved(false);
     } finally {
       setProfileLoading(false);
     }
@@ -331,10 +378,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      debugLog('[AUTH] Updating profile...', updates);
+      // Remove onboarding_completed and other protected fields from updates
+      const safeUpdates = { ...updates };
+      
+      // Block regression of onboarding_completed (true -> false)
+      if ('onboarding_completed' in safeUpdates) {
+        const currentOnboardingState = profile?.onboarding_completed;
+        const newOnboardingState = (safeUpdates as any).onboarding_completed;
+        
+        if (currentOnboardingState === true && newOnboardingState === false) {
+          console.warn('[AUTH] ⚠️ Blocked onboarding_completed regression:', {
+            userId: user.id,
+            current: currentOnboardingState,
+            attempted: newOnboardingState,
+          });
+          delete (safeUpdates as any).onboarding_completed;
+        }
+      }
+      
+      delete (safeUpdates as any).has_password;
+      delete (safeUpdates as any).xp_total;
+      delete (safeUpdates as any).current_streak;
+      delete (safeUpdates as any).interests; // Interests should be managed separately
+
+      debugLog('[AUTH] Updating profile safe payload keys:', Object.keys(safeUpdates));
+      debugLog('[AUTH] Updating profile...', safeUpdates);
+      
       const { error } = await supabase
         .from('user_profiles')
-        .update(updates)
+        .update(safeUpdates)
         .eq('id', user.id);
 
       if (error) {
@@ -435,6 +507,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     profile,
     profileLoading,
+    profileResolved,
     loading,
     signUp,
     signIn,

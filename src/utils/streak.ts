@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { computeStreakFromActivities } from '../lib/readingStreak';
+import { calculateStreakXp, awardXp } from '../lib/xpRewards';
 
 /**
  * Updates user streak after an activity is created.
@@ -27,15 +28,16 @@ export async function updateStreakAfterActivity(userId: string): Promise<void> {
     // Compute streak from activities (local timezone)
     const newStreak = computeStreakFromActivities(activities || []);
 
-    // Get current longest streak
+    // Get current streak to detect milestones
     const { data: profile } = await supabase
       .from('user_profiles')
-      .select('longest_streak')
+      .select('current_streak, longest_streak')
       .eq('id', userId)
       .maybeSingle();
 
     if (!profile) return;
 
+    const previousStreak = profile.current_streak || 0;
     const longestStreak = profile.longest_streak || 0;
     const newLongestStreak = Math.max(longestStreak, newStreak);
 
@@ -47,6 +49,22 @@ export async function updateStreakAfterActivity(userId: string): Promise<void> {
         longest_streak: newLongestStreak,
       })
       .eq('id', userId);
+
+    // Award XP for streak milestones (only if streak increased)
+    if (newStreak > previousStreak) {
+      const streakXp = calculateStreakXp(newStreak, previousStreak);
+      if (streakXp > 0) {
+        await awardXp(
+          userId,
+          streakXp,
+          'streak',
+          {
+            streakDays: newStreak,
+            previousStreakDays: previousStreak,
+          }
+        );
+      }
+    }
 
     // Dispatch event to update UI
     window.dispatchEvent(new CustomEvent('streak-updated', { detail: { streak: newStreak } }));

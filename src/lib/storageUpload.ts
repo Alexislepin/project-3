@@ -1,166 +1,152 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import { Capacitor } from '@capacitor/core';
+import { supabase } from './supabase';
 
-export interface UploadImageOptions {
+export interface UploadImageToBucketOptions {
   bucket: string;
   path: string;
-  compress?: boolean;
-  maxWidth?: number;
-  maxHeight?: number;
-  quality?: number;
+  fileUriOrUrl: string; // Can be a file URI (iOS) or blob URL or data URL
+  contentType?: string;
+  upsert?: boolean;
+}
+
+export interface UploadImageToBucketResult {
+  publicUrl: string;
+  objectPath: string;
 }
 
 /**
- * Check if a storage bucket exists
- */
-async function checkBucketExists(supabase: SupabaseClient, bucket: string): Promise<boolean> {
-  try {
-    const { data, error } = await supabase.storage.from(bucket).list('', { limit: 1 });
-    // If we can list (even empty), bucket exists
-    return !error;
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Upload an image file to Supabase Storage
- * @param supabase - Supabase client instance
- * @param file - File or Blob to upload
+ * Upload an image to Supabase Storage bucket
+ * Handles iOS file URIs by converting them to fetchable URLs using Capacitor.convertFileSrc
+ * 
  * @param options - Upload options
- * @returns Storage path (not URL) - format: "userId/filename.jpg"
- * @throws Error if bucket doesn't exist or upload fails
+ * @returns Object with publicUrl and objectPath
+ * @throws Error if upload fails
  */
-export async function uploadImageToSupabase(
-  supabase: SupabaseClient,
-  file: File | Blob,
-  options: UploadImageOptions
-): Promise<string> {
-  const { bucket, path, compress = false, maxWidth = 1920, maxHeight = 1920, quality = 0.8 } = options;
-
-  // Check if bucket exists before attempting upload
-  const bucketExists = await checkBucketExists(supabase, bucket);
-  if (!bucketExists) {
-    throw new Error(`Bucket "${bucket}" not found. Please create it in Supabase Storage.`);
-  }
-
-  let fileToUpload: File | Blob = file;
-
-  // Compress image if requested (web only, Capacitor handles compression)
-  if (compress && typeof window !== 'undefined' && file instanceof File) {
-    try {
-      const compressed = await compressImage(file, maxWidth, maxHeight, quality);
-      fileToUpload = compressed;
-    } catch (error) {
-      console.warn('[uploadImageToSupabase] Compression failed, using original:', error);
-      // Continue with original file if compression fails
+export async function uploadImageToBucket({
+  bucket,
+  path,
+  fileUriOrUrl,
+  contentType = 'image/jpeg',
+  upsert = true,
+}: UploadImageToBucketOptions): Promise<UploadImageToBucketResult> {
+  try {
+    // Step 1: Convert iOS URI to fetchable URL if needed
+    let fetchableUrl: string;
+    if (Capacitor.isNativePlatform()) {
+      // On native platforms, convert file URI to a URL that can be fetched
+      fetchableUrl = Capacitor.convertFileSrc(fileUriOrUrl);
+    } else {
+      // On web, use the URL directly (blob URL, data URL, or regular URL)
+      fetchableUrl = fileUriOrUrl;
     }
+
+    // Step 2: Fetch the image and convert to Blob
+    const response = await fetch(fetchableUrl);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+
+    // Step 3: Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(path, blob, {
+        upsert,
+        contentType,
+        cacheControl: '3600',
+      });
+
+    if (uploadError) {
+      console.error('[uploadImageToBucket] Upload error:', {
+        bucket,
+        path,
+        error: uploadError,
+        message: uploadError.message,
+        statusCode: uploadError.statusCode,
+      });
+      throw new Error(`Upload failed: ${uploadError.message}`);
+    }
+
+    // Step 4: Get public URL
+    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+    const publicUrl = publicUrlData?.publicUrl;
+
+    if (!publicUrl) {
+      throw new Error('Failed to get public URL after upload');
+    }
+
+    return {
+      publicUrl,
+      objectPath: path,
+    };
+  } catch (error: any) {
+    console.error('[uploadImageToBucket] Error:', {
+      bucket,
+      path,
+      fileUriOrUrl,
+      error: error.message || error,
+      stack: error.stack,
+    });
+    throw error;
   }
+}
 
-  // Determine content type
-  const contentType = file instanceof File 
-    ? file.type || 'image/jpeg'
-    : 'image/jpeg';
-
-  // Upload to Supabase Storage
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .upload(path, fileToUpload, {
-      upsert: true,
+/**
+ * Upload a File or Blob directly to Supabase Storage bucket
+ * Use this when you already have a File/Blob object (e.g., from file input or camera)
+ * 
+ * @param options - Upload options
+ * @returns Object with publicUrl and objectPath
+ * @throws Error if upload fails
+ */
+export async function uploadFileToBucket({
+  bucket,
+  path,
+  file,
+  contentType = file.type || 'image/jpeg',
+  upsert = true,
+}: {
+  bucket: string;
+  path: string;
+  file: File | Blob;
+  contentType?: string;
+  upsert?: boolean;
+}): Promise<{ publicUrl: string; objectPath: string }> {
+  try {
+    const { error } = await supabase.storage.from(bucket).upload(path, file, {
+      upsert,
       contentType,
       cacheControl: '3600',
     });
 
-  if (error) {
-    console.error('[uploadImageToSupabase] Upload error:', error);
-    throw new Error(`Upload failed: ${error.message}`);
+    if (error) {
+      console.error('[uploadFileToBucket] Upload error:', {
+        bucket,
+        path,
+        error,
+        message: error.message,
+        statusCode: error.statusCode,
+      });
+      throw error;
+    }
+
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+    const publicUrl = data?.publicUrl;
+
+    if (!publicUrl) {
+      throw new Error('Failed to get public URL after upload');
+    }
+
+    return { publicUrl, objectPath: path };
+  } catch (error: any) {
+    console.error('[uploadFileToBucket] Error:', {
+      bucket,
+      path,
+      error: error.message || error,
+      stack: error.stack,
+    });
+    throw error;
   }
-
-  // Return the PATH (not URL) for storage in database
-  // The path will be converted to URL at display time using getPublicUrl()
-  return path;
 }
-
-/**
- * Compress an image file (web only)
- */
-async function compressImage(
-  file: File,
-  maxWidth: number,
-  maxHeight: number,
-  quality: number
-): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-
-        // Calculate new dimensions
-        if (width > maxWidth || height > maxHeight) {
-          const ratio = Math.min(maxWidth / width, maxHeight / height);
-          width = width * ratio;
-          height = height * ratio;
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Failed to get canvas context'));
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error('Failed to compress image'));
-            }
-          },
-          file.type || 'image/jpeg',
-          quality
-        );
-      };
-      img.onerror = () => reject(new Error('Failed to load image'));
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
-  });
-}
-
-/**
- * Generate a unique path for an activity photo
- * Format: {userId}/{index}.jpg
- * Must start with userId/ for proper RLS policies
- */
-export function generateActivityPhotoPath(userId: string, index: number): string {
-  return `${userId}/${index}.jpg`;
-}
-
-/**
- * Generate a unique path for a book cover
- * Path format: user_covers/<userId>/<bookId>/<timestamp>_<random>.jpg
- * This matches the RLS policies that check for user_covers/<auth.uid()>/
- */
-export function generateBookCoverPath(userId: string, bookId: string): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 9);
-  return `user_covers/${userId}/${bookId}/${timestamp}_${random}.jpg`;
-}
-
-/**
- * Generate a unique path for a user avatar
- * Path format: <userId>.jpg (bucket prefix is handled by Supabase Storage)
- */
-export function generateAvatarPath(userId: string): string {
-  return `${userId}.jpg`;
-}
-

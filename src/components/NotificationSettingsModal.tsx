@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { X, Bell, BellOff, Clock, Target } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { registerPush } from '../lib/push';
 
 interface NotificationSettingsModalProps {
   onClose: () => void;
@@ -86,10 +89,6 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
       .update(updates)
       .eq('id', user.id);
 
-    if (!error) {
-      console.log('Notification settings saved');
-    }
-
     setSaving(false);
   };
 
@@ -98,7 +97,14 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
     setNotificationsEnabled(newValue);
     await saveSettings(newValue, goalReminderEnabled, notificationTime);
 
-    if (newValue) {
+    if (newValue === true && user?.id) {
+      // On native platforms, request permissions and register before calling registerPush
+      if (Capacitor.isNativePlatform()) {
+        await PushNotifications.requestPermissions();
+        await PushNotifications.register();
+        registerPush(user.id);
+      }
+      
       new Notification('Notifications activées !', {
         body: 'Vous recevrez des rappels pour vos objectifs de lecture',
         icon: '/image.png',

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDistanceToNow } from '../utils/dateUtils';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 
 interface Comment {
   id: string;
@@ -213,15 +214,19 @@ export function CommentModal({ activityId, onClose, onCommentAdded, onUserClick 
                       className="w-8 h-8 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 text-sm font-medium flex-shrink-0 hover:bg-stone-300 transition-colors cursor-pointer overflow-hidden"
                       aria-label={`Voir le profil de ${comment.user?.display_name || 'utilisateur'}`}
                     >
-                      {comment.user?.avatar_url ? (
-                        <img 
-                          src={comment.user.avatar_url} 
-                          alt={comment.user.display_name || 'Avatar'} 
-                          className="w-full h-full object-cover rounded-full"
-                        />
-                      ) : (
-                        comment.user?.display_name?.charAt(0).toUpperCase() || '?'
-                      )}
+                      {(() => {
+                        const avatarUrl = resolveAvatarUrl(comment.user?.avatar_url || null, supabase);
+                        const bustedUrl = addCacheBuster(avatarUrl, comment.user?.updated_at);
+                        return bustedUrl ? (
+                          <img 
+                            src={bustedUrl} 
+                            alt={comment.user.display_name || 'Avatar'} 
+                            className="w-full h-full object-cover rounded-full"
+                          />
+                        ) : (
+                          comment.user?.display_name?.charAt(0).toUpperCase() || '?'
+                        );
+                      })()}
                     </button>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">

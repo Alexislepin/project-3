@@ -4,13 +4,14 @@ interface LevelProgressBarProps {
   xpTotal: number;
   variant?: 'full' | 'compact';
   className?: string;
+  onClick?: () => void;
 }
 
-export function LevelProgressBar({ xpTotal, variant = 'full', className = '' }: LevelProgressBarProps) {
+export function LevelProgressBar({ xpTotal, variant = 'full', className = '', onClick }: LevelProgressBarProps) {
   const progress = getLevelProgress(xpTotal);
 
   if (variant === 'compact') {
-    return (
+    const content = (
       <div className={`flex items-center gap-2.5 ${className}`}>
         <span className="text-xs font-semibold text-stone-800 whitespace-nowrap">Niveau {progress.level}</span>
         <div className="flex-1 h-0.5 bg-stone-200 rounded-full overflow-hidden">
@@ -24,10 +25,24 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '' }: 
         </span>
       </div>
     );
+
+    if (onClick) {
+      return (
+        <button
+          onClick={onClick}
+          className="w-full text-left"
+          type="button"
+        >
+          {content}
+        </button>
+      );
+    }
+
+    return content;
   }
 
   // Full variant
-  return (
+  const fullContent = (
     <div className={`bg-white rounded-2xl border border-stone-200 shadow-[0_1px_2px_rgba(0,0,0,0.05)] p-4 ${className}`}>
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-baseline gap-2">
@@ -53,6 +68,20 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '' }: 
       </p>
     </div>
   );
+
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className="w-full text-left"
+        type="button"
+      >
+        {fullContent}
+      </button>
+    );
+  }
+
+  return fullContent;
 }
 
 /**

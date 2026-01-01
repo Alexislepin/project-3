@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Flame, BookOpen, Clock, Users, Activity, ChevronRight } from 'lucide-react';
 import { BookCover } from './BookCover';
 import { BookDetailsModal } from './BookDetailsModal';
@@ -9,6 +9,7 @@ import { ActivityCard } from './ActivityCard';
 import { supabase } from '../lib/supabase';
 import { formatPagesCount } from '../utils/formatPages';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 
 interface ProfileLayoutProps {
   profile: any;
@@ -83,6 +84,12 @@ export function ProfileLayout({
   const [showAllCurrentlyReading, setShowAllCurrentlyReading] = useState(false);
   const [lastActivity, setLastActivity] = useState<any | null>(null);
   const [loadingLastActivity, setLoadingLastActivity] = useState(false);
+
+  // Resolve avatar URL (path -> public URL if needed)
+  const avatarUrl = useMemo(() => {
+    const resolved = resolveAvatarUrl(profile?.avatar_url, supabase);
+    return addCacheBuster(resolved, profile?.updated_at);
+  }, [profile?.avatar_url, profile?.updated_at]);
 
   // Load last activity
   useEffect(() => {
@@ -185,7 +192,7 @@ export function ProfileLayout({
           <div className="relative mb-4">
             <div className="w-32 h-32 bg-gray-200 rounded-full flex items-center justify-center text-4xl font-bold text-text-main-light border-4 border-white shadow-lg overflow-hidden">
               {profile.avatar_url ? (
-                <img src={profile.avatar_url} alt={profile.display_name} className="w-full h-full object-cover" />
+                <img src={avatarUrl || undefined} alt={profile.display_name} className="w-full h-full object-cover" />
               ) : (
                 profile.display_name.charAt(0).toUpperCase()
               )}
