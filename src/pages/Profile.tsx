@@ -20,6 +20,7 @@ import { LanguageSelectorModal } from '../components/LanguageSelectorModal';
 import { ProfileLayout } from '../components/ProfileLayout';
 import { computeReadingStats, computePR } from '../lib/readingStats';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { computeStreakFromActivities } from '../lib/readingStreak';
 import { MyActivities } from './MyActivities';
 import { countRows } from '../lib/supabaseCounts';
@@ -688,16 +689,29 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         {/* Level Progress Bar */}
         {contextProfile?.xp_total !== undefined && (
           <div className="px-4 pt-4 pb-2">
-            <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
-            <button
-              onClick={() => {
-                window.location.href = '/levels';
+            <div
+              role="button"
+              tabIndex={0}
+              className="w-full cursor-pointer"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[Profile] Opening XP history modal');
+                setShowXpHistory(true);
+                requestAnimationFrame(() => {
+                  console.log('[Profile] showXpHistory should be true now');
+                });
               }}
-              className="mt-2 text-[11px] text-stone-500 underline cursor-pointer hover:text-stone-700 transition-colors"
-              type="button"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  console.log('[Profile] Opening XP history modal (keyboard)');
+                  setShowXpHistory(true);
+                }
+              }}
             >
-              Découvrir comment gagner de l'XP et monter de niveau
-            </button>
+              <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
+            </div>
           </div>
         )}
         
