@@ -63,6 +63,9 @@ export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTi
   }
   const chipText = chipParts.join(' · ');
 
+  // Clean activity title: remove "Read " prefix if present
+  const cleanTitle = event.activity.title?.replace(/^Read\s+/i, '') || '';
+
   return (
     <div className="flex items-center gap-2.5 p-2.5 bg-white rounded-2xl shadow-sm">
       {/* Avatar */}
@@ -124,10 +127,10 @@ export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTi
             >
               <ActivityIcon className="w-3 h-3 text-stone-500" />
               <span className="font-medium">{chipText}</span>
-              {event.activity.title && (
+              {cleanTitle && (
                 <>
                   <span className="text-stone-400">·</span>
-                  <span className="text-stone-600 truncate max-w-[120px]">{event.activity.title}</span>
+                  <span className="text-stone-600 truncate max-w-[120px]">{cleanTitle}</span>
                 </>
               )}
             </button>

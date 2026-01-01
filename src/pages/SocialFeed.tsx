@@ -532,7 +532,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: '82px', // Header (56px) + Tabs section (~26px) - AppHeader already handles safe-area
+          paddingTop: '88px', // Header (56px) + Tabs section (32px: py-1.5 + button height)
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
@@ -564,6 +564,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
           style={{ 
             transform: `translateY(${pullDistance}px)`,
             paddingBottom: 'calc(96px + env(safe-area-inset-bottom))',
+            paddingTop: '0', // Remove any extra top padding
           }}
         >
           {loading ? (
