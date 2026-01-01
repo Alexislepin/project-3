@@ -10,7 +10,7 @@ interface LevelDetailsModalProps {
 }
 
 export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
-  const { profile, profile: contextProfile } = useAuth();
+  const { profile, profile: contextProfile, user } = useAuth();
   // Use freshest xp_total (local profile state updated by xp-updated event)
   const xpTotal = (profile?.xp_total ?? contextProfile?.xp_total) || 0;
   const progress = getLevelProgress(xpTotal);
