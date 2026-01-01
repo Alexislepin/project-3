@@ -989,6 +989,10 @@ export function Home() {
           }}
         />
       )}
+
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
+      )}
     </div>
   );
 }
