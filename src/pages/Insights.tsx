@@ -55,6 +55,7 @@ function buildWeeklyBarsData(activities: any[]): number[] {
 
 import { computeReadingStats, formatStatValue, formatDuration } from '../lib/readingStats';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { UserProfileView } from '../components/UserProfileView';
 import { ActivityFocus } from '../lib/activityFocus';
@@ -93,6 +94,7 @@ export function Insights() {
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
   const [weeklyActivityTotalPages, setWeeklyActivityTotalPages] = useState(0);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showLevelDetails, setShowLevelDetails] = useState(false);
   const [streakDays, setStreakDays] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
@@ -636,19 +638,19 @@ export function Insights() {
             {/* Level Progress Bar */}
             {contextProfile?.xp_total !== undefined && (
               <div className="mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
-                  </div>
-                  {/* Leaderboard Button */}
-                  <button
-                    onClick={openLeaderboard}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium shrink-0"
-                  >
-                    <Trophy className="w-4 h-4" />
-                    Classement
-                  </button>
-                </div>
+                <LevelProgressBar 
+                  xpTotal={contextProfile.xp_total || 0} 
+                  variant="compact"
+                  onClick={() => setShowLevelDetails(true)}
+                />
+                {/* Leaderboard Button */}
+                <button
+                  onClick={openLeaderboard}
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
+                >
+                  <Trophy className="w-4 h-4" />
+                  Classement
+                </button>
               </div>
             )}
 
