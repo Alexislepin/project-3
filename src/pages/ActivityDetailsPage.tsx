@@ -124,7 +124,7 @@ export function ActivityDetailsPage() {
   if (error || !activity) {
     return (
       <div className="h-screen max-w-2xl mx-auto bg-background-light">
-        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
+        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
         <div className="flex items-center justify-center h-full px-4" style={{ paddingTop: '56px' }}>
           <div className="text-center w-full max-w-md">
             <p className="text-stone-600 mb-4">{error || 'Activité introuvable'}</p>
