@@ -194,7 +194,12 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
 
           return {
             id: event.id,
-            actor,
+            actor: {
+              id: actor.id,
+              display_name: actor.display_name,
+              username: actor.username,
+              avatar_url: actor.avatar_url,
+            },
             event_type: event.event_type as 'book_like' | 'book_comment',
             book: {
               book_key: event.book_key,
