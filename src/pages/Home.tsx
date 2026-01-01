@@ -117,14 +117,23 @@ export function Home() {
         .select('id')
         .gt('xp_total', userProfile.xp_total);
 
-      // Count total users with XP > 0
-      const { data: totalUsers } = await supabase
+      // Count total users with xp_total (including 0 and null, but excluding those without profiles)
+      // Use gte('xp_total', 0) to include users with xp_total = 0, and also count those with null
+      const { data: totalUsersWithXp, error: totalError } = await supabase
         .from('user_profiles')
-        .select('id')
-        .gt('xp_total', 0);
+        .select('id', { count: 'exact', head: true })
+        .gte('xp_total', 0);
+
+      // Also count users with null xp_total
+      const { data: totalUsersNull, error: nullError } = await supabase
+        .from('user_profiles')
+        .select('id', { count: 'exact', head: true })
+        .is('xp_total', null);
+
+      // Total = users with xp_total >= 0 + users with xp_total = null
+      const total = (totalUsersWithXp?.length || 0) + (totalUsersNull?.length || 0);
 
       const rank = (higherRankUsers?.length || 0) + 1;
-      const total = totalUsers?.length || 0;
 
       setRanking({ rank, total });
     } catch (error) {
