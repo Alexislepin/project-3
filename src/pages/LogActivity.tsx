@@ -146,8 +146,8 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
 
           if (xpError) {
             console.error('[award_xp] failed', xpError);
-            // Show error notification
-            alert('Impossible d\'attribuer l\'XP. Veuillez réessayer.');
+            // Error is logged, but we don't block the user flow
+            // The RPC function should handle retries or the user can retry later
           } else if (xpResult) {
             // Dispatch xp-updated event to refresh UI
             window.dispatchEvent(new CustomEvent('xp-updated', {
