@@ -557,7 +557,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   return (
     <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
       {/* Fixed Header */}
-      <div ref={headerRef}>
+      <div ref={headerRef} className="relative">
         <AppHeader 
           title="Social"
           showBack={true}
