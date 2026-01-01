@@ -1,15 +1,53 @@
 import { X, BookOpen, Target, Zap, TrendingUp } from 'lucide-react';
 import { getLevelProgress, formatXp } from '../lib/leveling';
 import { useAuth } from '../contexts/AuthContext';
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { computeStreakFromActivities } from '../lib/readingStreak';
 
 interface LevelDetailsModalProps {
   onClose: () => void;
 }
 
 export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
-  const { profile } = useAuth();
-  const xpTotal = profile?.xp_total || 0;
+  const { profile, profile: contextProfile } = useAuth();
+  // Use freshest xp_total (local profile state updated by xp-updated event)
+  const xpTotal = (profile?.xp_total ?? contextProfile?.xp_total) || 0;
   const progress = getLevelProgress(xpTotal);
+  const [currentStreak, setCurrentStreak] = useState<number | null>(null);
+
+  // Calculate next streak milestone
+  const getNextStreakMilestone = (streak: number) => {
+    if (streak < 2) return { days: 2, xp: 5 };
+    if (streak < 5) return { days: 5, xp: 15 };
+    if (streak < 10) return { days: 10, xp: 30 };
+    if (streak < 30) return { days: 30, xp: 100 };
+    return null; // Already reached all milestones
+  };
+
+  // Load streak
+  useEffect(() => {
+    if (!user) return;
+
+    const loadStreak = async () => {
+      const { data: activities } = await supabase
+        .from('activities')
+        .select('created_at, pages_read, duration_minutes, type')
+        .eq('user_id', user.id)
+        .eq('type', 'reading')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (activities) {
+        const streak = computeStreakFromActivities(activities);
+        setCurrentStreak(streak);
+      }
+    };
+
+    loadStreak();
+  }, [user]);
+
+  const nextStreakMilestone = currentStreak !== null ? getNextStreakMilestone(currentStreak) : null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-[100]" onClick={onClose}>
