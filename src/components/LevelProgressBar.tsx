@@ -50,7 +50,7 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
   }
 
   // Full variant
-  const content = (
+  return (
     <div className={`bg-white rounded-2xl border border-stone-200 shadow-[0_1px_2px_rgba(0,0,0,0.05)] p-4 ${className}`}>
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-baseline gap-2">
@@ -58,13 +58,15 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
           <span className="text-xs font-normal text-stone-500">({formatXp(progress.xpTotal)} XP total)</span>
         </div>
         {onClick && (
-          <button
-            onClick={onClick}
-            className="text-xs text-primary hover:underline font-medium"
-            type="button"
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick();
+            }}
+            className="px-2.5 py-1 text-sm font-bold text-black bg-stone-100 rounded-full whitespace-nowrap border border-stone-200 cursor-pointer hover:bg-stone-200 transition-colors"
           >
-            Comment gagner de l'XP ?
-          </button>
+            +XP
+          </span>
         )}
       </div>
       
@@ -80,25 +82,25 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         </span>
       </div>
       
-      <p className="text-xs font-normal text-stone-500 leading-tight">
-        {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-normal text-stone-500 leading-tight">
+          {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
+        </p>
+        {onClick && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick();
+            }}
+            className="text-xs text-stone-600 hover:text-stone-900 hover:underline font-medium"
+            type="button"
+          >
+            Comment ça marche les niveaux ?
+          </button>
+        )}
+      </div>
     </div>
   );
-
-  if (onClick) {
-    return (
-      <button
-        onClick={onClick}
-        className="w-full text-left"
-        type="button"
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return content;
 }
 
 /**
