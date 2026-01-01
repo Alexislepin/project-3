@@ -693,7 +693,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               onClick={() => {
                 window.location.href = '/levels';
               }}
-              className="mt-2 text-xs text-primary cursor-pointer hover:opacity-80 transition-opacity"
+              className="mt-2 text-xs text-black cursor-pointer hover:opacity-80 transition-opacity"
               type="button"
             >
               Découvrir comment gagner de l'XP et monter de niveau
