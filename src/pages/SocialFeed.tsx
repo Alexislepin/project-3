@@ -196,9 +196,9 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
             id: event.id,
             actor: {
               id: actor.id,
-              display_name: actor.display_name,
-              username: actor.username,
-              avatar_url: actor.avatar_url,
+              display_name: actor.display_name || undefined,
+              username: actor.username || undefined,
+              avatar_url: actor.avatar_url || undefined,
             },
             event_type: event.event_type as 'book_like' | 'book_comment',
             book: {
@@ -211,7 +211,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
             created_at: event.created_at,
           };
         })
-        .filter((event): event is BookEvent => event !== null);
+        .filter((event): event is BookEvent => event !== null) as BookEvent[];
 
       // Group likes
       const grouped = groupSocialEvents(enrichedEvents as any);
