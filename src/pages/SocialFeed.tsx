@@ -1,28 +1,78 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { FeedRow } from '../components/FeedRow';
-import { AudienceTabs } from '../components/AudienceTabs';
+import { FeedRowActivity } from '../components/FeedRowActivity';
+import { SocialTabs, type SocialTab } from '../components/SocialTabs';
 import { AppHeader } from '../components/AppHeader';
 import { UserProfileView } from '../components/UserProfileView';
 import { BookDetailsModal } from '../components/BookDetailsModal';
-import { groupSocialEvents, filterDiscoverEvents, type GroupedEvent } from '../lib/feedUtils';
+import { groupSocialEvents, type GroupedEvent } from '../lib/feedUtils';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
-
-type FeedFilter = 'all' | 'following' | 'me';
 
 interface SocialFeedProps {
   onClose?: () => void;
 }
 
+interface BookEvent {
+  id: string;
+  actor: {
+    id: string;
+    display_name?: string;
+    username?: string;
+    avatar_url?: string;
+  };
+  event_type: 'book_like' | 'book_comment';
+  book: {
+    book_key: string;
+    title: string;
+    author?: string;
+    cover_url?: string;
+  };
+  comment_content?: string | null;
+  created_at: string;
+  groupedLikes?: {
+    actors: Array<{ id: string; display_name?: string; username?: string; avatar_url?: string }>;
+    count: number;
+  };
+}
+
+interface ActivityEvent {
+  id: string;
+  actor: {
+    id: string;
+    display_name?: string;
+    username?: string;
+    avatar_url?: string;
+  };
+  event_type: 'activity_like' | 'activity_comment';
+  activity: {
+    id: string;
+    type: 'reading' | 'workout' | 'learning' | 'habit';
+    title: string;
+    pages_read?: number;
+    duration_minutes?: number;
+    created_at: string;
+  };
+  comment_content?: string | null;
+  created_at: string;
+}
+
 export function SocialFeed({ onClose }: SocialFeedProps) {
-  const [socialEvents, setSocialEvents] = useState<Array<any & { source?: 'following' | 'discover' }>>([]);
-  const [filter, setFilter] = useState<FeedFilter>('all');
+  const [tab, setTab] = useState<SocialTab>('books');
+  const [eventsBooks, setEventsBooks] = useState<BookEvent[]>([]);
+  const [eventsActivities, setEventsActivities] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedBook, setSelectedBook] = useState<any | null>(null);
   const [selectedBookInitialTab, setSelectedBookInitialTab] = useState<'summary' | 'comments'>('summary');
   const [selectedBookFocusComment, setSelectedBookFocusComment] = useState(false);
+  const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
+  
+  // Cache to avoid reloading when switching tabs
+  const booksCacheRef = useRef<BookEvent[] | null>(null);
+  const activitiesCacheRef = useRef<ActivityEvent[] | null>(null);
+  const followingIdsRef = useRef<string[]>([]);
   
   // Pull-to-refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -33,257 +83,313 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   
   const { user } = useAuth();
 
-  // Helper function to process events (defined before use)
-  const processSocialEvents = async (
-    eventsData: any[],
-    followingIds: string[],
-    defaultSource?: 'following' | 'discover'
-  ) => {
-    // Fetch actor profiles, book details, and comment previews in parallel
-    const actorUserIds = [...new Set(eventsData.map(e => e.actor_id))]
-      .filter((id): id is string => !!id);
-    const bookKeys = [...new Set(eventsData.map(e => e.book_key))].filter(key => !!key);
-    const commentIds = eventsData
-      .filter(e => e.comment_id)
-      .map(e => e.comment_id)
-      .filter((id): id is string => !!id);
-
-    // Guards: don't query if arrays are empty
-    const [profilesResult, booksResult, commentsResult] = await Promise.all([
-      actorUserIds.length > 0
-        ? supabase
-            .from('user_profiles')
-            .select('id, display_name, avatar_url')
-            .in('id', actorUserIds)
-        : Promise.resolve({ data: [], error: null }),
-      bookKeys.length > 0
-        ? supabase
-            .from('books_cache')
-            .select('book_key, title, author, cover_url')
-            .in('book_key', bookKeys)
-        : Promise.resolve({ data: [], error: null }),
-      commentIds.length > 0
-        ? supabase
-            .from('book_comments')
-            .select('id, content, created_at')
-            .in('id', commentIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    // Handle errors from parallel queries
-    if (profilesResult.error) {
-      console.error('[loadSocialEvents] Error fetching profiles:', profilesResult.error);
-    }
-    if (booksResult.error) {
-      console.error('[loadSocialEvents] Error fetching books_cache:', booksResult.error);
-    }
-    if (commentsResult.error) {
-      console.error('[loadSocialEvents] Error fetching comments:', commentsResult.error);
+  // Fetch following IDs (cached)
+  const fetchFollowingIds = async (): Promise<string[]> => {
+    if (!user) return [];
+    
+    if (followingIdsRef.current.length > 0) {
+      return followingIdsRef.current;
     }
 
-    const profilesMap = new Map((profilesResult.data || []).map(p => [p.id, p]));
-    const booksMap = new Map((booksResult.data || []).map(b => [b.book_key, b]));
-    const commentsMap = new Map((commentsResult.data || []).map(c => [c.id, { content: c.content, created_at: c.created_at }]));
+    const { data: following, error } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', user.id);
 
-    // Combine data with source tagging
-    const combinedEvents = eventsData
-      .map(event => {
-        const actor = profilesMap.get(event.actor_id);
-        const book = booksMap.get(event.book_key);
-        const commentData = event.comment_id ? commentsMap.get(event.comment_id) : null;
-        const commentContent = commentData?.content || null;
+    if (error) {
+      console.error('[SocialFeed] Error fetching follows:', error);
+      return [];
+    }
 
-        if (!actor || !book) return null; // Skip events with missing data
-
-        // Determine source: use event.source if set, otherwise infer from followingIds
-        const source = event.source || (defaultSource || (followingIds.includes(event.actor_id) ? 'following' : 'discover'));
-
-        return {
-          id: event.id,
-          actor,
-          event_type: event.event_type,
-          book: {
-            book_key: event.book_key,
-            title: book.title,
-            author: book.author,
-            cover_url: book.cover_url,
-          },
-          comment_content: commentContent,
-          comment_id: event.comment_id,
-          created_at: event.created_at,
-          source,
-        };
-      })
-      .filter((event): event is NonNullable<typeof event> => event !== null);
-
-    setSocialEvents(combinedEvents);
-    setLoading(false);
+    const ids = following?.map((f) => f.following_id) || [];
+    followingIdsRef.current = ids;
+    return ids;
   };
 
-  const loadSocialEvents = async () => {
-    if (!user) return;
+  // Fetch books feed (book_like, book_comment)
+  const fetchBooksFeed = async (followingIds: string[]) => {
+    if (booksCacheRef.current) {
+      setEventsBooks(booksCacheRef.current);
+      setLoading(false);
+      return;
+    }
 
-    setLoading(true);
+    if (followingIds.length === 0) {
+      setEventsBooks([]);
+      setLoading(false);
+      return;
+    }
 
     try {
-      // 1) Get following IDs
-      const { data: following, error: followingError } = await supabase
-        .from('follows')
-        .select('following_id')
-        .eq('follower_id', user.id);
-
-      if (followingError) {
-        console.error('[loadSocialEvents] Error fetching follows:', followingError);
-        setSocialEvents([]);
-        setLoading(false);
-        return;
-      }
-
-      const followingIds = following?.map((f) => f.following_id) || [];
-
-      // 2) Build query based on filter
-      if (filter === 'me') {
-        if (!user.id) {
-          console.error('[loadSocialEvents] user.id is undefined');
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-        // Fetch only user's events
-        const { data: eventsData, error: eventsError } = await supabase
-          .from('activity_events')
-          .select('id, actor_id, event_type, book_key, comment_id, created_at')
-          .eq('actor_id', user.id)
-          .in('event_type', ['book_like', 'book_comment'])
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (eventsError) {
-          console.error('[loadSocialEvents] activity_events error', eventsError);
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-
-        if (!eventsData || eventsData.length === 0) {
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-
-        await processSocialEvents(eventsData, []);
-        return;
-      }
-
-      if (filter === 'following') {
-        if (followingIds.length === 0) {
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-
-        // Fetch only following events
-        const { data: eventsData, error: eventsError } = await supabase
-          .from('activity_events')
-          .select('id, actor_id, event_type, book_key, comment_id, created_at')
-          .in('actor_id', followingIds)
-          .in('event_type', ['book_like', 'book_comment'])
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (eventsError) {
-          console.error('[loadSocialEvents] activity_events error', eventsError);
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-
-        if (!eventsData || eventsData.length === 0) {
-          setSocialEvents([]);
-          setLoading(false);
-          return;
-        }
-
-        await processSocialEvents(eventsData, followingIds, 'following');
-        return;
-      }
-
-      // filter === 'all': Curated mix
-      // A) Following feed (priority 1)
-      const followingEventsPromise = followingIds.length > 0
-        ? supabase
-            .from('activity_events')
-            .select('id, actor_id, event_type, book_key, comment_id, created_at')
-            .in('actor_id', followingIds)
-            .in('event_type', ['book_like', 'book_comment'])
-            .order('created_at', { ascending: false })
-            .limit(30)
-        : Promise.resolve({ data: [], error: null });
-
-      // B) Trending public feed (priority 2) - Comments only, limit 5
-      const twentyFourHoursAgo = new Date();
-      twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
-      const trendingEventsPromise = supabase
+      const { data: eventsData, error: eventsError } = await supabase
         .from('activity_events')
         .select('id, actor_id, event_type, book_key, comment_id, created_at')
-        .eq('event_type', 'book_comment')
-        .gte('created_at', twentyFourHoursAgo.toISOString())
+        .in('actor_id', followingIds)
+        .in('event_type', ['book_like', 'book_comment'])
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(50);
 
-      const [followingResult, trendingResult] = await Promise.all([
-        followingEventsPromise,
-        trendingEventsPromise,
-      ]);
-
-      if (followingResult.error) {
-        console.error('[loadSocialEvents] Following events error:', followingResult.error);
-      }
-      if (trendingResult.error) {
-        console.error('[loadSocialEvents] Trending events error:', trendingResult.error);
-      }
-
-      const followingEvents = followingResult.data || [];
-      const trendingEvents = trendingResult.data || [];
-
-      // Merge, dedupe, and tag
-      const eventsMap = new Map<string, any & { source: 'following' | 'discover' }>();
-
-      // Add following events first (priority)
-      followingEvents.forEach(event => {
-        if (!eventsMap.has(event.id)) {
-          eventsMap.set(event.id, { ...event, source: 'following' as const });
-        }
-      });
-
-      // Add trending events (only if not already in following)
-      trendingEvents.forEach(event => {
-        if (eventsMap.has(event.id)) return;
-        eventsMap.set(event.id, { ...event, source: 'discover' as const });
-      });
-
-      // Convert to array and sort by created_at desc
-      const mergedEvents = Array.from(eventsMap.values())
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      if (mergedEvents.length === 0) {
-        setSocialEvents([]);
+      if (eventsError) {
+        console.error('[SocialFeed] activity_events error', eventsError);
+        setEventsBooks([]);
         setLoading(false);
         return;
       }
 
-      await processSocialEvents(mergedEvents, followingIds);
-    } catch (error) {
-      console.error('Error loading social events:', error);
-      setSocialEvents([]);
+      if (!eventsData || eventsData.length === 0) {
+        setEventsBooks([]);
+        setLoading(false);
+        return;
+      }
+
+      // Enrich events with profiles, books, and comments
+      const actorUserIds = [...new Set(eventsData.map(e => e.actor_id))].filter((id): id is string => !!id);
+      const bookKeys = [...new Set(eventsData.map(e => e.book_key))].filter(key => !!key);
+      const commentIds = eventsData
+        .filter(e => e.comment_id)
+        .map(e => e.comment_id)
+        .filter((id): id is string => !!id);
+
+      const [profilesResult, booksResult, commentsResult] = await Promise.all([
+        actorUserIds.length > 0
+          ? supabase
+              .from('user_profiles')
+              .select('id, display_name, username, avatar_url')
+              .in('id', actorUserIds)
+          : Promise.resolve({ data: [], error: null }),
+        bookKeys.length > 0
+          ? supabase
+              .from('books_cache')
+              .select('book_key, title, author, cover_url')
+              .in('book_key', bookKeys)
+          : Promise.resolve({ data: [], error: null }),
+        commentIds.length > 0
+          ? supabase
+              .from('book_comments')
+              .select('id, content, created_at')
+              .in('id', commentIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (profilesResult.error) {
+        console.error('[SocialFeed] Error fetching profiles:', profilesResult.error);
+      }
+      if (booksResult.error) {
+        console.error('[SocialFeed] Error fetching books_cache:', booksResult.error);
+      }
+      if (commentsResult.error) {
+        console.error('[SocialFeed] Error fetching comments:', commentsResult.error);
+      }
+
+      const profilesMap = new Map((profilesResult.data || []).map(p => [p.id, p]));
+      const booksMap = new Map((booksResult.data || []).map(b => [b.book_key, b]));
+      const commentsMap = new Map((commentsResult.data || []).map(c => [c.id, c.content]));
+
+      const enrichedEvents: BookEvent[] = eventsData
+        .map(event => {
+          const actor = profilesMap.get(event.actor_id);
+          const book = booksMap.get(event.book_key);
+          const commentContent = event.comment_id ? commentsMap.get(event.comment_id) || null : null;
+
+          if (!actor || !book) return null;
+
+          return {
+            id: event.id,
+            actor,
+            event_type: event.event_type as 'book_like' | 'book_comment',
+            book: {
+              book_key: event.book_key,
+              title: book.title,
+              author: book.author,
+              cover_url: book.cover_url,
+            },
+            comment_content: commentContent,
+            created_at: event.created_at,
+          };
+        })
+        .filter((event): event is BookEvent => event !== null);
+
+      // Group likes
+      const grouped = groupSocialEvents(enrichedEvents as any);
+      booksCacheRef.current = grouped as BookEvent[];
+      setEventsBooks(grouped as BookEvent[]);
       setLoading(false);
+    } catch (error) {
+      console.error('[SocialFeed] Error fetching books feed:', error);
+      setEventsBooks([]);
+      setLoading(false);
+    }
+  };
+
+  // Fetch activities feed (activity_like, activity_comment)
+  const fetchActivitiesFeed = async (followingIds: string[]) => {
+    if (activitiesCacheRef.current) {
+      setEventsActivities(activitiesCacheRef.current);
+      setLoading(false);
+      return;
+    }
+
+    if (followingIds.length === 0) {
+      setEventsActivities([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // Check if activity_events has activity_id column (it doesn't in current schema)
+      // So we use activity_reactions and activity_comments directly
+      
+      // Fetch reactions (likes)
+      const { data: reactionsData, error: reactionsError } = await supabase
+        .from('activity_reactions')
+        .select('id, activity_id, user_id, created_at')
+        .in('user_id', followingIds)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      // Fetch comments
+      const { data: commentsData, error: commentsError } = await supabase
+        .from('activity_comments')
+        .select('id, activity_id, user_id, content, created_at')
+        .in('user_id', followingIds)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (reactionsError) {
+        console.warn('[SocialFeed] activity_reactions error (schema may not support activity events):', reactionsError);
+      }
+      if (commentsError) {
+        console.warn('[SocialFeed] activity_comments error (schema may not support activity events):', commentsError);
+      }
+
+      // If both queries fail, show empty state
+      if (reactionsError && commentsError) {
+        console.warn('[SocialFeed] Activity events not available - schema may need activity_id in activity_events');
+        setEventsActivities([]);
+        setLoading(false);
+        return;
+      }
+
+      const reactions = reactionsData || [];
+      const comments = commentsData || [];
+
+      // Get unique activity IDs
+      const activityIds = [...new Set([
+        ...reactions.map(r => r.activity_id),
+        ...comments.map(c => c.activity_id),
+      ])].filter((id): id is string => !!id);
+
+      if (activityIds.length === 0) {
+        setEventsActivities([]);
+        setLoading(false);
+        return;
+      }
+
+      // Fetch activities and actor profiles
+      const [activitiesResult, actorsResult] = await Promise.all([
+        supabase
+          .from('activities')
+          .select('id, type, title, pages_read, duration_minutes, created_at, user_id')
+          .in('id', activityIds),
+        supabase
+          .from('user_profiles')
+          .select('id, display_name, username, avatar_url')
+          .in('id', followingIds),
+      ]);
+
+      if (activitiesResult.error) {
+        console.error('[SocialFeed] Error fetching activities:', activitiesResult.error);
+        setEventsActivities([]);
+        setLoading(false);
+        return;
+      }
+
+      if (actorsResult.error) {
+        console.error('[SocialFeed] Error fetching actors:', actorsResult.error);
+      }
+
+      const activitiesMap = new Map((activitiesResult.data || []).map(a => [a.id, a]));
+      const actorsMap = new Map((actorsResult.data || []).map(a => [a.id, a]));
+
+      // Combine reactions and comments into events
+      const events: ActivityEvent[] = [];
+
+      // Add reactions as activity_like events
+      reactions.forEach(reaction => {
+        const activity = activitiesMap.get(reaction.activity_id);
+        const actor = actorsMap.get(reaction.user_id);
+        if (activity && actor) {
+          events.push({
+            id: reaction.id,
+            actor,
+            event_type: 'activity_like',
+            activity: {
+              id: activity.id,
+              type: activity.type as 'reading' | 'workout' | 'learning' | 'habit',
+              title: activity.title,
+              pages_read: activity.pages_read || undefined,
+              duration_minutes: activity.duration_minutes || undefined,
+              created_at: activity.created_at,
+            },
+            created_at: reaction.created_at,
+          });
+        }
+      });
+
+      // Add comments as activity_comment events
+      comments.forEach(comment => {
+        const activity = activitiesMap.get(comment.activity_id);
+        const actor = actorsMap.get(comment.user_id);
+        if (activity && actor) {
+          events.push({
+            id: comment.id,
+            actor,
+            event_type: 'activity_comment',
+            activity: {
+              id: activity.id,
+              type: activity.type as 'reading' | 'workout' | 'learning' | 'habit',
+              title: activity.title,
+              pages_read: activity.pages_read || undefined,
+              duration_minutes: activity.duration_minutes || undefined,
+              created_at: activity.created_at,
+            },
+            comment_content: comment.content,
+            created_at: comment.created_at,
+          });
+        }
+      });
+
+      // Sort by created_at desc
+      events.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      activitiesCacheRef.current = events;
+      setEventsActivities(events);
+      setLoading(false);
+    } catch (error) {
+      console.error('[SocialFeed] Error fetching activities feed:', error);
+      setEventsActivities([]);
+      setLoading(false);
+    }
+  };
+
+  // Load data based on current tab
+  const loadData = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    const followingIds = await fetchFollowingIds();
+    
+    if (tab === 'books') {
+      await fetchBooksFeed(followingIds);
+    } else {
+      await fetchActivitiesFeed(followingIds);
     }
   };
 
   useEffect(() => {
     if (!user) return;
-    loadSocialEvents();
-  }, [filter, user?.id]);
+    loadData();
+  }, [tab, user?.id]);
 
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
@@ -300,26 +406,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   };
 
-  // Process and group social events
-  const processedSocialEvents = useMemo(() => {
-    if (socialEvents.length === 0) return { following: [], discover: [] };
-
-    const followingEvents = socialEvents.filter(e => e.source === 'following');
-    const discoverEvents = socialEvents.filter(e => e.source === 'discover');
-
-    // Group likes in following events
-    const groupedFollowing = groupSocialEvents(followingEvents);
-    
-    // Filter discover to comments only and limit to 5
-    const filteredDiscover = filterDiscoverEvents(discoverEvents);
-
-    return {
-      following: groupedFollowing,
-      discover: filteredDiscover,
-    };
-  }, [socialEvents]);
-
-  const handleEventClick = (event: GroupedEvent) => {
+  const handleBookEventClick = (event: BookEvent | GroupedEvent) => {
     const bookObj = {
       id: event.book?.book_key || '',
       title: event.book?.title || 'Titre inconnu',
@@ -332,11 +419,23 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     setSelectedBookFocusComment(event.event_type === 'book_comment');
   };
 
+  const handleActivityEventClick = (event: ActivityEvent) => {
+    // For now, just set selected activity (can be extended later with ActivityDetailsModal)
+    setSelectedActivity(event.activity.id);
+  };
+
   // Pull-to-refresh handlers
   const handleRefresh = async () => {
     setIsRefreshing(true);
+    // Clear cache to force reload
+    if (tab === 'books') {
+      booksCacheRef.current = null;
+    } else {
+      activitiesCacheRef.current = null;
+    }
+    followingIdsRef.current = [];
     try {
-      await loadSocialEvents();
+      await loadData();
     } finally {
       setIsRefreshing(false);
       setPullDistance(0);
@@ -376,9 +475,12 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     setStartY(0);
   };
 
+  const currentEvents = tab === 'books' ? eventsBooks : eventsActivities;
+  const isEmpty = !loading && currentEvents.length === 0;
+
   return (
     <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
-      {/* Fixed Header - now truly fixed via AppHeader component */}
+      {/* Fixed Header */}
       <AppHeader 
         title="Social"
         showBack={true}
@@ -393,7 +495,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         }}
       >
         <div className="max-w-2xl mx-auto">
-          <AudienceTabs filter={filter} onFilterChange={setFilter} />
+          <SocialTabs tab={tab} onTabChange={setTab} />
         </div>
       </div>
 
@@ -407,7 +509,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
-          touchAction: 'pan-y', // Allow vertical panning only
+          touchAction: 'pan-y',
         }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -438,93 +540,41 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         >
           {loading ? (
             <div className="text-center py-12 text-stone-500">Chargement...</div>
+          ) : isEmpty ? (
+            <div className="text-center py-12">
+              <p className="text-stone-600 mb-2">
+                {tab === 'books'
+                  ? 'Aucune activité sur les livres pour l\'instant'
+                  : 'Aucune activité sur les activités pour l\'instant'}
+              </p>
+              <p className="text-sm text-stone-500">
+                Suivez des utilisateurs pour voir leurs activités
+              </p>
+            </div>
           ) : (
-            <>
-              {filter === 'all' ? (
-                <>
-                  {/* Following section */}
-                  {processedSocialEvents.following.length > 0 && (
-                    <div style={{ marginTop: '-6px' }}>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 px-1">
-                        Abonnements
-                      </h3>
-                      <div className="space-y-2">
-                        {processedSocialEvents.following.map((event) => (
-                          <FeedRow
-                            key={event.id}
-                            event={event}
-                            onActorClick={(actorId) => setSelectedUserId(actorId)}
-                            onBookClick={() => handleEventClick(event)}
-                            formatTimeAgo={formatTimeAgo}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Discover section */}
-                  {processedSocialEvents.discover.length > 0 && (
-                    <div className="mb-4">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 px-1 flex items-center gap-2">
-                        <span>Découvrir</span>
-                        <span className="text-[10px] font-normal text-stone-400">• Contenu populaire</span>
-                      </h3>
-                      <div className="space-y-2">
-                        {processedSocialEvents.discover.map((event) => (
-                          <FeedRow
-                            key={event.id}
-                            event={event}
-                            onActorClick={(actorId) => setSelectedUserId(actorId)}
-                            onBookClick={() => handleEventClick(event)}
-                            formatTimeAgo={formatTimeAgo}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
+            <div className="space-y-2">
+              {tab === 'books' ? (
+                eventsBooks.map((event) => (
+                  <FeedRow
+                    key={event.id}
+                    event={event}
+                    onActorClick={(actorId) => setSelectedUserId(actorId)}
+                    onBookClick={() => handleBookEventClick(event)}
+                    formatTimeAgo={formatTimeAgo}
+                  />
+                ))
               ) : (
-                (() => {
-                  const eventsToShow = filter === 'following' 
-                    ? processedSocialEvents.following 
-                    : socialEvents.filter(e => e.source !== 'discover');
-                  const grouped = groupSocialEvents(eventsToShow);
-                  
-                  if (grouped.length > 0) {
-                    return (
-                      <div className="space-y-2">
-                        {grouped.map((event) => (
-                          <FeedRow
-                            key={event.id}
-                            event={event}
-                            onActorClick={(actorId) => setSelectedUserId(actorId)}
-                            onBookClick={() => handleEventClick(event)}
-                            formatTimeAgo={formatTimeAgo}
-                          />
-                        ))}
-                      </div>
-                    );
-                  }
-                  return null;
-                })()
+                eventsActivities.map((event) => (
+                  <FeedRowActivity
+                    key={event.id}
+                    event={event}
+                    onActorClick={(actorId) => setSelectedUserId(actorId)}
+                    onActivityClick={() => handleActivityEventClick(event)}
+                    formatTimeAgo={formatTimeAgo}
+                  />
+                ))
               )}
-
-              {/* Empty state */}
-              {!loading && 
-                processedSocialEvents.following.length === 0 && 
-                processedSocialEvents.discover.length === 0 && (
-                <div className="text-center py-12">
-                  <p className="text-stone-600 mb-2">Aucune activité sociale</p>
-                  <p className="text-sm text-stone-500">
-                    {filter === 'following'
-                      ? 'Suivez des utilisateurs pour voir leurs activités'
-                      : filter === 'me'
-                      ? 'Vos likes et commentaires apparaîtront ici'
-                      : 'Suivez des utilisateurs pour voir leurs activités dans votre fil'}
-                  </p>
-                </div>
-              )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -554,4 +604,3 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     </div>
   );
 }
-
