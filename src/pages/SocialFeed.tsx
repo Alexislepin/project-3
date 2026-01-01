@@ -73,7 +73,6 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   const [selectedBook, setSelectedBook] = useState<any | null>(null);
   const [selectedBookInitialTab, setSelectedBookInitialTab] = useState<'summary' | 'comments'>('summary');
   const [selectedBookFocusComment, setSelectedBookFocusComment] = useState(false);
-  const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
   
   // Cache to avoid reloading when switching tabs
   const booksCacheRef = useRef<BookEvent[] | null>(null);
