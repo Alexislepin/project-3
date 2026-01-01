@@ -38,21 +38,37 @@ export function getLevelFromXp(xpTotal: number): number {
   
   // Level N starts at 50×N²
   // Find the largest N such that 50×N² <= xpTotal
-  // Then level = N
-  // We solve: 50×N² <= xpTotal => N <= sqrt(xpTotal/50)
-  const level = Math.floor(Math.sqrt(xpTotal / 50));
-  
-  // Ensure we're in the correct level range
+  // Level 1: [0, 200) → 50×1² = 50, but we want level 1 for xp < 200
+  // Level 2: [200, 1250) → 50×2² = 200
+  // Level 3: [1250, 5000) → 50×3² = 1250
   // Level N: [50×N², 50×(N+1)²)
-  const levelStart = 50 * level * level;
-  const nextLevelStart = 50 * (level + 1) * (level + 1);
   
-  if (xpTotal >= levelStart && xpTotal < nextLevelStart) {
-    return level;
+  // We need to find the level N where: 50×N² <= xpTotal < 50×(N+1)²
+  // Solve: N² <= xpTotal/50 < (N+1)²
+  // N <= sqrt(xpTotal/50) < N+1
+  // So N = floor(sqrt(xpTotal/50))
+  
+  // But we need to handle edge cases:
+  // - xpTotal = 200 → sqrt(200/50) = 2 → level 2 ✓
+  // - xpTotal = 199 → sqrt(199/50) ≈ 1.99 → floor = 1 → level 1 ✓
+  // - xpTotal = 1250 → sqrt(1250/50) = 5 → floor = 5, but we want level 3
+  
+  // Actually, the formula should be:
+  // Level N starts at 50×N²
+  // So for xpTotal, find the largest N where 50×N² <= xpTotal
+  // But level 1 is special: it's 0 to 199
+  
+  // Iterative approach: find the level
+  let level = 1;
+  let nextLevelStart = 200; // 50 × 2²
+  
+  while (xpTotal >= nextLevelStart) {
+    level++;
+    const nextN = level + 1;
+    nextLevelStart = 50 * nextN * nextN;
   }
   
-  // Fallback: if somehow we're outside the range, calculate directly
-  return Math.max(1, Math.floor(Math.sqrt(xpTotal / 50)));
+  return level;
 }
 
 /**
