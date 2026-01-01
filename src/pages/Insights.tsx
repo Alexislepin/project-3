@@ -636,7 +636,19 @@ export function Insights() {
             {/* Level Progress Bar */}
             {contextProfile?.xp_total !== undefined && (
               <div className="mb-6">
-                <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
+                  </div>
+                  {/* Leaderboard Button */}
+                  <button
+                    onClick={openLeaderboard}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium shrink-0"
+                  >
+                    <Trophy className="w-4 h-4" />
+                    Classement
+                  </button>
+                </div>
               </div>
             )}
 
