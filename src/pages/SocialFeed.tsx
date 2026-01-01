@@ -560,11 +560,12 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         )}
 
         <div 
-          className="px-4 pb-4" 
+          className="px-4 pb-4 pt-0" 
           style={{ 
             transform: `translateY(${pullDistance}px)`,
             paddingBottom: 'calc(96px + env(safe-area-inset-bottom))',
-            paddingTop: '0', // Remove any extra top padding
+            paddingTop: '0',
+            marginTop: '0',
           }}
         >
           {loading ? (
