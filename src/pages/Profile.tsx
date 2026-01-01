@@ -125,11 +125,14 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
       loadStreak();
     };
 
-    const handleXpUpdated = async () => {
+    const handleXpUpdated = async (event?: any) => {
       // ✅ Source de vérité unique : refresh depuis DB uniquement
       // ❌ Ne pas modifier le state local directement
+      console.log('[Profile] xp-updated event received', event?.detail);
       if (user?.id) {
         await refreshProfile(user.id);
+        // Also reload local profile to ensure UI updates
+        loadProfile();
       }
     };
 

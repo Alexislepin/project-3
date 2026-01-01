@@ -395,11 +395,14 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
           if (xpError) {
             console.error('[award_xp] failed', xpError);
-          } else if (xpResult) {
+          } else if (xpResult !== null && xpResult !== undefined) {
+            console.log('[award_xp] success', { xp, xpResult, durationMinutes, pagesRead });
             // Dispatch xp-updated event to refresh UI
             window.dispatchEvent(new CustomEvent('xp-updated', {
               detail: { xp_total: xpResult }
             }));
+          } else {
+            console.warn('[award_xp] no result returned', { xp, durationMinutes, pagesRead });
           }
         }
       } catch (error) {
