@@ -121,7 +121,7 @@ export async function uploadFileToBucket({
       cacheControl: '3600',
     });
 
-    if (error) {
+  if (error) {
       console.error('[uploadFileToBucket] Upload error:', {
         bucket,
         path,

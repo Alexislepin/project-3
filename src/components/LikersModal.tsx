@@ -71,27 +71,27 @@ export function LikersModal({
                 const avatarUrl = addCacheBuster(resolved, u?.updated_at);
                 
                 return (
-                  <button
-                    key={u.id}
-                    onClick={() => onUserClick?.(u.id)}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-black/5 transition-colors"
-                  >
-                    <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
+                <button
+                  key={u.id}
+                  onClick={() => onUserClick?.(u.id)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-black/5 transition-colors"
+                >
+                  <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
                       {avatarUrl ? (
-                        <img
+                      <img
                           src={avatarUrl}
-                          alt={u.display_name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        (u.display_name || 'U').charAt(0).toUpperCase()
-                      )}
-                    </div>
-                    <div className="text-left flex-1 min-w-0">
-                      <div className="font-semibold text-sm text-stone-900 truncate">{u.display_name || 'Utilisateur'}</div>
-                      <div className="text-xs text-stone-500 truncate">@{u.username || ''}</div>
-                    </div>
-                  </button>
+                        alt={u.display_name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      (u.display_name || 'U').charAt(0).toUpperCase()
+                    )}
+                  </div>
+                  <div className="text-left flex-1 min-w-0">
+                    <div className="font-semibold text-sm text-stone-900 truncate">{u.display_name || 'Utilisateur'}</div>
+                    <div className="text-xs text-stone-500 truncate">@{u.username || ''}</div>
+                  </div>
+                </button>
                 );
               })}
             </div>

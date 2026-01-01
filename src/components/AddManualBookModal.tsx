@@ -57,18 +57,18 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
     
     try {
       const result = await pickImageBlob();
-      
-      if (!result) {
-        return; // User cancelled
-      }
+    
+    if (!result) {
+      return; // User cancelled
+    }
 
       const { blob, ext, contentType } = result;
-      setCoverBlob(blob);
-      setCoverExt(ext);
-      
-      // Create preview URL from blob
-      const previewUrl = URL.createObjectURL(blob);
-      setCoverPreview(previewUrl);
+    setCoverBlob(blob);
+    setCoverExt(ext);
+    
+    // Create preview URL from blob
+    const previewUrl = URL.createObjectURL(blob);
+    setCoverPreview(previewUrl);
     } catch (err: any) {
       console.error('[AddManualBookModal] pick error', err);
       setError('Erreur lors de la sélection de l\'image');

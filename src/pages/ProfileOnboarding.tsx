@@ -241,18 +241,18 @@ export function ProfileOnboarding() {
         // Cleanup blob URL
         URL.revokeObjectURL(blobUrl);
 
-        const { error: dbErr } = await supabase
-          .from('user_profiles')
-          .update({ avatar_url: publicUrl })
-          .eq('id', user.id);
+      const { error: dbErr } = await supabase
+        .from('user_profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
 
-        if (dbErr) throw dbErr;
+      if (dbErr) throw dbErr;
 
-        // ✅ Mettre à jour la preview avec l'URL publique
-        setAvatarPreviewUrl(publicUrl);
-        
-        // ✅ Refresh profile pour synchroniser
-        await refreshProfile();
+      // ✅ Mettre à jour la preview avec l'URL publique
+      setAvatarPreviewUrl(publicUrl);
+      
+      // ✅ Refresh profile pour synchroniser
+      await refreshProfile();
       } catch (uploadErr: any) {
         // Cleanup blob URL even on error
         URL.revokeObjectURL(blobUrl);
@@ -329,8 +329,8 @@ export function ProfileOnboarding() {
         path,
         fileUriOrUrl: photo.webPath,
         contentType: `image/${finalExt === 'png' ? 'png' : 'jpeg'}`,
-        upsert: true,
-      });
+          upsert: true,
+        });
 
       const { error: dbErr } = await supabase
         .from('user_profiles')

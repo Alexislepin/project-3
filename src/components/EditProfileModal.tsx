@@ -69,21 +69,21 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
     try {
       if (import.meta.env.DEV) {
         console.log('[EditProfileModal] pick start');
-      }
-      
+    }
+    
       const result = await pickImageBlob();
-      
-      if (!result) {
+    
+    if (!result) {
         if (import.meta.env.DEV) {
           console.log('[EditProfileModal] pick cancelled');
         }
         return;
-      }
+    }
 
       const { blob, contentType, ext } = result;
-      setAvatarBlob(blob);
-      setAvatarExt(ext);
-      
+    setAvatarBlob(blob);
+    setAvatarExt(ext);
+    
       if (import.meta.env.DEV) {
         console.log('[EditProfileModal] pick success', {
           platform: Capacitor.getPlatform(),
@@ -94,8 +94,8 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
       }
       
       // Set preview immediately (local preview from blob)
-      const previewUrl = URL.createObjectURL(blob);
-      setAvatarPreview(previewUrl);
+    const previewUrl = URL.createObjectURL(blob);
+    setAvatarPreview(previewUrl);
       
       // Don't auto-upload - user must click "Enregistrer la photo"
     } catch (err: any) {
@@ -382,14 +382,14 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                   Choisissez une photo pour votre profil
                 </p>
                 <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={handleChangeAvatar}
+                <button
+                  type="button"
+                  onClick={handleChangeAvatar}
                     onPointerDown={(e) => e.stopPropagation()}
                     disabled={uploadingAvatar || saving || shouldBlockClose()}
-                    className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
-                  >
-                    <ImageIcon className="w-4 h-4" />
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm"
+                >
+                  <ImageIcon className="w-4 h-4" />
                     <span>Choisir une photo</span>
                   </button>
                   {avatarBlob && (
@@ -401,7 +401,7 @@ export function EditProfileModal({ profile, onClose, onSave }: EditProfileModalP
                     >
                       <Check className="w-4 h-4" />
                       <span>Enregistrer la photo</span>
-                    </button>
+                </button>
                   )}
                 </div>
                 <p className="text-xs text-stone-500 mt-2">

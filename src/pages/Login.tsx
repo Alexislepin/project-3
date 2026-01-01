@@ -133,8 +133,8 @@ export function LoginPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="block text-sm font-medium text-text-main-light">
-                  Mot de passe
-                </label>
+                Mot de passe
+              </label>
                 <button
                   type="button"
                   onClick={() => {

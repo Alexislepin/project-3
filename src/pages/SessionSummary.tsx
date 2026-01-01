@@ -6,7 +6,6 @@ import { BookCover } from '../components/BookCover';
 import { AppHeader } from '../components/AppHeader';
 import { updateStreakAfterActivity } from '../utils/streak';
 import { Toast } from '../components/Toast';
-import { calculateReadingXp, awardXp, checkAndAwardGoalXp } from '../lib/xpRewards';
 import { Camera as CapacitorCamera } from '@capacitor/camera';
 import { Capacitor } from '@capacitor/core';
 import { uploadFileToBucket } from '../lib/storageUpload';
@@ -320,34 +319,6 @@ export function SessionSummary({
 
     // Update streak after activity is finalized
     await updateStreakAfterActivity(user.id);
-
-    // Award XP for reading session (if it's a reading activity)
-    if (durationMinutes >= 5) {
-      const xpAmount = calculateReadingXp(durationMinutes, pagesRead);
-      if (xpAmount > 0) {
-        const newXpTotal = await awardXp(
-          user.id,
-          xpAmount,
-          'reading',
-          {
-            pagesRead,
-            durationMinutes,
-            bookId,
-            bookTitle,
-          }
-        );
-        
-        if (newXpTotal !== null) {
-          setToast({
-            message: `+${xpAmount} XP pour cette session 📚`,
-            type: 'success',
-          });
-        }
-      }
-    }
-
-    // Check and award XP for completed goals (daily/weekly)
-    await checkAndAwardGoalXp(user.id);
 
     setSaving(false);
     onComplete();

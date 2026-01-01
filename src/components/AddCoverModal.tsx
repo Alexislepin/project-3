@@ -41,13 +41,13 @@ export function AddCoverModal({
       }
       return;
     }
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    setPreviewUrl(null);
-    setCoverBlob(null);
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setPreviewUrl(null);
+      setCoverBlob(null);
     setUploadToast(null);
-    onClose();
+      onClose();
   };
 
   // Cleanup blob URLs on unmount
@@ -80,21 +80,21 @@ export function AddCoverModal({
 
     try {
       const result = await pickImageBlob();
-      
-      if (!result) {
+    
+    if (!result) {
         if (import.meta.env.DEV) {
           console.log('[AddCoverModal] User cancelled image selection');
         }
-        return; // User cancelled
-      }
+      return; // User cancelled
+    }
 
       const { blob, contentType, ext } = result;
-      setCoverBlob(blob);
-      setCoverExt(ext);
-      
-      // Create preview URL from blob
-      const preview = URL.createObjectURL(blob);
-      setPreviewUrl(preview);
+    setCoverBlob(blob);
+    setCoverExt(ext);
+    
+    // Create preview URL from blob
+    const preview = URL.createObjectURL(blob);
+    setPreviewUrl(preview);
 
       if (import.meta.env.DEV) {
         console.log('[AddCoverModal] Image selected', {
@@ -148,7 +148,7 @@ export function AddCoverModal({
 
       if (uploadError) {
         console.error('[AddCoverModal] Upload error', {
-          bucket: 'book-covers',
+        bucket: 'book-covers',
           path,
           error: uploadError,
           code: uploadError.statusCode,
@@ -166,7 +166,7 @@ export function AddCoverModal({
       }
 
       if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] Upload OK', { path, publicUrl });
+      console.log('[AddCoverModal] Upload OK', { path, publicUrl });
       }
 
       // Update user_books.custom_cover_url with public URL (not path)
@@ -189,7 +189,7 @@ export function AddCoverModal({
       }
 
       if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] DB update OK');
+      console.log('[AddCoverModal] DB update OK');
       }
 
       // Update preview with public URL

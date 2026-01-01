@@ -688,29 +688,16 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         {/* Level Progress Bar */}
         {contextProfile?.xp_total !== undefined && (
           <div className="px-4 pt-4 pb-2">
-            <div
-              role="button"
-              tabIndex={0}
-              className="w-full cursor-pointer"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('[Profile] Opening XP history modal');
-                setShowXpHistory(true);
-                requestAnimationFrame(() => {
-                  console.log('[Profile] showXpHistory should be true now');
-                });
+            <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
+            <button
+              onClick={() => {
+                window.location.href = '/levels';
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  console.log('[Profile] Opening XP history modal (keyboard)');
-                  setShowXpHistory(true);
-                }
-              }}
+              className="mt-2 text-xs text-primary cursor-pointer hover:opacity-80 transition-opacity"
+              type="button"
             >
-              <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
-            </div>
+              Découvrir comment gagner de l'XP et monter de niveau
+            </button>
           </div>
         )}
         

@@ -129,27 +129,6 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
       // Update streak after activity is created
       await updateStreakAfterActivity(user.id);
 
-      // Award XP for reading session (if it's a reading activity with sufficient duration)
-      if (activityType === 'reading' && parseInt(duration) >= 5) {
-        const { calculateReadingXp, awardXp, checkAndAwardGoalXp } = await import('../lib/xpRewards');
-        const xpAmount = calculateReadingXp(parseInt(duration), parseInt(pages) || 0);
-        if (xpAmount > 0) {
-          await awardXp(
-            user.id,
-            xpAmount,
-            'reading',
-            {
-              pagesRead: parseInt(pages) || 0,
-              durationMinutes: parseInt(duration),
-              bookId: selectedBook,
-            }
-          );
-        }
-        
-        // Check and award XP for completed goals
-        await checkAndAwardGoalXp(user.id);
-      }
-
       onComplete();
     }
 

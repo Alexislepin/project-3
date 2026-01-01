@@ -637,14 +637,6 @@ export function Insights() {
             {contextProfile?.xp_total !== undefined && (
               <div className="mb-6">
                 <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
-                {/* Leaderboard Button */}
-                <button
-                  onClick={openLeaderboard}
-                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
-                >
-                  <Trophy className="w-4 h-4" />
-                  Classement
-                </button>
               </div>
             )}
 

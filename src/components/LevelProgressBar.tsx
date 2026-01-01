@@ -12,19 +12,7 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
 
   if (variant === 'compact') {
     return (
-      <div
-        className={`flex items-center gap-2.5 ${className} ${onClick ? 'cursor-pointer select-none' : ''}`}
-        role={onClick ? 'button' : undefined}
-        tabIndex={onClick ? 0 : undefined}
-        onClick={onClick}
-        onKeyDown={(e) => {
-          if (!onClick) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onClick();
-          }
-        }}
-      >
+      <div className={`flex items-center gap-2.5 ${className}`}>
         <span className="text-xs font-semibold text-stone-800 whitespace-nowrap">
           Niveau {progress.level}
         </span>
@@ -39,12 +27,6 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         <span className="text-xs font-medium text-stone-600 whitespace-nowrap">
           {formatXp(progress.intoLevel)} / {formatXp(progress.needed)} XP
         </span>
-
-        {onClick && (
-          <span className="ml-2 px-2.5 py-1 text-sm font-bold text-black bg-stone-100 rounded-full whitespace-nowrap border border-stone-200">
-            +XP
-          </span>
-        )}
       </div>
     );
   }
@@ -57,17 +39,6 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
           <span className="text-sm font-semibold text-[#111]">Niveau {progress.level}</span>
           <span className="text-xs font-normal text-stone-500">({formatXp(progress.xpTotal)} XP total)</span>
         </div>
-        {onClick && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-            className="px-2.5 py-1 text-sm font-bold text-black bg-stone-100 rounded-full whitespace-nowrap border border-stone-200 cursor-pointer hover:bg-stone-200 transition-colors"
-          >
-            +XP
-          </span>
-        )}
       </div>
       
       <div className="flex items-center gap-2.5 mb-2">
@@ -82,23 +53,9 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         </span>
       </div>
       
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-normal text-stone-500 leading-tight">
-          {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
-        </p>
-        {onClick && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-            className="text-xs text-stone-600 hover:text-stone-900 hover:underline font-medium"
-            type="button"
-          >
-            Comment ça marche les niveaux ?
-          </button>
-        )}
-      </div>
+      <p className="text-xs font-normal text-stone-500 leading-tight">
+        {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
+      </p>
     </div>
   );
 }
