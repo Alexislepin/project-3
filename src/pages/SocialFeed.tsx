@@ -532,7 +532,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: '88px', // Header (56px) + Tabs section (32px: py-1.5 + button height)
+          paddingTop: '94px', // Header (56px) + Tabs section (38px: container py-1.5 + button py-1.5 + text height)
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
@@ -581,7 +581,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 mt-0">
               {tab === 'books' ? (
                 eventsBooks.map((event) => (
                   <FeedRow
