@@ -1,16 +1,69 @@
 import { X, BookOpen, Target, Zap, TrendingUp } from 'lucide-react';
 import { getLevelProgress, formatXp } from '../lib/leveling';
 import { useAuth } from '../contexts/AuthContext';
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { computeStreakFromActivities } from '../lib/readingStreak';
 
 interface LevelDetailsModalProps {
   onClose: () => void;
 }
 
+// Streak milestones (must match what's displayed in "Régularité (Streak)" section)
+const STREAK_MILESTONES = [
+  { days: 2, xp: 5 },
+  { days: 5, xp: 15 },
+  { days: 10, xp: 30 },
+  { days: 30, xp: 100 },
+];
+
 export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
-  const { profile, profile: contextProfile } = useAuth();
+  const { profile, profile: contextProfile, user } = useAuth();
   // Use freshest xp_total (local profile state updated by xp-updated event)
   const xpTotal = (profile?.xp_total ?? contextProfile?.xp_total) || 0;
   const progress = getLevelProgress(xpTotal);
+  
+  // Streak state
+  const [currentStreak, setCurrentStreak] = useState<number | null>(null);
+
+  // Calculate next streak milestone
+  const getNextStreakMilestone = (streak: number | null) => {
+    if (streak === null) return null;
+    // Find first milestone where milestone.days > currentStreak
+    const next = STREAK_MILESTONES.find(m => m.days > streak);
+    return next || null; // null if all milestones reached
+  };
+
+  const nextStreakMilestone = getNextStreakMilestone(currentStreak);
+
+  // Load streak from activities
+  useEffect(() => {
+    if (!user) return;
+
+    const loadStreak = async () => {
+      try {
+        const { data: activities } = await supabase
+          .from('activities')
+          .select('created_at, pages_read, duration_minutes, type')
+          .eq('user_id', user.id)
+          .eq('type', 'reading')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (activities) {
+          const streak = computeStreakFromActivities(activities);
+          setCurrentStreak(streak);
+        } else {
+          setCurrentStreak(null);
+        }
+      } catch (error) {
+        console.error('[LevelDetailsModal] Error loading streak:', error);
+        setCurrentStreak(null);
+      }
+    };
+
+    loadStreak();
+  }, [user]);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-[100]" onClick={onClose}>
