@@ -126,6 +126,29 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
           .eq('id', user.id);
       }
 
+      // Award XP for reading session
+      if (activityType === 'reading' && parseInt(duration) >= 5) {
+        const { calculateReadingXp } = await import('../lib/calculateReadingXp');
+        const xp = calculateReadingXp(parseInt(duration) || 0, parseInt(pages) || 0);
+        
+        if (xp > 0) {
+          const { data: xpResult, error: xpError } = await supabase.rpc('award_xp', {
+            p_user_id: user.id,
+            p_amount: xp,
+            p_source: 'reading',
+          });
+
+          if (xpError) {
+            console.error('[LogActivity] Error awarding XP:', xpError);
+          } else if (xpResult) {
+            // Dispatch xp-updated event to refresh UI
+            window.dispatchEvent(new CustomEvent('xp-updated', {
+              detail: { xp_total: xpResult }
+            }));
+          }
+        }
+      }
+
       // Update streak after activity is created
       await updateStreakAfterActivity(user.id);
 
