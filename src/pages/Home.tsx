@@ -120,13 +120,13 @@ export function Home() {
         .gt('xp_total', userProfile.xp_total);
 
       // Count total users in the system (all users with profiles)
-      const { count: total, error: totalError } = await supabase
+      const { count: total } = await supabase
         .from('user_profiles')
         .select('id', { count: 'exact', head: true });
 
       const rank = (higherRankUsers?.length || 0) + 1;
 
-      setRanking({ rank, total });
+      setRanking({ rank, total: total || 0 });
     } catch (error) {
       console.error('[loadRanking] Error:', error);
       setRanking(null);
