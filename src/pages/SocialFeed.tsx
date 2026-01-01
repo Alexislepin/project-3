@@ -436,9 +436,17 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   // Measure header and tabs height dynamically
   useLayoutEffect(() => {
     const compute = () => {
-      const h = headerRef.current?.offsetHeight ?? 0;
+      // Get the actual AppHeader element (first child of headerRef)
+      const headerElement = headerRef.current?.querySelector('[class*="sticky"]') as HTMLElement;
+      const h = headerElement?.offsetHeight ?? headerRef.current?.offsetHeight ?? 0;
       const t = tabsRef.current?.offsetHeight ?? 0;
-      console.log('[SocialFeed] Height calculation:', { header: h, tabs: t, total: h + t });
+      console.log('[SocialFeed] Height calculation:', { 
+        headerWrapper: headerRef.current?.offsetHeight,
+        headerElement: headerElement?.offsetHeight,
+        header: h, 
+        tabs: t, 
+        total: h + t 
+      });
       setHeaderHeight(h);
       setTopOffset(h + t);
     };
