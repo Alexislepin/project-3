@@ -710,8 +710,19 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                 }
               }}
             >
-              <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="full" />
+              <LevelProgressBar 
+                xpTotal={contextProfile.xp_total || 0} 
+                variant="full"
+                onClick={() => setShowLevelDetails(true)}
+              />
             </div>
+            <button
+              onClick={() => setShowLevelDetails(true)}
+              className="mt-3 text-base font-medium text-stone-600 underline hover:text-stone-800 transition-colors cursor-pointer w-full text-center"
+              type="button"
+            >
+              Découvrir comment fonctionnent les niveaux
+            </button>
           </div>
         )}
         
@@ -821,6 +832,10 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             setShowLanguageSelector(false);
           }}
         />
+      )}
+
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
       )}
 
       {showXpHistory && (
