@@ -70,6 +70,7 @@ export function Home() {
   // Ranking state
   const [ranking, setRanking] = useState<{ rank: number; total: number } | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showLevelDetails, setShowLevelDetails] = useState(false);
   
   // Pull-to-refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
