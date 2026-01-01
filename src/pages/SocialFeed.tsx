@@ -112,7 +112,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   };
 
   // Fetch books feed (book_like, book_comment)
-  const fetchBooksFeed = async (followingIds: string[]) => {
+  const fetchBooksFeed = async (_followingIds: string[]) => {
     if (booksCacheRef.current) {
       setEventsBooks(booksCacheRef.current);
       setLoading(false);
@@ -317,7 +317,6 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       }
 
       const activitiesMap = new Map((activitiesResult.data || []).map(a => [a.id, a]));
-      const actorsMap = new Map((actorsResult.data || []).map(a => [a.id, a]));
 
       // Get owner user IDs from activities
       const ownerUserIds = [...new Set((activitiesResult.data || []).map(a => a.user_id))].filter((id): id is string => !!id);
