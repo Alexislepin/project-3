@@ -106,6 +106,9 @@ export function ActivityDetailsPage() {
   const ActivityIcon = activity ? activityIcons[activity.type as keyof typeof activityIcons] || BookOpen : BookOpen;
   const activityLabel = activity ? activityLabels[activity.type as keyof typeof activityLabels] || 'Activité' : 'Activité';
   const ownerName = owner?.display_name || owner?.username || 'Utilisateur';
+  
+  // Clean activity title: remove "Read " prefix if present
+  const cleanTitle = activity?.title?.replace(/^Read\s+/i, '') || '';
 
   if (loading) {
     return (
@@ -150,7 +153,7 @@ export function ActivityDetailsPage() {
                 <ActivityIcon className="w-6 h-6 text-primary" />
               </div>
               <div className="flex-1">
-                <h1 className="text-xl font-bold text-stone-900">{activity.title}</h1>
+                <h1 className="text-xl font-bold text-stone-900">{cleanTitle || activity.title}</h1>
                 <p className="text-sm text-stone-500">{activityLabel}</p>
               </div>
             </div>
