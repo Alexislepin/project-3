@@ -906,7 +906,6 @@ export function Home() {
 
       {selectedUserId && (
         <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
-          {console.log('[Home] ✅ Rendering UserProfileView with userId:', selectedUserId)}
           <UserProfileView
             userId={selectedUserId}
             onClose={() => {
