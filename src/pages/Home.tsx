@@ -13,6 +13,7 @@ import { WeeklySummaryCarousel } from '../components/WeeklySummaryCarousel';
 import { StreakBadge } from '../components/StreakBadge';
 import { SocialFeed } from '../pages/SocialFeed';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
@@ -69,6 +70,7 @@ export function Home() {
   // Ranking state
   const [ranking, setRanking] = useState<{ rank: number; total: number } | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showLevelDetails, setShowLevelDetails] = useState(false);
   
   // Pull-to-refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -118,13 +120,13 @@ export function Home() {
         .gt('xp_total', userProfile.xp_total);
 
       // Count total users in the system (all users with profiles)
-      const { count: total } = await supabase
+      const { count: total, error: totalError } = await supabase
         .from('user_profiles')
         .select('id', { count: 'exact', head: true });
 
       const rank = (higherRankUsers?.length || 0) + 1;
 
-      setRanking({ rank, total: total || 0 });
+      setRanking({ rank, total });
     } catch (error) {
       console.error('[loadRanking] Error:', error);
       setRanking(null);
@@ -782,6 +784,7 @@ export function Home() {
                 <LevelProgressBar 
                   xpTotal={(profile?.xp_total ?? contextProfile?.xp_total) || 0} 
                   variant="compact"
+                  onClick={() => setShowLevelDetails(true)}
                 />
               </div>
             )}
@@ -903,6 +906,7 @@ export function Home() {
 
       {selectedUserId && (
         <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
+          {console.log('[Home] ✅ Rendering UserProfileView with userId:', selectedUserId)}
           <UserProfileView
             userId={selectedUserId}
             onClose={() => {
@@ -943,6 +947,9 @@ export function Home() {
         />
       )}
 
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
+      )}
 
       {/* Social feed overlay */}
       {showSocial && (
