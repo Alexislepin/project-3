@@ -113,7 +113,7 @@ export function ActivityDetailsPage() {
   if (loading) {
     return (
       <div className="h-screen max-w-2xl mx-auto bg-background-light">
-        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
+        <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
         <div className="flex items-center justify-center h-full">
           <div className="text-stone-500">Chargement...</div>
         </div>
@@ -142,7 +142,7 @@ export function ActivityDetailsPage() {
 
   return (
     <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
-      <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
+      <AppHeader title="Détails de l'activité" showBack={true} onBack={() => window.location.href = '/social'} />
       
       <div className="h-full overflow-y-auto" style={{ paddingTop: '56px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}>
         <div className="p-4 space-y-4">
