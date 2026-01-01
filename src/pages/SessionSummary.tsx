@@ -433,8 +433,8 @@ export function SessionSummary({
               isbn={bookData?.isbn || null}
               isbn13={bookData?.isbn13 || null}
               isbn10={bookData?.isbn10 || null}
-              cover_i={bookData?.openlibrary_cover_id ? parseInt(bookData.openlibrary_cover_id) || null : null}
-              openlibrary_cover_id={bookData?.openlibrary_cover_id || null}
+              cover_i={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
+              openlibrary_cover_id={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
               googleCoverUrl={bookData?.google_books_id ? `https://books.google.com/books/content?id=${bookData.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
               className="size-16 rounded-lg shrink-0"
               bookId={bookId}
