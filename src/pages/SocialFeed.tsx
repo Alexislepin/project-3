@@ -442,17 +442,25 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       
       // Measure tabs container height
       const tabsContainer = tabsRef.current;
-      const t = tabsContainer?.offsetHeight ?? 0;
+      if (!tabsContainer) return;
       
-      // Calculate the bottom position of tabs (header top + header height + tabs height)
-      // Since header is sticky and tabs are fixed, we need: header height + tabs height
-      const totalHeight = h + t;
+      const t = tabsContainer.offsetHeight;
+      
+      // Get the actual bottom position of tabs from top of viewport
+      const tabsRect = tabsContainer.getBoundingClientRect();
+      const tabsBottom = tabsRect.top + tabsRect.height;
+      
+      // Use the actual bottom position as padding-top
+      // This accounts for any spacing issues
+      const totalHeight = tabsBottom;
       
       console.log('[SocialFeed] Height calculation:', { 
         header: h, 
         tabs: t, 
-        total: totalHeight,
-        tabsRect: tabsContainer?.getBoundingClientRect()
+        tabsTop: tabsRect.top,
+        tabsBottom: tabsBottom,
+        calculatedTotal: h + t,
+        usingBottom: totalHeight
       });
       
       setHeaderHeight(h);
