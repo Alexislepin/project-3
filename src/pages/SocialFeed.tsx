@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { FeedRow } from '../components/FeedRow';
@@ -85,6 +85,12 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   const [isPulling, setIsPulling] = useState(false);
   const [startY, setStartY] = useState(0);
   const [scrollContainerRef, setScrollContainerRef] = useState<HTMLDivElement | null>(null);
+  
+  // Dynamic header/tabs height measurement
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const [topOffset, setTopOffset] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
   
   const { user } = useAuth();
 
@@ -516,17 +522,20 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   return (
     <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
       {/* Fixed Header */}
-      <AppHeader 
-        title="Social"
-        showBack={true}
-        onBack={onClose || (() => window.location.href = '/home')}
-      />
+      <div ref={headerRef}>
+        <AppHeader 
+          title="Social"
+          showBack={true}
+          onBack={onClose || (() => window.location.href = '/home')}
+        />
+      </div>
       
       {/* Fixed Tabs section (below header) */}
       <div 
+        ref={tabsRef}
         className="fixed left-0 right-0 z-40"
         style={{
-          top: '56px', // Below AppHeader (AppHeader already handles safe-area)
+          top: `${headerHeight}px`, // Dynamically positioned below AppHeader
         }}
       >
         <div className="max-w-2xl mx-auto">
@@ -539,7 +548,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: '88px', // Header (56px) + Tabs section (32px: py-1.5 container + button height)
+          paddingTop: `${topOffset}px`, // Dynamically calculated: header + tabs height
           paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
