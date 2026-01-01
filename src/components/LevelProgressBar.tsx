@@ -12,25 +12,38 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
 
   if (variant === 'compact') {
     return (
-      <div className={`flex items-center gap-2.5 ${className}`}>
-        <span className="text-xs font-semibold text-stone-800 whitespace-nowrap">Niveau {progress.level}</span>
+      <div
+        className={`flex items-center gap-2.5 ${className} ${onClick ? 'cursor-pointer select-none' : ''}`}
+        role={onClick ? 'button' : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (!onClick) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+      >
+        <span className="text-xs font-semibold text-stone-800 whitespace-nowrap">
+          Niveau {progress.level}
+        </span>
+
         <div className="flex-1 h-0.5 bg-stone-200 rounded-full overflow-hidden">
           <div
             className="h-full bg-primary transition-all duration-500 ease-out rounded-full"
             style={{ width: `${progress.progress}%` }}
           />
         </div>
+
         <span className="text-xs font-medium text-stone-600 whitespace-nowrap">
           {formatXp(progress.intoLevel)} / {formatXp(progress.needed)} XP
         </span>
+
         {onClick && (
-          <button
-            type="button"
-            onClick={onClick}
-            className="ml-1 text-xs font-semibold text-primary hover:underline whitespace-nowrap"
-          >
+          <span className="ml-1 text-xs font-semibold text-primary whitespace-nowrap">
             +XP
-          </button>
+          </span>
         )}
       </div>
     );

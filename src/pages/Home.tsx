@@ -779,10 +779,10 @@ export function Home() {
             />
             
             {/* Level Progress Bar (compact) - aligned with cards */}
-            {contextProfile?.xp_total !== undefined && (
+            {(profile?.xp_total ?? contextProfile?.xp_total) !== undefined && (
               <div className="px-4">
                 <LevelProgressBar 
-                  xpTotal={contextProfile.xp_total || 0} 
+                  xpTotal={(profile?.xp_total ?? contextProfile?.xp_total) || 0} 
                   variant="compact"
                   onClick={() => setShowLevelDetails(true)}
                 />
