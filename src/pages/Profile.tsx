@@ -58,6 +58,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [selectedLikedBook, setSelectedLikedBook] = useState<any | null>(null);
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [showXpHistory, setShowXpHistory] = useState(false);
+  const [showLevelDetails, setShowLevelDetails] = useState(false);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [readingSpeed7d, setReadingSpeed7d] = useState<number | null>(null); // pages/h
   const [readingPace7d, setReadingPace7d] = useState<number | null>(null);  // min/page
