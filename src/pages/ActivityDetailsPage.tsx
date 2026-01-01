@@ -129,7 +129,7 @@ export function ActivityDetailsPage() {
           <div className="text-center w-full max-w-md">
             <p className="text-stone-600 mb-4">{error || 'Activité introuvable'}</p>
             <button
-              onClick={() => navigate(-1)}
+              onClick={() => window.location.href = '/social'}
               className="px-6 py-3 rounded-xl bg-stone-900 text-white font-medium hover:bg-stone-800 transition-colors w-full"
             >
               Retour
