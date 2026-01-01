@@ -41,7 +41,7 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         </span>
 
         {onClick && (
-          <span className="ml-2 px-2 py-0.5 text-xs font-bold text-primary bg-primary/10 rounded-full whitespace-nowrap">
+          <span className="ml-2 px-2.5 py-1 text-sm font-bold text-primary bg-primary/15 rounded-full whitespace-nowrap border border-primary/20">
             +XP
           </span>
         )}
