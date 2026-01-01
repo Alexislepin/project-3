@@ -45,6 +45,12 @@ interface ActivityEvent {
     username?: string;
     avatar_url?: string;
   };
+  owner: {
+    id: string;
+    display_name?: string;
+    username?: string;
+    avatar_url?: string;
+  };
   event_type: 'activity_like' | 'activity_comment';
   activity: {
     id: string;
@@ -311,17 +317,39 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       const activitiesMap = new Map((activitiesResult.data || []).map(a => [a.id, a]));
       const actorsMap = new Map((actorsResult.data || []).map(a => [a.id, a]));
 
+      // Get owner user IDs from activities
+      const ownerUserIds = [...new Set((activitiesResult.data || []).map(a => a.user_id))].filter((id): id is string => !!id);
+      
+      // Fetch owner profiles (may overlap with actors, but we'll merge)
+      const { data: ownersData, error: ownersError } = ownerUserIds.length > 0
+        ? await supabase
+            .from('user_profiles')
+            .select('id, display_name, username, avatar_url')
+            .in('id', ownerUserIds)
+        : { data: [], error: null };
+
+      if (ownersError) {
+        console.error('[SocialFeed] Error fetching owners:', ownersError);
+      }
+
+      // Merge actors and owners into a single map
+      const allProfilesMap = new Map<string, any>();
+      (actorsResult.data || []).forEach(p => allProfilesMap.set(p.id, p));
+      (ownersData || []).forEach(p => allProfilesMap.set(p.id, p));
+
       // Combine reactions and comments into events
       const events: ActivityEvent[] = [];
 
       // Add reactions as activity_like events
       reactions.forEach(reaction => {
         const activity = activitiesMap.get(reaction.activity_id);
-        const actor = actorsMap.get(reaction.user_id);
-        if (activity && actor) {
+        const actor = allProfilesMap.get(reaction.user_id);
+        const owner = activity ? allProfilesMap.get(activity.user_id) : null;
+        if (activity && actor && owner) {
           events.push({
             id: reaction.id,
             actor,
+            owner,
             event_type: 'activity_like',
             activity: {
               id: activity.id,
@@ -339,11 +367,13 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       // Add comments as activity_comment events
       comments.forEach(comment => {
         const activity = activitiesMap.get(comment.activity_id);
-        const actor = actorsMap.get(comment.user_id);
-        if (activity && actor) {
+        const actor = allProfilesMap.get(comment.user_id);
+        const owner = activity ? allProfilesMap.get(activity.user_id) : null;
+        if (activity && actor && owner) {
           events.push({
             id: comment.id,
             actor,
+            owner,
             event_type: 'activity_comment',
             activity: {
               id: activity.id,
@@ -419,9 +449,12 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     setSelectedBookFocusComment(event.event_type === 'book_comment');
   };
 
-  const handleActivityEventClick = (event: ActivityEvent) => {
-    // For now, just set selected activity (can be extended later with ActivityDetailsModal)
-    setSelectedActivity(event.activity.id);
+  const handleActivityClick = (activityId: string) => {
+    // TODO: Implement ActivityDetailsModal or navigate to /activity/:id
+    // For now, just log and set selected activity
+    console.log('[SocialFeed] Activity clicked:', activityId);
+    setSelectedActivity(activityId);
+    // Future: Open ActivityDetailsModal or navigate to activity detail page
   };
 
   // Pull-to-refresh handlers
@@ -569,7 +602,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
                     key={event.id}
                     event={event}
                     onActorClick={(actorId) => setSelectedUserId(actorId)}
-                    onActivityClick={() => handleActivityEventClick(event)}
+                    onActivityClick={(activityId) => handleActivityClick(activityId)}
                     formatTimeAgo={formatTimeAgo}
                   />
                 ))

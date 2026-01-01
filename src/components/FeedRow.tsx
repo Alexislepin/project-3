@@ -46,7 +46,7 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
       >
         {/* Avatars stack */}
         <div className="flex -space-x-1.5 shrink-0">
-          {actors.slice(0, 3).map((actor, idx) => (
+          {actors.slice(0, 3).map((actor) => (
             <button
               key={actor.id}
               type="button"
@@ -91,7 +91,16 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
               </>
             )}
             {' '}ont aimé{' '}
-            <span className="font-semibold">{event.book?.title || 'ce livre'}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onBookClick();
+              }}
+              className="font-semibold hover:underline cursor-pointer"
+            >
+              {event.book?.title || 'ce livre'}
+            </button>
           </p>
           <p className="text-[10px] text-stone-400 mt-0.5">{formatTimeAgo(event.created_at)}</p>
         </div>
@@ -156,13 +165,22 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
                 e.stopPropagation();
                 onActorClick(event.actor.id);
               }}
-              className="font-semibold hover:underline"
+              className="font-semibold hover:underline cursor-pointer"
             >
               {actorName}
             </button>
             {' '}
             {event.event_type === 'book_like' ? 'a aimé' : 'a commenté'}{' '}
-            <span className="font-semibold">{event.book?.title || 'ce livre'}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onBookClick();
+              }}
+              className="font-semibold hover:underline cursor-pointer"
+            >
+              {event.book?.title || 'ce livre'}
+            </button>
           </p>
         </div>
         {event.event_type === 'book_comment' && event.comment_content && (
