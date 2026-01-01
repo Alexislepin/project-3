@@ -1,9 +1,11 @@
+import { useState, useEffect, useMemo } from 'react';
 import { Heart, MessageCircle, BookOpen, Dumbbell, Brain, Target, Quote } from 'lucide-react';
 import { formatDistanceToNow } from '../utils/dateUtils';
 import { BookCover } from './BookCover';
 import { ActivityMenu } from './ActivityMenu';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 
 interface ActivityQuote {
   text: string;
@@ -47,6 +49,7 @@ interface ActivityCardProps {
   onOpenLikers?: (activityId: string) => void;
   onEdit?: (activityId: string) => void;
   onDelete?: (activityId: string) => void;
+  onUserClick?: (userId: string) => void;
   variant?: 'default' | 'compact';
 }
 
@@ -64,10 +67,16 @@ const activityLabels = {
   habit: 'Habitude',
 };
 
-export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdit, onDelete, variant = 'default' }: ActivityCardProps) {
+export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdit, onDelete, onUserClick, variant = 'default' }: ActivityCardProps) {
   const { user } = useAuth();
   const Icon = activityIcons[activity.type];
   const label = activityLabels[activity.type];
+
+  // Resolve avatar URL (path -> public URL if needed)
+  const avatarUrl = useMemo(() => {
+    const resolved = resolveAvatarUrl(activity.user?.avatar_url, supabase);
+    return addCacheBuster(resolved, activity.user?.updated_at);
+  }, [activity.user?.avatar_url, activity.user?.updated_at]);
 
   // Get photo URL from activities.photos array
   const photoPath =
@@ -169,10 +178,21 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
       <div className="p-4">
         {/* Header row: avatar + name + time + menu */}
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2.5 flex-1 min-w-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const userId = activity.user.id || activity.user_id;
+              if (userId && onUserClick) {
+                onUserClick(userId);
+              }
+            }}
+            className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity cursor-pointer"
+          >
             <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
               {activity.user.avatar_url ? (
-                <img src={activity.user.avatar_url} alt={activity.user.display_name} className="w-full h-full object-cover" />
+                <img src={avatarUrl || undefined} alt={activity.user.display_name} className="w-full h-full object-cover" />
               ) : (
                 activity.user.display_name.charAt(0).toUpperCase()
               )}
@@ -183,7 +203,7 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
                 <span className="text-stone-400 text-xs truncate">@{activity.user.username}</span>
               </div>
             </div>
-          </div>
+          </button>
           <div className="flex items-center gap-2">
             <span className="text-stone-400 text-xs flex-shrink-0">{formatDistanceToNow(activity.created_at)}</span>
             {user && onEdit && onDelete && (

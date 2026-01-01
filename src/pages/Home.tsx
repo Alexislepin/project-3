@@ -814,6 +814,10 @@ export function Home() {
                       setDeletingActivityId(id);
                     }
                   }}
+                  onUserClick={(userId) => {
+                    setSelectedUserId(userId);
+                    setActivityFocus(null);
+                  }}
                 />
                   ))}
                 </div>

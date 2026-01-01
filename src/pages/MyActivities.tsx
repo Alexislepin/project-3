@@ -425,6 +425,7 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
                     onOpenLikers={(id) => setLikersActivityId(id)}
                     onEdit={isOwner ? handleEdit : undefined}
                     onDelete={isOwner ? handleDelete : undefined}
+                    onUserClick={onUserClick}
                   />
                 </div>
               ))}
