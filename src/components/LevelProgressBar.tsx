@@ -17,11 +17,11 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         <div className="flex-1 h-0.5 bg-stone-200 rounded-full overflow-hidden">
           <div
             className="h-full bg-primary transition-all duration-500 ease-out rounded-full"
-            style={{ width: `${progress.percent}%` }}
+            style={{ width: `${progress.progress}%` }}
           />
         </div>
         <span className="text-xs font-medium text-stone-600 whitespace-nowrap">
-          {formatXp(progress.currentXpInLevel)} / {formatXp(progress.requiredForNext)} XP
+          {formatXp(progress.intoLevel)} / {formatXp(progress.needed)} XP
         </span>
       </div>
     );
@@ -42,29 +42,38 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
   }
 
   // Full variant
-  const fullContent = (
+  const content = (
     <div className={`bg-white rounded-2xl border border-stone-200 shadow-[0_1px_2px_rgba(0,0,0,0.05)] p-4 ${className}`}>
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-semibold text-[#111]">Niveau {progress.level}</span>
           <span className="text-xs font-normal text-stone-500">({formatXp(progress.xpTotal)} XP total)</span>
         </div>
+        {onClick && (
+          <button
+            onClick={onClick}
+            className="text-xs text-primary hover:underline font-medium"
+            type="button"
+          >
+            Comment gagner de l'XP ?
+          </button>
+        )}
       </div>
       
       <div className="flex items-center gap-2.5 mb-2">
         <div className="flex-1 h-1 bg-stone-200 rounded-full overflow-hidden">
           <div
             className="h-full bg-primary transition-all duration-500 ease-out rounded-full"
-            style={{ width: `${progress.percent}%` }}
+            style={{ width: `${progress.progress}%` }}
           />
         </div>
         <span className="text-xs font-medium text-stone-600 whitespace-nowrap">
-          {formatXp(progress.currentXpInLevel)} / {formatXp(progress.requiredForNext)} XP
+          {formatXp(progress.intoLevel)} / {formatXp(progress.needed)} XP
         </span>
       </div>
       
       <p className="text-xs font-normal text-stone-500 leading-tight">
-        {formatXp(progress.requiredForNext - progress.currentXpInLevel)} XP jusqu'au niveau {progress.level + 1}
+        {formatXp(progress.remaining)} XP jusqu'au niveau {progress.level + 1}
       </p>
     </div>
   );
@@ -76,12 +85,12 @@ export function LevelProgressBar({ xpTotal, variant = 'full', className = '', on
         className="w-full text-left"
         type="button"
       >
-        {fullContent}
+        {content}
       </button>
     );
   }
 
-  return fullContent;
+  return content;
 }
 
 /**

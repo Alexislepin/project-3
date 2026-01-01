@@ -1,32 +1,28 @@
 /**
  * Leveling system utilities
  * 
- * NEW XP required formula: 50 × N²
- * - Level 1: 0-199 XP (50 × 1² = 50, but we start at 0)
- * - Level 2: 200-449 XP (50 × 2² = 200)
- * - Level 3: 450-799 XP (50 × 3² = 450)
- * - Level 5: 1,250-1,799 XP (50 × 5² = 1,250)
- * - Level 10: 5,000-5,449 XP (50 × 10² = 5,000)
- * - Level 20: 20,000-20,449 XP (50 × 20² = 20,000)
- * 
- * Formula: XP required for level N = 50 × N²
- * To find level from XP: solve 50 × N² = XP => N = sqrt(XP / 50)
+ * XP required formula: 50 × N²
+ * - Level 1: 0-199 XP (starts at 0, next level at 200)
+ * - Level 2: 200-1249 XP (starts at 200, next level at 1250)
+ * - Level 3: 1250-4999 XP (starts at 1250, next level at 5000)
+ * - Level N: starts at 50×N², ends at 50×(N+1)²-1
  */
 
 export interface LevelProgress {
   level: number;
-  currentXpInLevel: number;
-  requiredForNext: number;
-  percent: number;
+  intoLevel: number; // XP earned in current level (from start of level to current)
+  needed: number; // XP needed to reach next level
+  remaining: number; // XP remaining to next level
+  progress: number; // Progress percentage (0-100)
   xpTotal: number;
 }
 
 /**
- * Calculate XP required to reach a specific level
+ * Get XP required to reach a specific level
  * @param level Target level
- * @returns XP required to reach that level
+ * @returns XP required to reach that level (start XP of that level)
  */
-export function getXpRequiredForLevel(level: number): number {
+export function getXpForLevel(level: number): number {
   if (level <= 1) return 0;
   return 50 * level * level;
 }
@@ -38,14 +34,25 @@ export function getXpRequiredForLevel(level: number): number {
  */
 export function getLevelFromXp(xpTotal: number): number {
   if (xpTotal < 0) return 1;
-  if (xpTotal === 0) return 1;
+  if (xpTotal < 200) return 1; // Level 1: 0-199 XP
   
-  // Solve: 50 × N² = XP => N = sqrt(XP / 50)
-  // Level is the floor of this calculation + 1
-  const level = Math.floor(Math.sqrt(xpTotal / 50)) + 1;
+  // Level N starts at 50×N²
+  // Find the largest N such that 50×N² <= xpTotal
+  // Then level = N
+  // We solve: 50×N² <= xpTotal => N <= sqrt(xpTotal/50)
+  const level = Math.floor(Math.sqrt(xpTotal / 50));
   
-  // Ensure minimum level is 1
-  return Math.max(1, level);
+  // Ensure we're in the correct level range
+  // Level N: [50×N², 50×(N+1)²)
+  const levelStart = 50 * level * level;
+  const nextLevelStart = 50 * (level + 1) * (level + 1);
+  
+  if (xpTotal >= levelStart && xpTotal < nextLevelStart) {
+    return level;
+  }
+  
+  // Fallback: if somehow we're outside the range, calculate directly
+  return Math.max(1, Math.floor(Math.sqrt(xpTotal / 50)));
 }
 
 /**
@@ -57,19 +64,27 @@ export function getLevelProgress(xpTotal: number): LevelProgress {
   if (xpTotal < 0) xpTotal = 0;
 
   const level = getLevelFromXp(xpTotal);
-  const xpForCurrentLevel = getXpRequiredForLevel(level); // XP required to reach current level
-  const xpForNextLevel = getXpRequiredForLevel(level + 1); // XP required to reach next level
-  const currentXpInLevel = xpTotal - xpForCurrentLevel; // XP in current level
-  const requiredForNext = xpForNextLevel - xpForCurrentLevel; // XP needed to reach next level
-  const percent = requiredForNext > 0 
-    ? Math.min(100, Math.max(0, (currentXpInLevel / requiredForNext) * 100))
-    : 100;
+  const levelStart = getXpForLevel(level); // XP at start of current level
+  const nextLevelStart = getXpForLevel(level + 1); // XP at start of next level
+  
+  // XP earned in current level (from start of level to current)
+  const intoLevel = Math.max(0, xpTotal - levelStart);
+  
+  // XP needed to reach next level (total needed, not remaining)
+  const needed = nextLevelStart - levelStart;
+  
+  // XP remaining to next level
+  const remaining = Math.max(0, nextLevelStart - xpTotal);
+  
+  // Progress percentage (0-100)
+  const progress = needed > 0 ? Math.min(100, Math.max(0, (intoLevel / needed) * 100)) : 100;
 
   return {
     level,
-    currentXpInLevel,
-    requiredForNext,
-    percent,
+    intoLevel,
+    needed,
+    remaining,
+    progress,
     xpTotal,
   };
 }

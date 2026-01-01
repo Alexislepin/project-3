@@ -947,6 +947,10 @@ export function Home() {
         />
       )}
 
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
+      )}
+
       {/* Social feed overlay */}
       {showSocial && (
         <div className="fixed inset-0 bg-background-light z-[200] overflow-y-auto">
@@ -988,10 +992,6 @@ export function Home() {
             setDeletingActivity(null);
           }}
         />
-      )}
-
-      {showLevelDetails && (
-        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
       )}
     </div>
   );
