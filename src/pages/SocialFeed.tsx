@@ -436,13 +436,17 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   // Measure header and tabs height dynamically
   useLayoutEffect(() => {
     const compute = () => {
-      const h = headerRef.current?.offsetHeight ?? 0;
-      const t = tabsRef.current?.offsetHeight ?? 0;
-      setHeaderHeight(h);
-      setTopOffset(h + t);
+      // Use requestAnimationFrame to ensure DOM is fully rendered
+      requestAnimationFrame(() => {
+        const h = headerRef.current?.offsetHeight ?? 0;
+        const t = tabsRef.current?.offsetHeight ?? 0;
+        setHeaderHeight(h);
+        setTopOffset(h + t);
+      });
     };
     
-    // Initial computation
+    // Initial computation with a small delay to ensure elements are rendered
+    const timeoutId = setTimeout(compute, 0);
     compute();
 
     // Observe resize of header and tabs
@@ -457,6 +461,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     window.addEventListener('resize', compute);
     
     return () => {
+      clearTimeout(timeoutId);
       ro.disconnect();
       window.removeEventListener('resize', compute);
     };
