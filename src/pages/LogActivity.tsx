@@ -131,6 +131,12 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
         const { calculateReadingXp } = await import('../lib/calculateReadingXp');
         const xp = calculateReadingXp(parseInt(duration) || 0, parseInt(pages) || 0);
         
+        console.log('[award_xp] awarded', { 
+          xp, 
+          durationMinutes: parseInt(duration) || 0, 
+          pagesRead: parseInt(pages) || 0 
+        });
+        
         if (xp > 0) {
           const { data: xpResult, error: xpError } = await supabase.rpc('award_xp', {
             p_user_id: user.id,
@@ -139,12 +145,17 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
           });
 
           if (xpError) {
-            console.error('[LogActivity] Error awarding XP:', xpError);
+            console.error('[award_xp] failed', xpError);
+            // Show error notification
+            alert('Impossible d\'attribuer l\'XP. Veuillez réessayer.');
           } else if (xpResult) {
             // Dispatch xp-updated event to refresh UI
             window.dispatchEvent(new CustomEvent('xp-updated', {
               detail: { xp_total: xpResult }
             }));
+            // Refresh profile to get latest xp_total
+            const { refreshProfile } = await import('../contexts/AuthContext');
+            // Note: refreshProfile is not directly accessible here, but the event will trigger updates
           }
         }
       }

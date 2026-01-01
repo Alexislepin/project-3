@@ -22,6 +22,23 @@ interface XpEvent {
   source: string;
 }
 
+interface XpHistoryItem {
+  id: string;
+  created_at: string;
+  amount: number;
+  source: string;
+  description: string | null;
+}
+
+type XpItem = {
+  id: string;
+  created_at: string;
+  amount: number;
+  title: string;
+  subtitle?: string | null;
+  kind: 'reading' | 'challenge' | string;
+};
+
 interface XpHistoryModalProps {
   open: boolean;
   onClose: () => void;
@@ -32,7 +49,7 @@ interface XpHistoryModalProps {
 
 export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSyncXpTotal }: XpHistoryModalProps) {
   const { user, refreshProfile } = useAuth();
-  const [events, setEvents] = useState<XpEvent[]>([]);
+  const [items, setItems] = useState<XpItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const targetUserId = userId ?? user?.id;
@@ -58,7 +75,7 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
       loadHistory();
       // Don't sync at open to avoid re-render loops
     } else if (!open) {
-      setEvents([]);
+      setItems([]);
       // Sync on close only
       if (targetUserId) {
         syncXpTotal();
@@ -107,21 +124,58 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
 
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      // Load xp_history (reading sessions)
+      const { data: historyData, error: historyError } = await supabase
+        .from('xp_history')
+        .select('id, amount, source, description, created_at')
+        .eq('user_id', targetUserId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (historyError) {
+        console.error('[XpHistoryModal] Error loading XP history:', historyError);
+      }
+
+      // Load xp_events (challenges)
+      const { data: eventsData, error: eventsError } = await supabase
         .from('xp_events')
         .select('id, created_at, xp_amount, verdict, book_title, message, source')
         .eq('user_id', targetUserId)
         .order('created_at', { ascending: false })
-        .limit(100);
+        .limit(50);
 
-      if (error) {
-        console.error('[XpHistoryModal] Error loading XP events:', error);
-        return;
+      if (eventsError) {
+        console.error('[XpHistoryModal] Error loading XP events:', eventsError);
       }
 
-      setEvents(data || []);
+      // Normalize xp_history items
+      const historyItems: XpItem[] = (historyData || []).map((item: XpHistoryItem) => ({
+        id: item.id,
+        created_at: item.created_at,
+        amount: item.amount,
+        title: item.source === 'reading' ? 'Session de lecture' : (item.description || item.source),
+        subtitle: item.description && item.source !== 'reading' ? item.description : null,
+        kind: item.source,
+      }));
+
+      // Normalize xp_events items
+      const eventItems: XpItem[] = (eventsData || []).map((event: XpEvent) => ({
+        id: event.id,
+        created_at: event.created_at,
+        amount: event.xp_amount,
+        title: event.message,
+        subtitle: event.book_title ? `Défi compréhension · ${event.book_title}` : 'Défi compréhension',
+        kind: 'challenge',
+      }));
+
+      // Merge and sort by created_at desc
+      const allItems = [...historyItems, ...eventItems].sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ).slice(0, 50);
+
+      setItems(allItems);
     } catch (error) {
-      console.error('[XpHistoryModal] Error loading XP events:', error);
+      console.error('[XpHistoryModal] Error loading XP history:', error);
     } finally {
       setLoading(false);
     }
@@ -242,7 +296,7 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
             <div className="flex items-center justify-center py-12">
               <div className="text-text-sub-light">Chargement...</div>
             </div>
-          ) : events.length === 0 ? (
+          ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Trophy className="w-12 h-12 text-stone-300 mb-4" />
               <p className="text-text-sub-light text-center">
@@ -251,14 +305,20 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
             </div>
           ) : (
             <div className="space-y-3">
-              {events.map((event) => (
+              {items.map((item) => (
                 <div
-                  key={event.id}
+                  key={item.id}
                   className="flex items-start gap-3 p-4 bg-stone-50 rounded-xl border border-stone-200"
                 >
-                  {/* Verdict icon */}
+                  {/* Icon */}
                   <div className="flex-shrink-0 mt-0.5">
-                    {getVerdictIcon(event.verdict)}
+                    {item.kind === 'challenge' ? (
+                      <span className="text-lg">📚</span>
+                    ) : item.kind === 'reading' ? (
+                      <span className="text-lg">📖</span>
+                    ) : (
+                      <span className="text-lg">⭐</span>
+                    )}
                   </div>
 
                   {/* Content */}
@@ -267,37 +327,32 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
                       <div className="flex-1">
                         <p className="text-sm font-semibold text-stone-900">
                           {displayName && targetUserId !== user?.id
-                            ? personalizeMessage(event.message, displayName)
-                            : event.message}
+                            ? personalizeMessage(item.title, displayName)
+                            : item.title}
                         </p>
-                        {event.book_title && (
+                        {item.subtitle && (
                           <p className="text-xs text-stone-500 mt-1">
-                            Défi compréhension · {event.book_title}
+                            {item.subtitle}
                           </p>
                         )}
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <span className={`text-xs font-medium ${getVerdictColor(event.verdict)}`}>
-                            {getVerdictLabel(event.verdict)}
-                          </span>
-                        </div>
                       </div>
                       {/* XP badge */}
                       <div className="flex-shrink-0">
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                            event.xp_amount === 0
+                            item.amount === 0
                               ? 'bg-gray-100 text-gray-600 border border-gray-200'
                               : 'bg-stone-900 text-primary border border-primary/30'
                           }`}
                         >
-                          {event.xp_amount > 0 ? '+' : ''}
-                          {formatXp(event.xp_amount)} XP
+                          {item.amount > 0 ? '+' : ''}
+                          {formatXp(item.amount)} XP
                         </span>
                       </div>
                     </div>
                     {/* Date */}
                     <p className="text-xs text-stone-400 mt-2">
-                      {formatTimeAgo(event.created_at)}
+                      {formatTimeAgo(item.created_at)}
                     </p>
                   </div>
                 </div>

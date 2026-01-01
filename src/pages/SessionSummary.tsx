@@ -314,28 +314,8 @@ export function SessionSummary({
       photoPathsCount: photoPaths.length,
     });
 
-    // Award XP for reading session
-    if (durationMinutes >= 5) {
-      const { calculateReadingXp } = await import('../lib/calculateReadingXp');
-      const xp = calculateReadingXp(durationMinutes, pagesRead);
-      
-      if (xp > 0) {
-        const { data: xpResult, error: xpError } = await supabase.rpc('award_xp', {
-          p_user_id: user.id,
-          p_amount: xp,
-          p_source: 'reading',
-        });
-
-        if (xpError) {
-          console.error('[SessionSummary] Error awarding XP:', xpError);
-        } else if (xpResult) {
-          // Dispatch xp-updated event to refresh UI
-          window.dispatchEvent(new CustomEvent('xp-updated', {
-            detail: { xp_total: xpResult }
-          }));
-        }
-      }
-    }
+    // Note: XP is awarded in LogActivity when activity is created
+    // We only refresh the UI here
 
     // ✅ Notify app to refresh profile/stats (totalMinutes will be recalculated from activities)
     window.dispatchEvent(new Event('activity-created'));
