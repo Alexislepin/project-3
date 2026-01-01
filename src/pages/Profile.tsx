@@ -714,7 +714,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               <LevelProgressBar 
                 xpTotal={contextProfile.xp_total || 0} 
                 variant="full"
-                onClick={() => setShowLevelDetails(true)}
+                onClick={() => setShowXpHistory(true)}
               />
             </div>
             <button
