@@ -450,11 +450,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   };
 
   const handleActivityClick = (activityId: string) => {
-    // TODO: Implement ActivityDetailsModal or navigate to /activity/:id
-    // For now, just log and set selected activity
-    console.log('[SocialFeed] Activity clicked:', activityId);
-    setSelectedActivity(activityId);
-    // Future: Open ActivityDetailsModal or navigate to activity detail page
+    window.location.href = `/activity/${activityId}`;
   };
 
   // Pull-to-refresh handlers

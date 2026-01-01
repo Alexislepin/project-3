@@ -19,6 +19,7 @@ import { ActiveSession } from './pages/ActiveSession';
 import { Search } from './pages/Search';
 import { Debug } from './pages/Debug';
 import { ManageBook } from './pages/ManageBook';
+import { ActivityDetailsPage } from './pages/ActivityDetailsPage';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
 import { debugLog, debugError } from './utils/logger';
@@ -304,6 +305,12 @@ function App() {
   if (manageMatch) {
     const [, bookId] = manageMatch;
     return <ManageBook bookId={bookId} />;
+  }
+
+  // Route dédiée pour les détails d'une activité : /activity/:id
+  const activityMatch = path.match(/^\/activity\/([^/]+)$/);
+  if (activityMatch) {
+    return <ActivityDetailsPage />;
   }
 
   // Debug page doesn't use AppLayout
