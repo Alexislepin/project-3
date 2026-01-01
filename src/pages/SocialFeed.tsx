@@ -433,6 +433,35 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
     loadData();
   }, [tab, user?.id]);
 
+  // Measure header and tabs height dynamically
+  useLayoutEffect(() => {
+    const compute = () => {
+      const h = headerRef.current?.offsetHeight ?? 0;
+      const t = tabsRef.current?.offsetHeight ?? 0;
+      setHeaderHeight(h);
+      setTopOffset(h + t);
+    };
+    
+    // Initial computation
+    compute();
+
+    // Observe resize of header and tabs
+    const ro = new ResizeObserver(() => {
+      compute();
+    });
+    
+    if (headerRef.current) ro.observe(headerRef.current);
+    if (tabsRef.current) ro.observe(tabsRef.current);
+
+    // Also listen to window resize
+    window.addEventListener('resize', compute);
+    
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', compute);
+    };
+  }, []);
+
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
