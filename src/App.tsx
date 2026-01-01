@@ -8,6 +8,7 @@ import { ResetPasswordPage } from './pages/ResetPassword';
 import { ProfileOnboarding } from './pages/ProfileOnboarding';
 import { Onboarding } from './components/auth/Onboarding';
 import { LanguageOnboarding } from './components/auth/LanguageOnboarding';
+import { TutorialManager } from './components/TutorialManager';
 import { AppLayout } from './components/layout/AppLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -73,6 +74,7 @@ function App() {
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [needsLanguageOnboarding, setNeedsLanguageOnboarding] = useState(false);
+  const [needsTutorial, setNeedsTutorial] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('home');
   const [showActiveSession, setShowActiveSession] = useState(false);
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
@@ -107,7 +109,11 @@ function App() {
       // Check profile onboarding completion
       if (profile && !isOnboardingComplete) {
         setNeedsOnboarding(true);
+        setNeedsTutorial(false); // Tutorial only after onboarding
       } else if (profile && isOnboardingComplete) {
+        // Check tutorial completion (only after onboarding is complete)
+        const hasCompletedTutorial = profile.has_completed_tutorial ?? false;
+        setNeedsTutorial(!hasCompletedTutorial);
         // Also check interests onboarding (legacy)
         setCheckingOnboarding(true);
         const checkInterestsOnboarding = async () => {
@@ -300,6 +306,9 @@ function App() {
     return <Onboarding onComplete={handleOnboardingComplete} />;
   }
 
+  // Tutorial (only after onboarding is complete, overlay on top of app)
+  const showTutorial = needsTutorial && isOnboardingComplete && !needsOnboarding;
+
   // Route dédiée pour la gestion d'un livre : /library/manage/:bookId
   const manageMatch = path.match(/^\/library\/manage\/([^/]+)$/);
   if (manageMatch) {
@@ -346,6 +355,11 @@ function App() {
               onCancel={() => setShowActiveSession(false)}
               onFinish={handleSessionFinish}
             />
+          )}
+
+          {/* Tutorial overlay (on top of everything) */}
+          {showTutorial && (
+            <TutorialManager onComplete={() => setNeedsTutorial(false)} />
           )}
         </>
       </ProtectedRoute>

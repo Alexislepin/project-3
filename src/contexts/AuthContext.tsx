@@ -29,6 +29,7 @@ export interface UserProfile {
   bio: string | null;
   avatar_url: string | null;
   onboarding_completed: boolean;
+  has_completed_tutorial?: boolean;
   has_password: boolean;
   interests: string[];
   [key: string]: any;
