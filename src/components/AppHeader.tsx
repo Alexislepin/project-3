@@ -45,10 +45,10 @@ export function AppHeader({
               {showBack && onBack && (
                 <button
                   onClick={onBack}
-                  className="p-2 -ml-2 hover:bg-black/5 rounded-full transition-colors flex-shrink-0"
+                  className="p-2 -ml-2 hover:bg-black/10 rounded-full transition-colors flex-shrink-0"
                   aria-label="Retour"
                 >
-                  <ArrowLeft className="w-5 h-5 text-text-main-light" />
+                  <ArrowLeft className="w-5 h-5 text-stone-900" />
                 </button>
               )}
               {showClose && onClose && (
