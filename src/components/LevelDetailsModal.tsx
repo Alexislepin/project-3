@@ -31,6 +31,46 @@ export function LevelDetailsModal({ onClose }: LevelDetailsModalProps) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
+          {/* Next Milestones Section */}
+          <div className="mb-6">
+            <h3 className="text-sm font-semibold text-stone-700 mb-3">Prochains paliers</h3>
+            <div className="space-y-2">
+              <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-stone-700">Prochain niveau</span>
+                  <span className="text-sm font-semibold text-stone-900">
+                    Niv. {progress.level + 1} dans {formatXp(progress.remaining)} XP
+                  </span>
+                </div>
+              </div>
+              {nextStreakMilestone && (
+                <div className="bg-orange-50 rounded-lg p-3 border border-orange-100">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-stone-700">Prochain palier streak</span>
+                    <span className="text-sm font-semibold text-stone-900">
+                      {nextStreakMilestone.days} jours (+{nextStreakMilestone.xp} XP)
+                      {currentStreak !== null && currentStreak > 0 && (
+                        <span className="text-xs text-stone-500 ml-2">
+                          ({currentStreak} jour{currentStreak > 1 ? 's' : ''} actuel{currentStreak > 1 ? 's' : ''})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {!nextStreakMilestone && currentStreak !== null && currentStreak >= 30 && (
+                <div className="bg-orange-50 rounded-lg p-3 border border-orange-100">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-stone-700">Streak</span>
+                    <span className="text-sm font-semibold text-stone-900">
+                      {currentStreak} jours • Tous les paliers atteints ! 🎉
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Current Level Section */}
           <div className="mb-6">
             <div className="bg-stone-50 rounded-2xl p-6 border border-stone-200">
