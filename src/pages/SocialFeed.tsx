@@ -439,25 +439,24 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       // Get the actual AppHeader element (first child of headerRef)
       const headerElement = headerRef.current?.querySelector('[class*="sticky"]') as HTMLElement;
       const h = headerElement?.offsetHeight ?? headerRef.current?.offsetHeight ?? 0;
-      const t = tabsRef.current?.offsetHeight ?? 0;
       
-      // The header is sticky (in flow), tabs are fixed (out of flow)
-      // So paddingTop should be: header height + tabs height
-      // But we need to measure the tabs container, not just the inner div
+      // Measure tabs container height
       const tabsContainer = tabsRef.current;
-      const tabsInner = tabsContainer?.querySelector('[class*="max-w-2xl"]') as HTMLElement;
-      const tabsActualHeight = tabsContainer?.offsetHeight ?? t;
+      const t = tabsContainer?.offsetHeight ?? 0;
+      
+      // Calculate the bottom position of tabs (header top + header height + tabs height)
+      // Since header is sticky and tabs are fixed, we need: header height + tabs height
+      const totalHeight = h + t;
       
       console.log('[SocialFeed] Height calculation:', { 
         header: h, 
-        tabsContainer: tabsContainer?.offsetHeight,
-        tabsInner: tabsInner?.offsetHeight,
-        tabs: tabsActualHeight, 
-        total: h + tabsActualHeight 
+        tabs: t, 
+        total: totalHeight,
+        tabsRect: tabsContainer?.getBoundingClientRect()
       });
       
       setHeaderHeight(h);
-      setTopOffset(h + tabsActualHeight);
+      setTopOffset(totalHeight);
     };
     
     // Initial computation - use requestAnimationFrame to ensure DOM is rendered
