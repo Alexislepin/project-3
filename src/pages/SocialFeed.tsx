@@ -436,35 +436,14 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
   // Measure header and tabs height dynamically
   useLayoutEffect(() => {
     const compute = () => {
-      // Get the actual AppHeader element (first child of headerRef)
-      const headerElement = headerRef.current?.querySelector('[class*="sticky"]') as HTMLElement;
-      const h = headerElement?.offsetHeight ?? headerRef.current?.offsetHeight ?? 0;
+      // Measure header height
+      const h = headerRef.current?.offsetHeight ?? 0;
       
       // Measure tabs container height
-      const tabsContainer = tabsRef.current;
-      if (!tabsContainer) return;
-      
-      const t = tabsContainer.offsetHeight;
-      
-      // Get the actual bottom position of tabs from top of viewport
-      const tabsRect = tabsContainer.getBoundingClientRect();
-      const tabsBottom = tabsRect.top + tabsRect.height;
-      
-      // Use the actual bottom position as padding-top
-      // This accounts for any spacing issues
-      const totalHeight = tabsBottom;
-      
-      console.log('[SocialFeed] Height calculation:', { 
-        header: h, 
-        tabs: t, 
-        tabsTop: tabsRect.top,
-        tabsBottom: tabsBottom,
-        calculatedTotal: h + t,
-        usingBottom: totalHeight
-      });
+      const t = tabsRef.current?.offsetHeight ?? 0;
       
       setHeaderHeight(h);
-      setTopOffset(totalHeight);
+      setTopOffset(h + t);
     };
     
     // Initial computation - use requestAnimationFrame to ensure DOM is rendered
@@ -592,7 +571,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       {/* Fixed Tabs section (below header) */}
       <div 
         ref={tabsRef}
-        className="fixed left-0 right-0 z-40"
+        className="fixed left-0 right-0 z-40 bg-background-light"
         style={{
           top: `${headerHeight}px`, // Dynamically positioned below AppHeader
         }}
@@ -635,7 +614,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         )}
 
         <div 
-          className="px-4 pb-4 pt-0" 
+          className="px-4 pb-4" 
           style={{ 
             transform: `translateY(${pullDistance}px)`,
             paddingBottom: 'calc(96px + env(safe-area-inset-bottom))',
