@@ -119,17 +119,11 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
       return;
     }
 
-    if (followingIds.length === 0) {
-      setEventsBooks([]);
-      setLoading(false);
-      return;
-    }
-
     try {
+      // Fetch all book events (not just from following)
       const { data: eventsData, error: eventsError } = await supabase
         .from('activity_events')
         .select('id, actor_id, event_type, book_key, comment_id, created_at')
-        .in('actor_id', followingIds)
         .in('event_type', ['book_like', 'book_comment'])
         .order('created_at', { ascending: false })
         .limit(50);
@@ -290,16 +284,25 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         return;
       }
 
-      // Fetch activities and actor profiles
+      // Get all unique user IDs (actors and owners)
+      const allUserIds = [...new Set([
+        ...reactions.map(r => r.user_id),
+        ...comments.map(c => c.user_id),
+      ])].filter((id): id is string => !!id);
+
+      // Fetch activities (only public ones) and all user profiles
       const [activitiesResult, actorsResult] = await Promise.all([
         supabase
           .from('activities')
-          .select('id, type, title, pages_read, duration_minutes, created_at, user_id')
-          .in('id', activityIds),
-        supabase
-          .from('user_profiles')
-          .select('id, display_name, username, avatar_url')
-          .in('id', followingIds),
+          .select('id, type, title, pages_read, duration_minutes, created_at, user_id, visibility')
+          .in('id', activityIds)
+          .eq('visibility', 'public'), // Only show public activities
+        allUserIds.length > 0
+          ? supabase
+              .from('user_profiles')
+              .select('id, display_name, username, avatar_url')
+              .in('id', allUserIds)
+          : Promise.resolve({ data: [], error: null }),
       ]);
 
       if (activitiesResult.error) {
