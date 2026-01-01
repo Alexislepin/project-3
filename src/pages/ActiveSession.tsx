@@ -387,7 +387,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         });
         
         if (xp > 0) {
-          const { data: xpResult, error: xpError } = await supabase.rpc('award_xp', {
+          const { data: xpResult, error: xpError } = await supabase.rpc('award_xp_v2', {
             p_user_id: user.id,
             p_amount: xp,
             p_source: 'reading',
