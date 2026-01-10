@@ -1,21 +1,27 @@
 import { Flame } from 'lucide-react';
 
-interface StreakBadgeProps {
+export function StreakBadge({
+  streak,
+  onClick,
+}: {
   streak: number;
-  onClick: () => void;
-}
-
-export function StreakBadge({ streak, onClick }: StreakBadgeProps) {
-  if (streak <= 0) return null;
+  onClick?: () => void;
+}) {
+  const value = Number.isFinite(streak) ? streak : 0;
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex items-center gap-1 bg-primary px-2 py-1 rounded-full hover:scale-105 active:scale-95 transition-transform focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-      title="Mon élan"
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-white/80 border border-gray-200 shadow-sm hover:bg-white transition-colors"
+      title="Votre série"
     >
-      <Flame className="w-3.5 h-3.5 text-black animate-flame" />
-      <span className="font-semibold text-xs text-black">{streak}</span>
+      <Flame
+        className={`w-4 h-4 ${value > 0 ? 'text-primary fill-primary' : 'text-stone-400'}`}
+      />
+      <span className={`text-xs font-bold ${value > 0 ? 'text-text-main-light' : 'text-stone-500'}`}>
+        {value}
+      </span>
     </button>
   );
 }

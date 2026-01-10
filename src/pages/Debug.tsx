@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { debugLog, fatalError } from '../utils/logger';
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { Capacitor } from '@capacitor/core';
+import { useNavigate } from 'react-router-dom';
 
 interface SessionData {
   session: any;
@@ -15,10 +18,49 @@ interface BooksData {
 
 export function Debug() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [sessionData, setSessionData] = useState<SessionData>({ session: null, error: null });
   const [booksData, setBooksData] = useState<BooksData>({ books: null, error: null });
   const [loadingSession, setLoadingSession] = useState(true);
   const [loadingBooks, setLoadingBooks] = useState(true);
+  const [localNotifStatus, setLocalNotifStatus] = useState<string | null>(null);
+
+  // Test function for local notifications
+  const testLocalNotif = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      setLocalNotifStatus('⚠️ Not on native platform (web)');
+      return;
+    }
+
+    try {
+      setLocalNotifStatus('⏳ Requesting permissions...');
+      const perm = await LocalNotifications.requestPermissions();
+      console.log('[DEBUG] Local notification permissions:', perm);
+
+      if (perm.display !== 'granted') {
+        setLocalNotifStatus('❌ Permission denied');
+        return;
+      }
+
+      setLocalNotifStatus('⏳ Scheduling notification (3 seconds)...');
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title: 'Lexu',
+            body: 'Notif locale OK ✅',
+            id: 1,
+            schedule: { at: new Date(Date.now() + 3000) }, // 3 sec
+          },
+        ],
+      });
+
+      setLocalNotifStatus('✅ Notification scheduled! Check in 3 seconds.');
+      setTimeout(() => setLocalNotifStatus(null), 5000);
+    } catch (error: any) {
+      console.error('[DEBUG] Local notification error:', error);
+      setLocalNotifStatus(`❌ Error: ${error.message || 'Unknown error'}`);
+    }
+  };
 
   // Hook: Load session
   useEffect(() => {
@@ -75,7 +117,15 @@ export function Debug() {
   return (
     <div className="min-h-screen bg-background-light p-4">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 text-text-main-light">🔍 Debug Page</h1>
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-text-main-light">🔍 Debug Page</h1>
+          <button
+            onClick={() => navigate('/debug/onesignal')}
+            className="px-4 py-2 bg-primary text-black font-semibold rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            🔔 OneSignal Debug
+          </button>
+        </div>
 
         <div className="space-y-6">
           {/* User Info */}
@@ -136,6 +186,33 @@ export function Debug() {
                 <span className="text-text-sub-light">No session found</span>
               </div>
             )}
+          </div>
+
+          {/* Local Notifications Test */}
+          <div className="bg-card-light rounded-xl p-6 border border-gray-200 shadow-sm">
+            <h2 className="text-xl font-semibold mb-4 text-text-main-light">🔔 Local Notifications Test</h2>
+            <div className="space-y-3">
+              <p className="text-sm text-text-sub-light">
+                Test local notifications (does not require APNs). A notification will appear in 3 seconds.
+              </p>
+              <button
+                onClick={testLocalNotif}
+                className="px-4 py-2 bg-primary text-black font-semibold rounded-lg hover:bg-primary/90 transition-colors"
+              >
+                Test Local Notification
+              </button>
+              {localNotifStatus && (
+                <div className={`text-sm font-mono p-3 rounded border ${
+                  localNotifStatus.startsWith('✅')
+                    ? 'bg-green-50 border-green-200 text-green-700'
+                    : localNotifStatus.startsWith('❌')
+                    ? 'bg-red-50 border-red-200 text-red-700'
+                    : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                }`}>
+                  {localNotifStatus}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* DB Test: Books */}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { X } from 'lucide-react';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 
 export function LikersModal({
   activityId,
@@ -65,16 +66,20 @@ export function LikersModal({
             <div className="py-10 text-center text-stone-500">Aucun like</div>
           ) : (
             <div className="p-2">
-              {likers.map((u) => (
+              {likers.map((u) => {
+                const resolved = resolveAvatarUrl(u?.avatar_url, supabase);
+                const avatarUrl = addCacheBuster(resolved, u?.updated_at);
+                
+                return (
                 <button
                   key={u.id}
                   onClick={() => onUserClick?.(u.id)}
                   className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-black/5 transition-colors"
                 >
                   <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
-                    {u.avatar_url ? (
+                      {avatarUrl && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
                       <img
-                        src={u.avatar_url}
+                          src={avatarUrl}
                         alt={u.display_name}
                         className="w-full h-full object-cover"
                       />
@@ -87,7 +92,8 @@ export function LikersModal({
                     <div className="text-xs text-stone-500 truncate">@{u.username || ''}</div>
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

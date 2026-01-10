@@ -111,6 +111,14 @@
 | `started_at` | `timestamptz` | ✅ YES | `NULL` | When user started reading |
 | `completed_at` | `timestamptz` | ✅ YES | `NULL` | When user completed the book |
 | `rating` | `integer` | ✅ YES | `NULL` | CHECK: `1 <= rating <= 5` |
+| `custom_title` | `text` | ✅ YES | `NULL` | User-specific title override |
+| `custom_author` | `text` | ✅ YES | `NULL` | User-specific author override |
+| `custom_total_pages` | `integer` | ✅ YES | `NULL` | User-specific page count override |
+| `custom_description` | `text` | ✅ YES | `NULL` | User-specific description/notes |
+| `custom_cover_url` | `text` | ✅ YES | `NULL` | User-specific cover URL (public URL from Supabase Storage) |
+| `custom_cover_path` | `text` | ✅ YES | `NULL` | Path to uploaded cover in Storage (legacy, prefer custom_cover_url) |
+| `custom_cover_source` | `text` | ✅ YES | `NULL` | Source: 'camera' or 'gallery' |
+| `custom_cover_updated_at` | `timestamptz` | ✅ YES | `NULL` | When custom cover was last updated |
 | `created_at` | `timestamptz` | ✅ YES | `now()` | Creation timestamp |
 | `updated_at` | `timestamptz` | ✅ YES | `now()` | Last update timestamp |
 
@@ -120,13 +128,6 @@
 - `user_id` → `user_profiles(id)` ON DELETE CASCADE
 - `book_id` → `books(id)` ON DELETE CASCADE  
 **RLS Enabled:** ✅ YES
-
-**Note:** The code sometimes queries for columns that don't exist:
-- `custom_title` - Does NOT exist
-- `custom_author` - Does NOT exist
-- `custom_total_pages` - Does NOT exist
-- `custom_description` - Does NOT exist
-- `custom_cover_url` - Does NOT exist
 
 ---
 
@@ -415,15 +416,20 @@
 | `actor_id` | `uuid` | ❌ NO | - | REFERENCES `user_profiles(id)` ON DELETE CASCADE (who performed the action) |
 | `event_type` | `text` | ❌ NO | - | CHECK: `'like'`, `'comment'` (or `'book_like'`, `'book_comment'` in code) |
 | `book_key` | `text` | ❌ NO | - | Book key (OpenLibrary key, ISBN, or UUID) |
+| `book_id` | `uuid` | ✅ YES | `NULL` | REFERENCES `books(id)` ON DELETE CASCADE (UUID from books table, added in migration `20250131000006_add_book_id_to_activity_events.sql`) |
 | `comment_id` | `uuid` | ✅ YES | `NULL` | ID of the comment (null for likes) |
 | `created_at` | `timestamptz` | ❌ NO | `now()` | Creation timestamp |
 
 **Primary Key:** `id`  
 **Unique Constraints:** `(actor_id, event_type, book_key)` WHERE `event_type = 'like'` - One like per user per book  
-**Foreign Keys:** `actor_id` → `user_profiles(id)` ON DELETE CASCADE  
+**Foreign Keys:**
+- `actor_id` → `user_profiles(id)` ON DELETE CASCADE
+- `book_id` → `books(id)` ON DELETE CASCADE (nullable, added in migration `20250131000006_add_book_id_to_activity_events.sql`)  
 **RLS Enabled:** ✅ YES
 
-**Note:** The column was renamed from `actor_user_id` to `actor_id` in migration `20250124000000_fix_activity_events_actor_id.sql`.
+**Note:** 
+- The column was renamed from `actor_user_id` to `actor_id` in migration `20250124000000_fix_activity_events_actor_id.sql`.
+- `book_id` was added in migration `20250131000006_add_book_id_to_activity_events.sql` to enable direct joins with `books` table and avoid "Titre inconnu" issues.
 
 ---
 
@@ -506,7 +512,7 @@
 
 | Policy Name | Operation | Condition | Explanation |
 |------------|-----------|-----------|-------------|
-| `authenticated_users_can_read_all_user_books` | SELECT | `true` | Authenticated users can read all user_books |
+| `select_user_books_following` | SELECT | `user_id = auth.uid() OR EXISTS (SELECT 1 FROM follows WHERE follower_id = auth.uid() AND following_id = user_books.user_id)` | Users can read their own user_books OR user_books from users they follow (for custom covers in feed) |
 | `users_can_insert_own_books` | INSERT | `auth.uid() = user_id` | Users can only add books to their own library |
 | `users_can_update_own_books` | UPDATE | `auth.uid() = user_id` | Users can only update their own books |
 | `users_can_delete_own_books` | DELETE | `auth.uid() = user_id` | Users can only delete their own books |
@@ -680,11 +686,11 @@
 - ❌ `cover_i` - Does NOT exist (use `openlibrary_cover_id` or `cover_url`)
 
 #### `user_books` table:
-- ❌ `custom_title` - Does NOT exist
-- ❌ `custom_author` - Does NOT exist
-- ❌ `custom_total_pages` - Does NOT exist
-- ❌ `custom_description` - Does NOT exist
-- ❌ `custom_cover_url` - Does NOT exist
+- ✅ `custom_title` - EXISTS (user-specific title override)
+- ✅ `custom_author` - EXISTS (user-specific author override)
+- ✅ `custom_total_pages` - EXISTS (user-specific page count override)
+- ✅ `custom_description` - EXISTS (user-specific description/notes)
+- ✅ `custom_cover_url` - EXISTS (user-specific cover URL, public URL from Supabase Storage)
 
 #### `books_cache` table:
 - ❌ `google_books_id` - Does NOT exist

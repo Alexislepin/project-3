@@ -1,24 +1,89 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Camera } from "lucide-react";
 import { BookQuickActions } from "./BookQuickActions";
+import { supabase } from "../lib/supabase";
+import { addCacheBuster } from "../lib/resolveImageUrl";
+import { Capacitor } from "@capacitor/core";
+import { resolveBookCover } from "../lib/bookCover";
 
-// Cache mémoire global pour les covers (évite de retenter les URLs qui ont échoué)
-const coverCache = new Map<string, { ok: boolean; ts: number }>();
-const COVER_CACHE_TTL_OK_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours pour les covers valides
-const COVER_CACHE_TTL_FAIL_MS = 12 * 60 * 60 * 1000; // 12 heures pour les échecs
-const COVER_TIMEOUT_MS = 25000; // 25 secondes pour tester une URL cover (augmenté pour 4G lente)
+/**
+ * Échappe les caractères XML pour éviter les injections
+ */
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
 
-// Flag DEBUG pour calmer les logs
-const DEBUG = import.meta.env.DEV && false; // mets true quand tu debug
-const log = (...args: any[]) => {
-  if (DEBUG) console.log(...args);
-};
+/**
+ * Encode une string UTF-8 en base64 (gère les accents et caractères spéciaux)
+ */
+function toBase64Utf8(input: string): string {
+  return btoa(unescape(encodeURIComponent(input)));
+}
+
+/**
+ * Génère une cover SVG avec gradient et texte (titre/auteur)
+ */
+function generateCoverSVG(title: string, author: string): string {
+  // Couleurs de gradient (variations de bleu/violet)
+  const colors = [
+    ['#667eea', '#764ba2'],
+    ['#f093fb', '#f5576c'],
+    ['#4facfe', '#00f2fe'],
+    ['#43e97b', '#38f9d7'],
+    ['#fa709a', '#fee140'],
+  ];
+  
+  // Sélectionner une couleur basée sur le hash du titre
+  const hash = title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const [color1, color2] = colors[hash % colors.length];
+  
+  // Tronquer le titre si trop long
+  const displayTitle = title.length > 30 ? title.substring(0, 27) + '...' : title;
+  const displayAuthor = author.length > 25 ? author.substring(0, 22) + '...' : author;
+  
+  // Échapper le XML pour éviter les injections
+  const safeTitle = escapeXml(displayTitle);
+  const safeAuthor = escapeXml(displayAuthor);
+  
+  const svg = `
+    <svg width="200" height="300" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
+          <stop offset="100%" style="stop-color:${color2};stop-opacity:1" />
+        </linearGradient>
+      </defs>
+      <rect width="200" height="300" fill="url(#grad)"/>
+      <text x="100" y="120" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">
+        ${safeTitle.split(' ').slice(0, 3).join(' ')}
+      </text>
+      ${safeTitle.split(' ').length > 3 ? `
+      <text x="100" y="145" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">
+        ${safeTitle.split(' ').slice(3).join(' ')}
+      </text>
+      ` : ''}
+      <text x="100" y="200" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="rgba(255,255,255,0.9)" text-anchor="middle" dominant-baseline="middle">
+        ${safeAuthor}
+      </text>
+    </svg>
+  `.trim();
+  
+  return `data:image/svg+xml;base64,${toBase64Utf8(svg)}`;
+}
+
 
 type BookCoverProps = {
   title: string;
   author?: string;
   coverUrl?: string | null; // Initial cover URL (can be from any source)
   custom_cover_url?: string | null; // User-specific custom cover (highest priority)
+  customCoverUrl?: string | null; // Alias for custom_cover_url (for compatibility)
+  cacheKey?: string; // Cache-busting key (e.g., updated_at timestamp)
   isbn?: string | null;
   isbn13?: string | null;
   isbn10?: string | null;
@@ -40,18 +105,14 @@ type BookCoverProps = {
   showAddCoverButton?: boolean; // Whether to show "Add cover" button when placeholder
 };
 
-type CoverSource = 
-  | { type: 'openlibrary_id'; url: string }
-  | { type: 'openlibrary_isbn'; url: string }
-  | { type: 'google'; url: string }
-  | { type: 'initial'; url: string }
-  | { type: 'placeholder'; url: string };
 
 export function BookCover({
   title,
   author,
   coverUrl,
   custom_cover_url,
+  customCoverUrl,
+  cacheKey,
   openlibrary_cover_id,
   className = "",
   likes = 0,
@@ -72,270 +133,145 @@ export function BookCover({
   bookId,
   showAddCoverButton = false,
 }: BookCoverProps) {
-  // Refs pour éviter les reloads inutiles et le "despawn"
-  const resolvedSrcRef = useRef<string | null>(null);
-  const lastIdentityRef = useRef<string>('');
-  const reqIdRef = useRef(0);
-  const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Get custom cover URL (support both prop names)
+  const customCover = custom_cover_url ?? customCoverUrl ?? null;
   
-  // State pour l'affichage
-  const [imgSrc, setImgSrc] = useState<string>('/placeholder-cover.svg');
+  /**
+   * Resolve cover URL: converts storage path to public URL if needed
+   * Rejects local URIs (file://, capacitor://) and returns null
+   * Forces https on iOS (http is blocked)
+   */
+  const resolveStorageUrl = (input: string | null): string | null => {
+    if (!input) return null;
+    
+    // Reject local URIs - these should never be stored in DB
+    if (input.startsWith('file://') || input.startsWith('capacitor://')) {
+      console.warn('[BookCover] Rejected local URI:', input);
+      return null;
+    }
+    
+    // If it's already an HTTP(S) URL, use it directly
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+      // ⚠️ iOS: force https (http is blocked by App Transport Security)
+      if (Capacitor.getPlatform() === 'ios' && input.startsWith('http://')) {
+        return input.replace('http://', 'https://');
+      }
+      return input;
+    }
+    
+    // Otherwise, treat it as a storage path and resolve to public URL
+    const { data } = supabase.storage.from('book-covers').getPublicUrl(input);
+    return data?.publicUrl || null;
+  };
   
-  // Construire une identity stable (UNIQUEMENT sur ce qui change vraiment l'image)
-  const identity = useMemo(() => {
-    return [
-      custom_cover_url || '',
-      coverUrl || '',
-      isbn13 || '',
-      isbn10 || '',
-      isbn || '',
-      cover_i ? String(cover_i) : '',
-      openlibrary_cover_id ? String(openlibrary_cover_id) : '',
-      googleCoverUrl || '',
-    ].join('|');
-  }, [custom_cover_url, coverUrl, isbn13, isbn10, isbn, cover_i, openlibrary_cover_id, googleCoverUrl]);
-
-  // Helper: vérifier si une URL contient archive.org (interdit)
-  const isArchiveOrgUrl = (url: string): boolean => {
-    return url.includes('archive.org');
-  };
-
-  // Build fallback sources in priority order
-  const buildSources = (): CoverSource[] => {
-    const sourcesList: CoverSource[] = [];
-
-    // Priority 1: Custom cover URL (user-specific manual cover) - HIGHEST PRIORITY
-    if (custom_cover_url && custom_cover_url.trim().length > 0 && !isArchiveOrgUrl(custom_cover_url)) {
-      const url = custom_cover_url.trim();
-      const cached = coverCache.get(url);
-      const now = Date.now();
-      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-        sourcesList.push({ type: 'initial', url }); // Use 'initial' type for custom covers
-      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-        log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
+  // Resolve custom cover (path -> URL if needed)
+  const resolvedCustomCover = resolveStorageUrl(customCover);
+  const resolvedCoverUrl = resolveStorageUrl(coverUrl);
+  
+  // Try to resolve cover with fallbacks (OpenLibrary, Google Books, etc.)
+  const resolvedCover = useMemo(() => {
+    // Priority 1: Custom cover (user-specific)
+    if (resolvedCustomCover) {
+      return resolvedCustomCover;
+    }
+    
+    // Priority 2: cover_url from database
+    if (resolvedCoverUrl) {
+      return resolvedCoverUrl;
+    }
+    
+    // Priority 3: OpenLibrary cover_i (most reliable)
+    const olCoverId = openlibrary_cover_id ?? cover_i;
+    if (olCoverId && typeof olCoverId === 'number' && olCoverId > 0) {
+      return `https://covers.openlibrary.org/b/id/${olCoverId}-L.jpg?default=false`;
+    }
+    
+    // Priority 4: Google Books cover URL
+    if (googleCoverUrl) {
+      return googleCoverUrl;
+    }
+    
+    // Priority 5: OpenLibrary via ISBN (ISBN13 preferred, then ISBN10)
+    const cleanIsbn = isbn13 || isbn10 || isbn;
+    if (cleanIsbn) {
+      const cleaned = cleanIsbn.replace(/[-\s]/g, '');
+      if (cleaned.length >= 10) {
+        return `https://covers.openlibrary.org/b/isbn/${cleaned}-L.jpg?default=false`;
       }
     }
+    
+    // Fallback: placeholder
+    return '/covers/placeholder-book.png';
+  }, [resolvedCustomCover, resolvedCoverUrl, openlibrary_cover_id, cover_i, googleCoverUrl, isbn13, isbn10, isbn]);
+  
+  // Add cache-buster ONLY when cacheKey is provided (and stable)
+  const finalCoverUrl = useMemo(() => {
+    if (!resolvedCover) return undefined;
+    if (!cacheKey) return resolvedCover; // ✅ no buster => stable
+    return addCacheBuster(resolvedCover, cacheKey);
+  }, [resolvedCover, cacheKey]);
 
-    // Priority 2: Cover URL from books table
-    if (coverUrl && !isArchiveOrgUrl(coverUrl)) {
-      const isDuplicate = sourcesList.some(s => s.url === coverUrl);
-      if (!isDuplicate) {
-        const cached = coverCache.get(coverUrl);
-        const now = Date.now();
-        if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-          sourcesList.push({ type: 'initial', url: coverUrl });
-        } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-          log(`[BookCover] ${title}: Skipping cached fail - ${coverUrl}`);
-        }
-      }
+  // ✅ Always validate src
+  const safeCoverUrl = useMemo(() => {
+    if (!finalCoverUrl) return undefined;
+
+    if (
+      finalCoverUrl.startsWith("http://") ||
+      finalCoverUrl.startsWith("https://") ||
+      finalCoverUrl.startsWith("data:") ||
+      finalCoverUrl.startsWith("/")
+    ) {
+      return finalCoverUrl;
     }
 
-    // Priority 3: OpenLibrary cover_i or openlibrary_cover_id
-    const coverId = cover_i || openlibrary_cover_id;
-    if (typeof coverId === 'number' && coverId > 0) {
-      const url = `https://covers.openlibrary.org/b/id/${coverId}-L.jpg?default=false`;
-      const cached = coverCache.get(url);
-      const now = Date.now();
-      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-        sourcesList.push({ type: 'openlibrary_id', url });
-      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-        log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
-      }
-    }
+    console.warn("[BookCover] Rejected invalid cover URL:", finalCoverUrl);
+    return undefined;
+  }, [finalCoverUrl]);
 
-    // Priority 4: OpenLibrary ISBN
-    const isbnToUse = isbn13 || isbn10 || isbn;
-    if (isbnToUse) {
-      const cleanIsbn = String(isbnToUse).replace(/[-\s]/g, '');
-      if (cleanIsbn.length >= 10) {
-        const url = `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg?default=false`;
-        const cached = coverCache.get(url);
-        const now = Date.now();
-        if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-          sourcesList.push({ type: 'openlibrary_isbn', url });
-        } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-          log(`[BookCover] ${title}: Skipping cached fail - ${url}`);
-        }
-      }
-    }
+  // Real displayed src (can fallback to placeholder on error)
+  const [imgSrc, setImgSrc] = useState<string | undefined>(safeCoverUrl);
+  const imgErrorRef = useRef(false);
 
-    // Priority 5: Google Books cover
-    if (googleCoverUrl && !isArchiveOrgUrl(googleCoverUrl)) {
-      const cached = coverCache.get(googleCoverUrl);
-      const now = Date.now();
-      if (!cached || (cached.ok && (now - cached.ts) < COVER_CACHE_TTL_OK_MS)) {
-        sourcesList.push({ type: 'google', url: googleCoverUrl });
-      } else if (cached && !cached.ok && (now - cached.ts) < COVER_CACHE_TTL_FAIL_MS) {
-        log(`[BookCover] ${title}: Skipping cached fail - ${googleCoverUrl}`);
-      }
-    }
-
-    // Priority 6: Placeholder (always last)
-    sourcesList.push({ type: 'placeholder', url: '/placeholder-cover.svg' });
-
-    return sourcesList;
-  };
-
-  // Main effect: charger l'image uniquement si identity change
   useEffect(() => {
-    const reqId = ++reqIdRef.current;
+    // ✅ avoid useless setState if same
+    setImgSrc((prev) => (prev === safeCoverUrl ? prev : safeCoverUrl));
+    imgErrorRef.current = false;
+  }, [safeCoverUrl]);
 
-    // Si identity n'a pas changé et qu'on a déjà une image résolue, ne rien faire
-    if (lastIdentityRef.current === identity && resolvedSrcRef.current) {
-      setImgSrc(resolvedSrcRef.current);
-      return;
-    }
+  const PLACEHOLDER = "/covers/placeholder-book.png";
 
-    // Si identity a changé, reset le cache local
-    if (lastIdentityRef.current !== identity) {
-      lastIdentityRef.current = identity;
-      resolvedSrcRef.current = null;
-    }
+  const handleImageError = () => {
+    if (imgErrorRef.current) return;
+    imgErrorRef.current = true;
+    setImgSrc(PLACEHOLDER);
+  };
 
-    let cancelled = false;
-
-    const safeSetResolved = (url: string) => {
-      if (cancelled) return;
-      if (reqId !== reqIdRef.current) return; // ignore anciennes requêtes
-      resolvedSrcRef.current = url;
-      setImgSrc(url);
-    };
-
-    const safeFallback = () => {
-      // IMPORTANT: ne fallback QUE si on n'a jamais eu de resolvedSrc
-      if (cancelled) return;
-      if (reqId !== reqIdRef.current) return;
-      if (resolvedSrcRef.current) return; // <- clé anti-despawn
-      setImgSrc('/placeholder-cover.svg');
-    };
-
-    // Annuler timeout précédent
-    if (timeoutIdRef.current) {
-      clearTimeout(timeoutIdRef.current);
-      timeoutIdRef.current = null;
-    }
-    
-    // Si on a déjà une image résolue, l'utiliser immédiatement
-    if (resolvedSrcRef.current) {
-      setImgSrc(resolvedSrcRef.current);
-      return;
-    }
-    
-    // Essayer de charger les sources
-    (async () => {
-      const sources = buildSources();
-      let sourceIndex = 0;
-
-      const tryNextSource = async (): Promise<void> => {
-        if (cancelled || reqId !== reqIdRef.current) return;
-
-        if (sourceIndex >= sources.length) {
-          safeFallback();
-          return;
-    }
-    
-        const source = sources[sourceIndex];
-        
-        if (source.type === 'placeholder') {
-          safeFallback();
-          return;
-        }
-
-        log(`[BookCover] ${title}: Trying source ${source.type} - ${source.url}`);
-
-        // Créer une image pour tester le chargement
-        const img = new Image();
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
-        let resolved = false;
-
-        const cleanup = () => {
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-          img.onload = null;
-          img.onerror = null;
-        };
-
-        const onSuccess = () => {
-          if (resolved || cancelled || reqId !== reqIdRef.current) return;
-          resolved = true;
-          cleanup();
-
-          const finalUrl = img.src;
-          if (isArchiveOrgUrl(finalUrl)) {
-            log(`[BookCover] ${title}: Archive.org detected, trying next source`);
-            sourceIndex++;
-            tryNextSource();
-      return;
-    }
-    
-          // Marquer comme valide dans le cache
-          coverCache.set(source.url, { ok: true, ts: Date.now() });
-          safeSetResolved(finalUrl);
-
-          if (onCoverLoaded && source.type !== 'initial') {
-            onCoverLoaded(finalUrl, source.type);
-          }
-
-          log(`[BookCover] ${title}: ✓ Loaded ${source.type}`);
-        };
-
-        const onError = () => {
-          if (resolved || cancelled || reqId !== reqIdRef.current) return;
-          resolved = true;
-          cleanup();
-
-          // Marquer comme invalide seulement si erreur réelle (pas timeout)
-          coverCache.set(source.url, { ok: false, ts: Date.now() });
-
-          sourceIndex++;
-          tryNextSource();
-        };
-
-        img.onload = onSuccess;
-        img.onerror = onError;
-
-        // Timeout pour passer à la source suivante
-        timeoutId = setTimeout(() => {
-          if (resolved) return;
-          log(`[BookCover] ${title}: Timeout on ${source.type}, trying next`);
-          sourceIndex++;
-          tryNextSource();
-    }, COVER_TIMEOUT_MS);
-
-        img.src = source.url;
-      };
-
-      await tryNextSource();
-    })();
-
-    return () => {
-      cancelled = true;
-      if (timeoutIdRef.current) {
-        clearTimeout(timeoutIdRef.current);
-        timeoutIdRef.current = null;
-      }
-    };
-  }, [identity]); // <- dépendance MINIMALE
-
-  const isPlaceholder = imgSrc === '/placeholder-cover.svg' && !resolvedSrcRef.current;
+  const isPlaceholder = !imgSrc || imgSrc === PLACEHOLDER;
 
   return (
     <div className={`relative overflow-hidden ${className}`}>
-      {!isPlaceholder ? (
+      {imgSrc && imgSrc !== PLACEHOLDER ? (
         <img
           src={imgSrc}
           alt={`${title}${author ? ` - ${author}` : ""}`}
           className="w-full h-full object-cover"
           loading="lazy"
           decoding="async"
+          onError={handleImageError}
         />
       ) : (
-        <div className="w-full h-full bg-neutral-200 flex items-center justify-center relative">
-          <span className="text-xs text-black/50 px-2 text-center line-clamp-3">
-            {title}
-          </span>
+        // Neutral placeholder with title text (never render broken <img>)
+        <div className="w-full h-full bg-gray-200 flex flex-col items-center justify-center p-4">
+          <div className="text-center">
+            <p className="text-sm font-semibold text-gray-600 line-clamp-3 mb-1">
+              {title || 'Sans titre'}
+            </p>
+            {author && (
+              <p className="text-xs text-gray-500 line-clamp-1">
+                {author}
+              </p>
+            )}
+          </div>
         </div>
       )}
 

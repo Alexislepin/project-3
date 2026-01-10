@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
-import { Settings, X } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import { debugLog, fatalError } from '../utils/logger';
 import { requestCameraPermission, openSettings as openCameraSettings } from '../lib/cameraPermission';
+import { AppHeader } from './AppHeader';
 
 interface BarcodeScannerProps {
   onScan: (isbn: string) => void;
@@ -18,18 +19,22 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
   const isStartingRef = useRef<boolean>(false);
   const lastScannedIsbnRef = useRef<string | null>(null);
   const lastScanTimeRef = useRef<number>(0);
+  
+  // Store callbacks in refs to avoid stale closures
+  const onScanRef = useRef(onScan);
+  const onCloseRef = useRef(onClose);
+
+  // Update refs when callbacks change
+  useEffect(() => {
+    onScanRef.current = onScan;
+    onCloseRef.current = onClose;
+  }, [onScan, onClose]);
 
   useEffect(() => {
-    // Block body scroll when scanner is open
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
     startScanner();
 
     return () => {
       stopScanner();
-      // Restore body scroll
-      document.body.style.overflow = prevOverflow;
     };
   }, []);
 
@@ -65,7 +70,7 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
         { facingMode: 'environment' },
         {
           fps: 10,
-          qrbox: { width: 250, height: 250 } // Default box, actual frame is styled via CSS
+          qrbox: { width: 250, height: 150 }
         },
         (decodedText) => {
           // VERY FIRST CHECK: return immediately if already detected
@@ -93,12 +98,12 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           // Log successful scan (dev only)
           debugLog('ISBN scanned:', cleanIsbn);
 
-          // Call onScan immediately
-          onScan(cleanIsbn);
+          // Call onScan immediately (use ref to get latest callback)
+          onScanRef.current(cleanIsbn);
 
           // Stop scanner and close modal immediately
           stopScanner();
-          onClose();
+          onCloseRef.current();
         },
         (error: any) => {
           // Silently ignore normal scanner behavior (no barcode in frame)
@@ -175,94 +180,51 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
   };
 
   return (
-    <>
-      {/* Global style for Html5Qrcode video to fill screen */}
-      <style>{`
-        #barcode-reader video {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
+    <div
+      className="fixed inset-0 bg-black/90 z-50 flex flex-col"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          stopScanner();
+          onCloseRef.current();
         }
-      `}</style>
+      }}
+    >
+      <div className="bg-black/50">
+        <AppHeader
+          title="Scanner le code-barres"
+          showClose
+          onClose={() => {
+            stopScanner();
+            onCloseRef.current();
+          }}
+          className="bg-black/50 border-b border-white/10 [&_h1]:text-black [&_button_svg]:text-black"
+        />
+      </div>
 
-      <div className="fixed inset-0 z-[9999] bg-black">
-        {/* Camera preview - fullscreen background */}
-        <div className="absolute inset-0 z-0">
-          <div id="barcode-reader" className="w-full h-full" />
-          {/* Dark premium overlay */}
-          <div className="absolute inset-0 bg-black/55" />
-          {/* Vignette */}
-          <div className="absolute inset-0 [background:radial-gradient(circle_at_center,rgba(0,0,0,0)_0%,rgba(0,0,0,0.75)_70%,rgba(0,0,0,0.9)_100%)]" />
-        </div>
+      <div className="flex-1 flex flex-col items-center justify-center p-4">
+        <div id="barcode-reader" className="w-full max-w-md rounded-lg overflow-hidden"></div>
 
-        {/* Header */}
-        <div
-          className="fixed left-0 right-0 z-20 px-4 flex items-center gap-3"
-          style={{ top: 'env(safe-area-inset-top)', paddingTop: 10, paddingBottom: 10 }}
-        >
-          <button
-            onClick={() => {
-              stopScanner();
-              onClose();
-            }}
-            className="p-2 -ml-2 rounded-lg active:scale-95 transition"
-          >
-            <X className="w-6 h-6 text-white" />
-          </button>
-          <h1 className="text-[15px] font-semibold text-white">
-            Scanner un code-barres
-          </h1>
-        </div>
-
-        {/* Center frame - vertical */}
-        <div className="absolute inset-0 z-10 flex items-center justify-center">
-          <div
-            className="relative rounded-[28px] border border-white/90 shadow-[0_20px_60px_rgba(0,0,0,0.55)]"
-            style={{
-              width: 'min(78vw, 340px)',
-              height: 'calc(min(78vw, 340px) * 1.35)',
-              background: 'rgba(255,255,255,0.06)',
-              backdropFilter: 'blur(2px)',
-            }}
-          >
-            {/* inner highlight */}
-            <div className="absolute inset-0 rounded-[28px] ring-1 ring-white/15" />
-            {/* scan line */}
-            <div className="absolute left-6 right-6 top-1/2 h-px bg-white/50" />
-          </div>
-        </div>
-
-        {/* Error message */}
         {error && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 p-6 bg-red-600/95 border border-red-500 rounded-2xl text-white text-center max-w-sm backdrop-blur-md">
-            <p className="mb-4 text-base font-medium">{error}</p>
+          <div className="mt-4 p-4 bg-red-500/20 border border-red-500 rounded-lg text-white text-center max-w-md">
+            <p className="mb-3">{error}</p>
             {showSettingsPrompt && (
               <button
                 onClick={handleOpenSettings}
-                className="w-full bg-white text-red-600 py-3 rounded-xl font-semibold hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+                className="w-full bg-white text-red-600 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
               >
-                <Settings className="w-5 h-5" />
+                <Settings className="w-4 h-4" />
                 Ouvrir Réglages
               </button>
             )}
           </div>
         )}
 
-        {/* Footer instruction */}
         {scanning && !error && (
-          <div
-            className="fixed left-0 right-0 z-20 px-6 text-center"
-            style={{ bottom: 'calc(env(safe-area-inset-bottom) + 18px)' }}
-          >
-            <p className="text-white text-[15px] font-semibold">
-              Placez le code-barres dans le cadre
-            </p>
-            <p className="text-white/70 text-[12px] mt-1">
-              Le livre sera détecté automatiquement
-            </p>
+          <div className="mt-4 text-white text-center">
+            <p className="text-lg font-semibold mb-2">Placez le code-barres dans le cadre</p>
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }

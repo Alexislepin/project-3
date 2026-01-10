@@ -13,10 +13,11 @@ import { WeeklySummaryCarousel } from '../components/WeeklySummaryCarousel';
 import { StreakBadge } from '../components/StreakBadge';
 import { SocialFeed } from '../pages/SocialFeed';
 import { LevelProgressBar } from '../components/LevelProgressBar';
+import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
-import { computeStreakFromActivities } from '../lib/readingStreak';
+import { fetchStreakInfo } from '../lib/streakService';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
@@ -42,6 +43,7 @@ export function Home() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [unreadSocialCount, setUnreadSocialCount] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
 
@@ -69,6 +71,7 @@ export function Home() {
   // Ranking state
   const [ranking, setRanking] = useState<{ rank: number; total: number } | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showLevelDetails, setShowLevelDetails] = useState(false);
   
   // Pull-to-refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -95,6 +98,48 @@ export function Home() {
     setUnreadNotificationsCount(data?.length || 0);
   };
 
+  const loadUnreadSocialCount = async () => {
+    if (!user) return;
+
+    const { data: p } = await supabase
+      .from('user_profiles')
+      .select('last_social_seen_at')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const since = p?.last_social_seen_at ?? new Date(0).toISOString();
+
+    // Compter les événements sociaux depuis since (unifié avec SocialFeed)
+    // - activity_events (book_like, book_comment) pour les livres
+    // - activity_reactions et activity_comments pour les activités
+    const [bookEventsRes, reactionsRes, commentsRes] = await Promise.all([
+      supabase
+        .from('activity_events')
+        .select('id, actor_id, created_at')
+        .in('event_type', ['book_like', 'book_comment'])
+        .gt('created_at', since),
+      supabase.from('activity_reactions').select('id, user_id, created_at').gt('created_at', since),
+      supabase.from('activity_comments').select('id, user_id, created_at').gt('created_at', since),
+    ]);
+
+    const count =
+      (bookEventsRes.data ?? []).filter(x => x.actor_id !== user.id).length +
+      (reactionsRes.data ?? []).filter(x => x.user_id !== user.id).length +
+      (commentsRes.data ?? []).filter(x => x.user_id !== user.id).length;
+
+    setUnreadSocialCount(count);
+  };
+
+  const markSocialSeen = async () => {
+    if (!user) return;
+    await supabase
+      .from('user_profiles')
+      .update({ last_social_seen_at: new Date().toISOString() })
+      .eq('id', user.id);
+
+    setUnreadSocialCount(0);
+  };
+
   const loadRanking = async () => {
     if (!user) return;
 
@@ -117,16 +162,14 @@ export function Home() {
         .select('id')
         .gt('xp_total', userProfile.xp_total);
 
-      // Count total users with XP > 0
-      const { data: totalUsers } = await supabase
+      // Count total users in the system (all users with profiles)
+      const { count: total } = await supabase
         .from('user_profiles')
-        .select('id')
-        .gt('xp_total', 0);
+        .select('id', { count: 'exact', head: true });
 
       const rank = (higherRankUsers?.length || 0) + 1;
-      const total = totalUsers?.length || 0;
 
-      setRanking({ rank, total });
+      setRanking({ rank, total: total || 0 });
     } catch (error) {
       console.error('[loadRanking] Error:', error);
       setRanking(null);
@@ -243,6 +286,9 @@ export function Home() {
           *,
           user_id,
           photos,
+          reading_speed_pph,
+          reading_pace_min_per_page,
+          reading_speed_wpm,
           user_profiles!activities_user_id_fkey(id, username, display_name, avatar_url),
           books!activities_book_id_fkey(title, author, cover_url, openlibrary_cover_id, isbn)
         `)
@@ -271,18 +317,30 @@ export function Home() {
         const userIds = [...new Set(data.map(a => a.user_id))] as string[];
         
         if (bookIds.length > 0 && userIds.length > 0) {
-          const { data: userBooksData } = await supabase
+          const { data: userBooksData, error: userBooksError } = await supabase
             .from('user_books')
             .select('book_id, user_id, custom_cover_url')
             .in('book_id', bookIds)
             .in('user_id', userIds);
+          
+          if (userBooksError) {
+            console.error('[Home] Error fetching custom covers:', userBooksError);
+          }
           
           // Create a map: `${user_id}:${book_id}` -> custom_cover_url
           const customCoverMap = new Map<string, string | null>();
           if (userBooksData) {
             userBooksData.forEach(ub => {
               const key = `${ub.user_id}:${ub.book_id}`;
-              customCoverMap.set(key, ub.custom_cover_url);
+              // custom_cover_url is already a public URL (stored as such in AddCoverModal)
+              // If it's a path (shouldn't happen, but safety check), convert to public URL
+              let coverUrl = ub.custom_cover_url;
+              if (coverUrl && !coverUrl.startsWith('http')) {
+                // It's a path, convert to public URL
+                const { data: publicUrlData } = supabase.storage.from('book-covers').getPublicUrl(coverUrl);
+                coverUrl = publicUrlData?.publicUrl || null;
+              }
+              customCoverMap.set(key, coverUrl);
             });
           }
           
@@ -355,6 +413,9 @@ export function Home() {
           title: activity.title,
           pages_read: activity.pages_read,
           duration_minutes: activity.duration_minutes,
+          reading_speed_pph: activity.reading_speed_pph,
+          reading_pace_min_per_page: activity.reading_pace_min_per_page,
+          reading_speed_wpm: activity.reading_speed_wpm,
           notes: activity.notes,
           quotes: activity.quotes || [],
           book: activity.books,
@@ -386,6 +447,7 @@ export function Home() {
     loadWeeklySummary();
     loadStreak();
     loadUnreadNotificationsCount();
+    loadUnreadSocialCount();
     loadProfile();
     loadRanking();
 
@@ -401,6 +463,7 @@ export function Home() {
 
     const interval = setInterval(() => {
       loadUnreadNotificationsCount();
+      loadUnreadSocialCount();
     }, 30000);
 
     return () => {
@@ -415,32 +478,12 @@ export function Home() {
     if (!user) return;
 
     try {
-      // Load last 200 reading activities (wide range, we'll filter in local timezone)
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('created_at, pages_read, duration_minutes, type')
-        .eq('user_id', user.id)
-        .eq('type', 'reading')
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      if (error) {
-        console.error('[loadStreak] Error:', error);
-        setStreak(0);
-        return;
-      }
-
-      // Compute streak from activities (local timezone)
-      const streak = computeStreakFromActivities(activities || []);
-      setStreak(streak);
-
-      // Update profile's current_streak
-      await supabase
-        .from('user_profiles')
-        .update({ current_streak: streak })
-        .eq('id', user.id);
+      // Use unified streak service (single source of truth)
+      const info = await fetchStreakInfo(user.id);
+      setStreak(info.streak);
+      // Note: DB update is handled by fetchStreakInfo to avoid concurrent updates
     } catch (error) {
-      console.error('[loadStreak] Exception:', error);
+      console.error('[Home] loadStreak exception:', error);
       setStreak(0);
     }
   };
@@ -654,7 +697,8 @@ export function Home() {
   };
 
   // Navigation handlers
-  const handleNavigateToSocial = () => {
+  const handleNavigateToSocial = async () => {
+    await markSocialSeen();
     setShowSocial(true);
   };
 
@@ -675,10 +719,15 @@ export function Home() {
             <StreakBadge streak={streak} onClick={handleNavigateToInsights} />
             <button
               onClick={handleNavigateToSocial}
-              className="p-1.5 hover:bg-black/5 rounded-full transition-colors"
+              className="p-1.5 hover:bg-black/5 rounded-full transition-colors relative"
               title="Social"
             >
               <Heart className="w-4 h-4 text-text-sub-light" />
+              {unreadSocialCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-primary text-black text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {unreadSocialCount > 9 ? '9+' : unreadSocialCount}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setShowSearchUsers(true)}
@@ -706,9 +755,8 @@ export function Home() {
       {/* Scrollable Feed Content with Pull-to-Refresh - SINGLE SCROLL CONTAINER */}
       <div
         ref={(el) => setScrollContainerRef(el)}
-        className="h-full overflow-y-auto relative"
+        className="h-full overflow-y-auto relative safe-bottom-content"
         style={{
-          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -767,9 +815,13 @@ export function Home() {
             />
             
             {/* Level Progress Bar (compact) - aligned with cards */}
-            {contextProfile?.xp_total !== undefined && (
+            {(profile?.xp_total ?? contextProfile?.xp_total) !== undefined && (
               <div className="px-4">
-                <LevelProgressBar xpTotal={contextProfile.xp_total || 0} variant="compact" />
+                <LevelProgressBar 
+                  xpTotal={(profile?.xp_total ?? contextProfile?.xp_total) || 0} 
+                  variant="compact"
+                  onClick={() => setShowLevelDetails(true)}
+                />
               </div>
             )}
           </div>
@@ -801,6 +853,10 @@ export function Home() {
                       setDeletingActivity(activity);
                       setDeletingActivityId(id);
                     }
+                  }}
+                  onUserClick={(userId) => {
+                    setSelectedUserId(userId);
+                    setActivityFocus(null);
                   }}
                 />
                   ))}
@@ -886,7 +942,6 @@ export function Home() {
 
       {selectedUserId && (
         <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
-          {console.log('[Home] ✅ Rendering UserProfileView with userId:', selectedUserId)}
           <UserProfileView
             userId={selectedUserId}
             onClose={() => {
@@ -925,6 +980,10 @@ export function Home() {
             setShowLeaderboard(false);
           }}
         />
+      )}
+
+      {showLevelDetails && (
+        <LevelDetailsModal onClose={() => setShowLevelDetails(false)} />
       )}
 
       {/* Social feed overlay */}

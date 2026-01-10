@@ -7,12 +7,15 @@ import { AppHeader } from '../components/AppHeader';
 import { updateStreakAfterActivity } from '../utils/streak';
 import { Toast } from '../components/Toast';
 import { Camera as CapacitorCamera } from '@capacitor/camera';
-import { uploadImageToSupabase, generateActivityPhotoPath } from '../lib/storageUpload';
+import { Capacitor } from '@capacitor/core';
+import { uploadFileToBucket } from '../lib/storageUpload';
+import { BOTTOM_INSET } from '../lib/layoutConstants';
 
 interface SessionSummaryProps {
   bookTitle: string;
   bookAuthor: string;
   bookId: string;
+  coverUrl?: string | null; // Display cover URL (custom_cover_url or book.cover_url)
   pagesRead: number;
   durationMinutes: number;
   currentPage: number;
@@ -34,6 +37,7 @@ export function SessionSummary({
   bookTitle,
   bookAuthor,
   bookId,
+  coverUrl,
   pagesRead,
   durationMinutes,
   currentPage,
@@ -49,7 +53,13 @@ export function SessionSummary({
   const [currentQuotePage, setCurrentQuotePage] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [saving, setSaving] = useState(false);
-  const [bookCover, setBookCover] = useState<string | null>(null);
+  const [bookData, setBookData] = useState<{
+    isbn?: string | null;
+    isbn13?: string | null;
+    isbn10?: string | null;
+    openlibrary_cover_id?: string | null;
+    google_books_id?: string | null;
+  } | null>(null);
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
   const [notePage, setNotePage] = useState<string>('');
   const [noteText, setNoteText] = useState('');
@@ -78,12 +88,18 @@ export function SessionSummary({
     const fetchBookData = async () => {
       const { data } = await supabase
         .from('books')
-        .select('cover_url')
+        .select('isbn, isbn13, isbn10, openlibrary_cover_id, google_books_id')
         .eq('id', bookId)
         .maybeSingle();
 
       if (data) {
-        setBookCover(data.cover_url);
+        setBookData({
+          isbn: data.isbn || null,
+          isbn13: (data as any).isbn13 || null,
+          isbn10: (data as any).isbn10 || null,
+          openlibrary_cover_id: (data as any).openlibrary_cover_id || null,
+          google_books_id: data.google_books_id || null,
+        });
       }
     };
 
@@ -113,7 +129,7 @@ export function SessionSummary({
 
     try {
       // Try Capacitor Camera first (iOS/Android)
-      if (typeof window !== 'undefined' && (window as any).Capacitor) {
+      if (Capacitor.isNativePlatform()) {
         try {
           const result = await CapacitorCamera.pickImages({
             quality: 80,
@@ -187,9 +203,9 @@ export function SessionSummary({
       try {
         const uploadPromises = photos.map(async (photo, index) => {
           try {
-            // Generate path: must start with userId/
-            // Format: ${user.id}/${index}.jpg
-            const path = generateActivityPhotoPath(user.id, index);
+            // Generate path inline (compatible RLS): must start with userId/
+            // Format: ${user.id}/activity/${activityId}/${Date.now()}_${index}.jpg
+            const path = `${user.id}/activity/${activityId}/${Date.now()}_${index}.jpg`;
             
             // Verify path starts with userId/
             if (!path.startsWith(`${user.id}/`)) {
@@ -197,23 +213,15 @@ export function SessionSummary({
               return null;
             }
 
-            // Upload returns the path (not URL)
-            const uploadedPath = await uploadImageToSupabase(supabase, photo.file, {
+            // Upload using uploadFileToBucket (for File/Blob objects)
+            const { objectPath } = await uploadFileToBucket({
               bucket: 'activity-photos',
               path,
-              compress: true,
-              maxWidth: 1920,
-              maxHeight: 1920,
-              quality: 0.8,
+              file: photo.file,
             });
 
-            // Verify the returned path matches what we sent
-            if (uploadedPath !== path) {
-              console.warn(`[SessionSummary] Upload returned different path: expected ${path}, got ${uploadedPath}`);
-            }
-
             // Return the PATH (not URL) for storage in DB
-            return uploadedPath;
+            return objectPath;
           } catch (error: any) {
             // If one photo fails, continue with others
             console.error(`[SessionSummary] Photo ${index} upload failed:`, {
@@ -307,6 +315,9 @@ export function SessionSummary({
       photoPathsCount: photoPaths.length,
     });
 
+    // Note: XP is awarded in LogActivity when activity is created
+    // We only refresh the UI here
+
     // ✅ Notify app to refresh profile/stats (totalMinutes will be recalculated from activities)
     window.dispatchEvent(new Event('activity-created'));
 
@@ -375,8 +386,13 @@ export function SessionSummary({
     }
   };
 
+  const SHARE_FOOTER_H = 104;
+
   return (
-    <div className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden">
+    <div 
+      className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden"
+      style={{ paddingBottom: BOTTOM_INSET }}
+    >
       {/* Sticky Header with safe-area top */}
       <AppHeader
         title="Partager votre activité"
@@ -388,7 +404,7 @@ export function SessionSummary({
       <div 
         className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-6"
         style={{
-          paddingBottom: 'calc(16px + var(--sab))',
+          paddingBottom: `calc(${SHARE_FOOTER_H}px + ${BOTTOM_INSET})`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -397,10 +413,17 @@ export function SessionSummary({
         <div className="bg-card-light rounded-2xl p-6 mb-6 border border-gray-200">
           <div className="flex items-start gap-4 mb-4">
             <BookCover
-              coverUrl={bookCover || undefined}
+              coverUrl={coverUrl || undefined}
               title={bookTitle}
               author={bookAuthor}
+              isbn={bookData?.isbn || null}
+              isbn13={bookData?.isbn13 || null}
+              isbn10={bookData?.isbn10 || null}
+              cover_i={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
+              openlibrary_cover_id={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
+              googleCoverUrl={bookData?.google_books_id ? `https://books.google.com/books/content?id=${bookData.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
               className="size-16 rounded-lg shrink-0"
+              bookId={bookId}
             />
             <div className="flex-1 min-w-0">
               <h3 className="font-bold text-lg leading-tight mb-1">{bookTitle}</h3>
@@ -445,7 +468,7 @@ export function SessionSummary({
           })()}
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-5">
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -627,16 +650,19 @@ export function SessionSummary({
         </div>
       </div>
 
-      <div className="p-6 pt-4 shrink-0 bg-background-light border-t border-gray-200" style={{ paddingBottom: 'calc(16px + var(--sab))' }}>
-        <button
-          onClick={handleShare}
-          disabled={saving || uploadingPhotos}
-          className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50"
-        >
-          <span className="text-black text-lg font-bold uppercase tracking-wide">
-            {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
-          </span>
-        </button>
+      {/* ✅ Footer FIXED CTA */}
+      <div className="fixed left-0 right-0 z-[210]" style={{ bottom: BOTTOM_INSET }}>
+        <div className="max-w-md mx-auto px-6 pb-4">
+          <button
+            onClick={handleShare}
+            disabled={saving || uploadingPhotos}
+            className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50 font-black tracking-wide"
+          >
+            <span className="text-black text-lg font-bold uppercase tracking-wide">
+              {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Modal ajouter note */}

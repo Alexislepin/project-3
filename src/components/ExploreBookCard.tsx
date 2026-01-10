@@ -17,6 +17,7 @@ interface ExploreBookCardProps {
   onCountsChange: (bookKey: string, nextLikes: number, nextComments: number, nextLiked: boolean) => void;
   onOpenComments: (book: any) => void;
   onShowToast: (message: string, type?: 'success' | 'info' | 'error') => void;
+  showPages?: boolean; // Afficher le nombre de pages (default: true)
 }
 
 export const ExploreBookCard = memo(function ExploreBookCard({
@@ -33,6 +34,7 @@ export const ExploreBookCard = memo(function ExploreBookCard({
   onCountsChange,
   onOpenComments,
   onShowToast,
+  showPages = true,
 }: ExploreBookCardProps) {
   const handleCoverClick = useCallback(() => {
     onOpenDetails(googleBookConverted);
@@ -54,14 +56,18 @@ export const ExploreBookCard = memo(function ExploreBookCard({
     onOpenComments(googleBookConverted);
   }, [googleBookConverted, onOpenComments]);
 
+  // Pages: utiliser number_of_pages_median si disponible
+  const pages = book.number_of_pages_median || null;
+  const pagesDisplay = pages ? `${pages} pages` : '— pages';
+
   return (
     <div
-      className="flex flex-col rounded-2xl bg-white border border-black/5 p-2 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden"
+      className="flex flex-col rounded-2xl bg-white border border-black/5 p-2.5 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden hover:shadow-[0_2px_15px_rgba(0,0,0,0.08)] transition-all active:scale-[0.99]"
     >
       <div
         role="button"
         tabIndex={0}
-        className="relative cursor-pointer rounded-2xl overflow-hidden bg-neutral-100 shadow-[0_10px_25px_rgba(0,0,0,0.10)]"
+        className="relative cursor-pointer rounded-xl overflow-hidden bg-neutral-100 shadow-sm"
         onClick={handleCoverClick}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -86,32 +92,50 @@ export const ExploreBookCard = memo(function ExploreBookCard({
         />
       </div>
 
-      <div className="flex flex-col flex-1 mt-2">
-        <button
-          type="button"
-          className="text-[13px] font-semibold leading-snug line-clamp-2 cursor-pointer hover:text-primary text-left w-full pointer-events-auto"
-          onClick={handleTitleClick}
-        >
-          {book.title}
-        </button>
-        <p className="text-[11px] text-black/50 line-clamp-1">{book.authors}</p>
+      <div className="flex flex-col flex-1 mt-2.5">
+        <div className="min-h-[48px] mb-2">
+          <button
+            type="button"
+            className="text-[13px] font-semibold leading-snug line-clamp-2 cursor-pointer hover:text-primary text-left w-full pointer-events-auto mb-1"
+            onClick={handleTitleClick}
+          >
+            {book.title}
+          </button>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-black/50 line-clamp-1 flex-1">{book.authors}</p>
+            {showPages && (
+              <span className="text-[10px] text-black/40 font-medium whitespace-nowrap">{pagesDisplay}</span>
+            )}
+          </div>
+        </div>
 
-        {alreadyAdded ? (
-          <button
-            disabled
-            className="mt-2 w-full rounded-xl bg-gray-200 text-gray-600 py-2 text-[12px] font-medium disabled:opacity-60"
-          >
-            Déjà ajouté
-          </button>
-        ) : (
-          <button
-            onClick={handleAddClick}
-            disabled={addingBookId === book.id}
-            className="mt-2 w-full rounded-xl bg-black text-white py-2 text-[12px] font-medium active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {addingBookId === book.id ? 'Ajout en cours...' : 'Ajouter'}
-          </button>
-        )}
+        <div className="mt-auto">
+          {alreadyAdded ? (
+            <button
+              disabled
+              className="w-full rounded-xl bg-gray-200 text-gray-600 py-2 text-[12px] font-medium disabled:opacity-60"
+            >
+              Déjà ajouté
+            </button>
+          ) : (
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleAddClick();
+              }}
+              disabled={addingBookId === book.id}
+              className="w-full rounded-xl bg-black text-white py-2 text-[12px] font-medium active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed pointer-events-auto"
+            >
+              {addingBookId === book.id ? 'Ajout en cours...' : 'Ajouter'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

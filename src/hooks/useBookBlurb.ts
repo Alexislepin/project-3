@@ -64,6 +64,13 @@ export function useBookBlurb(book: UseBookBlurbInput | null): UseBookBlurbResult
           .maybeSingle();
 
         if (error) {
+          // ✅ Fix warning PGRST205 (table not found) : ne pas spam la console
+          if ((error as any).code === 'PGRST205') {
+            setBlurb(null);
+            setStatus(null);
+            setLoading(false);
+            return;
+          }
           console.warn('[useBookBlurb] Cache lookup error:', error);
         } else if (cached) {
           if (cached.status === 'ready' && cached.blurb && cached.blurb.trim().length > 0) {

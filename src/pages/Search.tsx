@@ -10,6 +10,7 @@ import { BookDetailsModal } from '../components/BookDetailsModal';
 import { BookCover } from '../components/BookCover';
 import { supabase } from '../lib/supabase';
 import { debugLog, fatalError } from '../utils/logger';
+import { Capacitor } from '@capacitor/core';
 
 export function Search() {
   const { t, i18n } = useTranslation();
@@ -34,15 +35,29 @@ export function Search() {
 
     try {
       let results: Book[] = [];
+      let googleResults: Book[] = [];
 
       // Priority 1: Try Google Books API (if API key available)
       try {
-        const googleResults = await searchGoogleBooks(trimmedQuery, undefined, 0, 20);
+        googleResults = await searchGoogleBooks(trimmedQuery, undefined, 0, 20);
         if (googleResults && googleResults.length > 0) {
           results = googleResults;
           debugLog(`[Search] Found ${googleResults.length} results from Google Books`);
         }
       } catch (googleError: any) {
+        // Log erreur Google explicitement (message + stack + status si possible)
+        console.error('[Search] ❌ Google Books error:', {
+          error: googleError,
+          errorString: JSON.stringify(googleError),
+          message: googleError?.message,
+          stack: googleError?.stack,
+          status: googleError?.status,
+          code: googleError?.code,
+          name: googleError?.name,
+          platform: Capacitor.getPlatform(),
+          query: trimmedQuery,
+        });
+        
         // If API key missing or error, continue to OpenLibrary
         if (googleError?.message?.includes('API key')) {
           debugLog('[Search] Google Books API key missing, trying OpenLibrary');
@@ -74,9 +89,26 @@ export function Search() {
             debugLog(`[Search] Found ${olResults.length} results from OpenLibrary`);
           }
         } catch (olError) {
+          console.error('[Search] ❌ OpenLibrary error:', {
+            error: olError,
+            errorString: JSON.stringify(olError),
+            message: (olError as any)?.message,
+            stack: (olError as any)?.stack,
+            platform: Capacitor.getPlatform(),
+            query: trimmedQuery,
+          });
           debugLog('[Search] OpenLibrary error:', olError);
         }
       }
+
+      // Log "source de vérité" juste avant setSearchResults
+      debugLog('[Explorer Search] source', {
+        used: results === googleResults ? 'google' : 'openlibrary',
+        query: trimmedQuery,
+        platform: Capacitor.getPlatform(),
+        googleCount: googleResults.length,
+        finalCount: results.length,
+      });
 
       setResults(results);
     } catch (error) {
@@ -449,9 +481,18 @@ export function Search() {
                 </div>
 
                 <button
-                  onClick={() => handleAddBook(book)}
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleAddBook(book);
+                  }}
                   disabled={adding === book.id}
-                  className="shrink-0 h-10 px-4 bg-primary text-black rounded-lg font-bold hover:brightness-95 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="shrink-0 h-10 px-4 bg-primary text-black rounded-lg font-bold hover:brightness-95 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed pointer-events-auto"
                 >
                   {adding === book.id ? 'Ajout...' : 'Ajouter'}
                 </button>

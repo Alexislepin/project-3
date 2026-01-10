@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { signInWithGoogle } from '../lib/oauth';
 import { BrandLogo } from '../components/BrandLogo';
+import { supabase } from '../lib/supabase';
+import { Capacitor } from '@capacitor/core';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -9,13 +11,17 @@ export function LoginPage() {
   const [error, setError] = useState<{ title?: string; message: string; action?: 'go_login' | 'go_signup' | 'none' } | string>('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetPasswordEmail, setResetPasswordEmail] = useState('');
+  const [resetPasswordLoading, setResetPasswordLoading] = useState(false);
+  const [resetPasswordSuccess, setResetPasswordSuccess] = useState(false);
   const { signIn } = useAuth();
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
     setError('');
     
-    const { error } = await signInWithGoogle();
+    const { error } = await signInWithGoogle({ forceAccount: false });
     
     if (error) {
       setError(error.message || 'Erreur lors de la connexion Google');
@@ -37,6 +43,35 @@ export function LoginPage() {
     } else {
       // Navigation sera gérée par App.tsx via AuthContext
       setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setResetPasswordLoading(true);
+
+    if (!resetPasswordEmail.trim()) {
+      setError('Veuillez entrer votre adresse email');
+      setResetPasswordLoading(false);
+      return;
+    }
+
+    // Choose redirectTo based on platform (dev-friendly)
+    const redirectTo = Capacitor.isNativePlatform()
+      ? 'lexu://reset-password'
+      : `${window.location.origin}/reset-password`; // => http://localhost:5173/reset-password ou 5174 etc.
+
+    const { error } = await supabase.auth.resetPasswordForEmail(resetPasswordEmail.trim(), {
+      redirectTo,
+    });
+
+    if (error) {
+      setError(error.message || 'Erreur lors de l\'envoi de l\'email de réinitialisation');
+      setResetPasswordLoading(false);
+    } else {
+      setResetPasswordSuccess(true);
+      setResetPasswordLoading(false);
     }
   };
 
@@ -96,9 +131,22 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-text-main-light mb-2">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-text-main-light">
                 Mot de passe
               </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetPassword(true);
+                    setResetPasswordEmail(email); // Pre-fill with current email
+                  }}
+                  className="text-sm text-black hover:text-black/80 transition-colors font-semibold underline underline-offset-2"
+                  disabled={loading}
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
               <input
                 type="password"
                 value={password}
@@ -142,6 +190,24 @@ export function LoginPage() {
               </svg>
               {googleLoading ? 'Connexion...' : 'Se connecter avec Google'}
             </button>
+
+            <div className="mt-3 text-center">
+              <button
+                onClick={async () => {
+                  setGoogleLoading(true);
+                  setError('');
+                  const { error } = await signInWithGoogle({ forceAccount: true });
+                  if (error) {
+                    setError(error.message || 'Erreur lors de la connexion Google');
+                    setGoogleLoading(false);
+                  }
+                }}
+                disabled={loading || googleLoading}
+                className="text-sm text-text-sub-light hover:text-text-main-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed underline"
+              >
+                Se connecter avec un autre compte
+              </button>
+            </div>
           </div>
 
           <div className="mt-6 text-center">
@@ -156,6 +222,87 @@ export function LoginPage() {
           </div>
         </div>
       </div>
+
+      {/* Reset Password Modal */}
+      {showResetPassword && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 w-full max-w-md">
+            {resetPasswordSuccess ? (
+              <>
+                <h3 className="text-xl font-semibold mb-4 text-text-main-light">
+                  Email envoyé
+                </h3>
+                <p className="text-text-sub-light mb-6">
+                  Nous avons envoyé un lien de réinitialisation à <strong>{resetPasswordEmail}</strong>. 
+                  Vérifiez votre boîte de réception et suivez les instructions pour réinitialiser votre mot de passe.
+                </p>
+                <button
+                  onClick={() => {
+                    setShowResetPassword(false);
+                    setResetPasswordSuccess(false);
+                    setResetPasswordEmail('');
+                  }}
+                  className="w-full bg-primary text-black py-3 rounded-lg font-bold hover:brightness-95 transition-colors"
+                >
+                  Fermer
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 className="text-xl font-semibold mb-4 text-text-main-light">
+                  Mot de passe oublié ?
+                </h3>
+                <p className="text-text-sub-light mb-6">
+                  Entrez votre adresse email et nous vous enverrons un lien pour réinitialiser votre mot de passe.
+                </p>
+                <form onSubmit={handleResetPassword} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-text-main-light mb-2">
+                      Courriel
+                    </label>
+                    <input
+                      type="email"
+                      value={resetPasswordEmail}
+                      onChange={(e) => setResetPasswordEmail(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
+                      placeholder="vous@exemple.com"
+                      required
+                      disabled={resetPasswordLoading}
+                      autoFocus
+                    />
+                  </div>
+                  {error && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                      {typeof error === 'object' ? error.message : error}
+                    </div>
+                  )}
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowResetPassword(false);
+                        setResetPasswordEmail('');
+                        setError('');
+                      }}
+                      disabled={resetPasswordLoading}
+                      className="flex-1 px-4 py-3 border border-gray-300 rounded-lg font-medium text-text-main-light hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={resetPasswordLoading}
+                      className="flex-1 px-4 py-3 bg-primary text-black rounded-lg font-bold hover:brightness-95 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {resetPasswordLoading ? 'Envoi...' : 'Envoyer'}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

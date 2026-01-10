@@ -7,6 +7,12 @@ export async function validateImageUrl(url: string, timeoutMs: number = 3000): P
     return false;
   }
 
+  // ✅ Ne jamais fetch une URL invalide
+  // Accepter uniquement les URLs HTTP(S) ou les data URLs
+  if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:')) {
+    return false;
+  }
+
   // Rejeter immédiatement les URLs archive.org
   if (url.includes('archive.org')) {
     return false;

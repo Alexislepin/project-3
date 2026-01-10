@@ -3,6 +3,7 @@ import { X, Search, UserPlus, UserCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useScrollLock } from '../hooks/useScrollLock';
+import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 
 interface SearchUsersModalProps {
   onClose: () => void;
@@ -30,7 +31,7 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
 
     const { data: users } = await supabase
       .from('user_profiles')
-      .select('id, display_name, username, avatar_url, bio')
+      .select('id, display_name, username, avatar_url, bio, updated_at')
       .neq('id', user?.id || '')
       .or(`display_name.ilike.%${query}%,username.ilike.%${query}%`)
       .limit(20);
@@ -73,7 +74,22 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
       if (followError) {
         console.error('Erreur lors du follow:', followError);
       } else {
-        // La notification sera créée automatiquement par le trigger create_follow_notification()
+        // Créer la notification avec upsert pour éviter les doublons
+        await supabase
+          .from('notifications')
+          .upsert(
+            {
+              user_id: userId,   // celui qui reçoit la notif
+              actor_id: user.id,       // celui qui follow
+              type: 'follow',
+              read: false,
+              created_at: new Date().toISOString(), // remonte en haut à chaque re-follow
+            },
+            {
+              onConflict: 'user_id,actor_id,type',
+            }
+          );
+        
         setFollowingIds([...followingIds, userId]);
       }
     }
@@ -171,19 +187,24 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
                       onClick={handleProfileClick}
                       className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
                     >
-                      <div className="w-12 h-12 bg-stone-200 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
-                        {profile.avatar_url ? (
-                          <img
-                            src={profile.avatar_url}
-                            alt={profile.display_name}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <span className="text-lg font-bold text-stone-600">
-                            {profile.display_name.charAt(0).toUpperCase()}
-                          </span>
-                        )}
-                      </div>
+                  <div className="w-12 h-12 bg-stone-200 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {(() => {
+                      const avatarUrl = resolveAvatarUrl(profile.avatar_url || null, supabase);
+                      const bustedUrl = avatarUrl ? addCacheBuster(avatarUrl, profile.updated_at) : null;
+                      const safeUrl = bustedUrl && (bustedUrl.startsWith('http://') || bustedUrl.startsWith('https://') || bustedUrl.startsWith('data:') || bustedUrl.startsWith('/')) ? bustedUrl : null;
+                      return safeUrl ? (
+                        <img
+                          src={safeUrl}
+                          alt={profile.display_name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-lg font-bold text-stone-600">
+                          {profile.display_name.charAt(0).toUpperCase()}
+                        </span>
+                      );
+                    })()}
+                  </div>
 
                       <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-stone-900">{profile.display_name}</h3>

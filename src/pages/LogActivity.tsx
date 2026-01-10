@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, BookOpen, Dumbbell, Brain, Target } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,13 +19,27 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
   const [notes, setNotes] = useState('');
   const [selectedBook, setSelectedBook] = useState<string | null>(null);
   const [userBooks, setUserBooks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const { user } = useAuth();
+  
+  // Guard anti double-submit
+  const isSavingRef = useRef(false);
+  const activityIdRef = useRef<string | null>(null);
+  
+  // Wrapper pour onClose avec reset des refs
+  const handleClose = () => {
+    isSavingRef.current = false;
+    activityIdRef.current = null;
+    onClose();
+  };
 
   useEffect(() => {
     if (activityType === 'reading') {
       loadUserBooks();
     }
+    // Reset refs quand on change de type d'activité (nouvelle session)
+    isSavingRef.current = false;
+    activityIdRef.current = null;
   }, [activityType]);
 
   const loadUserBooks = async () => {
@@ -76,9 +90,17 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
     e.preventDefault();
     if (!user || !activityType) return;
 
-    setLoading(true);
+    // Guard anti double-submit
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
 
-    const activityData: any = {
+    const activityId = activityIdRef.current ?? (crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    activityIdRef.current = activityId;
+
+    setSaving(true);
+
+    const payload: any = {
+      id: activityId,
       user_id: user.id,
       type: activityType,
       title: title || `${activityType.charAt(0).toUpperCase() + activityType.slice(1)} session`,
@@ -89,9 +111,14 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
       visibility: 'public', // Default to public so it appears in followers' feeds
     };
 
-    const { error } = await supabase.from('activities').insert(activityData);
+    try {
+      const { error } = await supabase.from('activities').insert(payload);
+      if (error) {
+        if ((error as any).code === '23505') return; // déjà inséré
+        throw error;
+      }
 
-    if (!error) {
+      // Update user_books if reading activity
       if (activityType === 'reading' && selectedBook && pages) {
         const { data: userBook } = await supabase
           .from('user_books')
@@ -110,6 +137,7 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
         }
       }
 
+      // Update user_profiles stats
       const { data: profile } = await supabase
         .from('user_profiles')
         .select('total_pages_read, total_hours_logged')
@@ -126,13 +154,43 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
           .eq('id', user.id);
       }
 
+      // Award XP for reading session
+      if (activityType === 'reading' && parseInt(duration) >= 5) {
+        const { calculateReadingXp } = await import('../lib/calculateReadingXp');
+        const xp = calculateReadingXp(parseInt(duration) || 0, parseInt(pages) || 0);
+        
+        console.log('[award_xp] awarded', { 
+          xp, 
+          durationMinutes: parseInt(duration) || 0, 
+          pagesRead: parseInt(pages) || 0 
+        });
+        
+        if (xp > 0) {
+          const { data: xpResult, error: xpError } = await supabase.rpc('award_xp_v2', {
+            p_user_id: user.id,
+            p_amount: xp,
+            p_source: 'reading',
+          });
+
+          if (xpError) {
+            console.error('[award_xp] failed', xpError);
+          } else if (xpResult) {
+            window.dispatchEvent(new CustomEvent('xp-updated', {
+              detail: { xp_total: xpResult }
+            }));
+          }
+        }
+      }
+
       // Update streak after activity is created
       await updateStreakAfterActivity(user.id);
 
-      onComplete();
+      onComplete?.();
+    } finally {
+      isSavingRef.current = false;
+      activityIdRef.current = null;
+      setSaving(false);
     }
-
-    setLoading(false);
   };
 
   return (
@@ -145,7 +203,7 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
           <div className="px-6 py-4 flex items-center justify-between">
             <h2 className="text-xl font-semibold">Partager votre activité</h2>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 transition-colors"
             >
               <X className="w-5 h-5" />
@@ -266,17 +324,17 @@ export function LogActivity({ onClose, onComplete }: LogActivityProps) {
             <div className="mt-6 flex gap-3">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleClose}
                 className="flex-1 px-4 py-3 border-2 border-stone-300 text-stone-700 rounded-lg font-medium hover:bg-stone-50 transition-colors"
               >
                 Annuler
               </button>
               <button
                 type="submit"
-                disabled={loading}
+                disabled={saving}
                 className="flex-1 px-4 py-3 bg-stone-900 text-white rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
               >
-                {loading ? 'Enregistrement...' : 'Enregistrer l\'activité'}
+                {saving ? 'Enregistrement...' : 'Enregistrer l\'activité'}
               </button>
             </div>
           </form>

@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { debugLog, debugError } from '../utils/logger';
+import { uploadImageToBucket } from '../lib/storageUpload';
 import { Camera, Image as ImageIcon, ArrowRight, ArrowLeft, Check, Loader2 } from 'lucide-react';
 
 export function ProfileOnboarding() {
@@ -11,6 +12,18 @@ export function ProfileOnboarding() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Extra safety: prevent showing onboarding if user is already onboarded
+  useEffect(() => {
+    if (profile?.onboarding_completed === true) {
+      debugLog('[ProfileOnboarding] ⚠️ User already onboarded, preventing display', {
+        userId: user?.id,
+        onboarding_completed: profile.onboarding_completed,
+      });
+      // Profile is already complete, this screen shouldn't be shown
+      // The parent App.tsx should handle routing, but this is a safety guard
+    }
+  }, [profile?.onboarding_completed, user?.id]);
 
   // Step 1: Username
   const [username, setUsername] = useState('');
@@ -210,23 +223,23 @@ export function ProfileOnboarding() {
       setAvatarUploading(true);
 
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const filename = `${Date.now()}.${ext === 'png' ? 'png' : 'jpg'}`;
-      // Format compatible avec RLS: {userId}.{timestamp}.{ext}
-      const path = `${user.id}.${filename}`;
+      const finalExt = ext === 'png' ? 'png' : 'jpg';
+      const path = `${user.id}/avatar/${Date.now()}.${finalExt}`;
 
-      const { error: upErr } = await supabase
-        .storage
-        .from('avatars')
-        .upload(path, file, {
+      // Create blob URL for upload helper
+      const blobUrl = URL.createObjectURL(file);
+
+      try {
+        const { publicUrl } = await uploadImageToBucket({
+          bucket: 'avatars',
+          path,
+          fileUriOrUrl: blobUrl,
           contentType: file.type || 'image/jpeg',
           upsert: true,
         });
 
-      if (upErr) throw upErr;
-
-      const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
-      const publicUrl = pub?.publicUrl;
-      if (!publicUrl) throw new Error('Could not get public URL');
+        // Cleanup blob URL
+        URL.revokeObjectURL(blobUrl);
 
       const { error: dbErr } = await supabase
         .from('user_profiles')
@@ -240,9 +253,14 @@ export function ProfileOnboarding() {
       
       // ✅ Refresh profile pour synchroniser
       await refreshProfile();
+      } catch (uploadErr: any) {
+        // Cleanup blob URL even on error
+        URL.revokeObjectURL(blobUrl);
+        throw uploadErr;
+      }
     } catch (err: any) {
       console.error('[Avatar] handleFileInput error', err);
-      setAvatarError(err?.message ?? 'Erreur lors de l\'upload de l\'avatar');
+      setAvatarError(err?.message ?? 'Erreur lors de l\'upload de l\'avatar. Reconnecte-toi si besoin.');
       // Réinitialiser la preview en cas d'erreur
       if (profile?.avatar_url) {
         setAvatarPreviewUrl(profile.avatar_url);
@@ -301,26 +319,18 @@ export function ProfileOnboarding() {
       // ✅ upload
       setAvatarUploading(true);
 
-      const blob = await fetch(photo.webPath).then(r => r.blob());
-
       const ext = (photo.format || 'jpeg').toLowerCase();
-      const filename = `${Date.now()}.${ext === 'png' ? 'png' : 'jpg'}`;
-      // Format compatible avec RLS: {userId}.{timestamp}.{ext}
-      const path = `${user.id}.${filename}`;
+      const finalExt = ext === 'png' ? 'png' : 'jpg';
+      const path = `${user.id}/avatar/${Date.now()}.${finalExt}`;
 
-      const { error: upErr } = await supabase
-        .storage
-        .from('avatars')
-        .upload(path, blob, {
-          contentType: blob.type || 'image/jpeg',
+      // Use the photo URI directly - uploadImageToBucket will handle iOS conversion
+      const { publicUrl } = await uploadImageToBucket({
+        bucket: 'avatars',
+        path,
+        fileUriOrUrl: photo.webPath,
+        contentType: `image/${finalExt === 'png' ? 'png' : 'jpeg'}`,
           upsert: true,
         });
-
-      if (upErr) throw upErr;
-
-      const { data: pub } = supabase.storage.from('avatars').getPublicUrl(path);
-      const publicUrl = pub?.publicUrl;
-      if (!publicUrl) throw new Error('Could not get public URL');
 
       const { error: dbErr } = await supabase
         .from('user_profiles')
@@ -637,7 +647,7 @@ export function ProfileOnboarding() {
               <div className="flex flex-col items-center space-y-4">
                 <div className="relative">
                   <div className="w-32 h-32 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
-                    {avatarPreviewUrl ? (
+                    {avatarPreviewUrl && (avatarPreviewUrl.startsWith('http://') || avatarPreviewUrl.startsWith('https://') || avatarPreviewUrl.startsWith('data:') || avatarPreviewUrl.startsWith('/')) ? (
                       <img src={avatarPreviewUrl} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-4xl font-bold text-gray-600">

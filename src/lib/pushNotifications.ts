@@ -3,239 +3,225 @@
  * 
  * Handles:
  * - Requesting push permissions
- * - Registering device tokens with Supabase
+ * - Registering device tokens with Supabase (user_devices table with push_token column)
  * - Handling incoming push notifications
  * - Deep linking to app screens
  */
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { App } from '@capacitor/app';
 import { supabase } from './supabase';
-import { useAuth } from '../contexts/AuthContext';
 
 export interface PushNotificationData {
   type: 'like' | 'comment' | 'follow' | 'reminder' | 'goal_achieved' | 'streak';
   activity_id?: string;
   comment_id?: string;
   actor_id?: string;
+  route?: string;
+  entity_id?: string;
   daily_goal_minutes?: number;
   [key: string]: any;
 }
 
 /**
- * Request push notification permissions and register device
+ * Initialize push notifications for a user
+ * Call this once after login/restore session
+ * 
+ * @param userId - User ID from Supabase auth
  */
-export async function registerForPushNotifications(): Promise<string | null> {
+export async function initPush(userId: string): Promise<void> {
+  // Only on native platforms
   if (!Capacitor.isNativePlatform()) {
-    console.log('Push notifications only work on native platforms');
-    return null;
+    console.log('[PUSH] Not native platform, skipping push init');
+    return;
   }
 
+  const platform = Capacitor.getPlatform();
+  console.log('[PUSH] Initializing push notifications', { platform, userId });
+
   try {
-    // Request permission
-    let permResult = await PushNotifications.requestPermissions();
+    // Request permissions
+    const permResult = await PushNotifications.requestPermissions();
     
+    if (permResult.receive === 'denied') {
+      console.log('[PUSH] Permissions denied');
+      return;
+    }
+
     if (permResult.receive === 'prompt') {
-      // User will see the permission prompt
-      console.log('Push permission prompt shown');
-    } else if (permResult.receive === 'denied') {
-      console.log('Push notifications denied');
-      return null;
+      console.log('[PUSH] Permission prompt shown');
+    } else if (permResult.receive === 'granted') {
+      console.log('[PUSH] Permissions already granted');
     }
 
     // Register for push notifications
     await PushNotifications.register();
+    console.log('[PUSH] Registration request sent');
 
-    // Wait for registration token
-    return new Promise((resolve) => {
-      const tokenListener = PushNotifications.addListener('registration', async (token) => {
-        console.log('Push registration success, token:', token.value);
-        
-        // Store token in Supabase
-        const { user } = (await supabase.auth.getUser()).data;
-        if (user) {
-          await saveDeviceToken(user.id, token.value);
+    // Listen for registration token
+    PushNotifications.addListener(
+      'registration',
+      async (token) => {
+        console.log('[PUSH] Registration success', {
+          platform,
+          token: token.value.substring(0, 20) + '...',
+          tokenLength: token.value.length,
+        });
+
+        try {
+          // Upsert token in user_devices table
+          // Using onConflict: 'user_id,push_token' if unique constraint exists
+          // Otherwise, we'll use insert with ignore duplicates
+          const { error } = await supabase
+            .from('user_devices')
+            .upsert(
+              {
+                user_id: userId,
+                platform: 'ios',
+                push_token: token.value,
+              },
+              {
+                onConflict: 'user_id,push_token',
+              }
+            );
+
+          if (error) {
+            // If onConflict fails, try insert with ignore duplicates
+            if (error.code === '23505' || error.message?.includes('duplicate')) {
+              console.log('[PUSH] Token already exists, trying insert with ignore');
+              const { error: insertError } = await supabase
+                .from('user_devices')
+                .insert({
+                  user_id: userId,
+                  platform: 'ios',
+                  push_token: token.value,
+                });
+
+              if (insertError && !insertError.message?.includes('duplicate')) {
+                console.error('[PUSH] Insert error', {
+                  code: insertError.code,
+                  message: insertError.message,
+                  details: (insertError as any).details,
+                });
+              } else {
+                console.log('[PUSH] Token saved successfully (insert)');
+              }
+            } else {
+              console.error('[PUSH] Upsert error', {
+                code: error.code,
+                message: error.message,
+                details: (error as any).details,
+              });
+            }
+          } else {
+            console.log('[PUSH] Token saved successfully (upsert)', {
+              userId,
+              platform: 'ios',
+            });
+          }
+        } catch (err: any) {
+          console.error('[PUSH] Exception saving token', {
+            error: err?.message || String(err),
+            stack: err?.stack,
+          });
         }
-        
-        tokenListener.remove();
-        resolve(token.value);
-      });
+      }
+    );
 
-      const errorListener = PushNotifications.addListener('registrationError', (error) => {
-        console.error('Push registration error:', error);
-        errorListener.remove();
-        resolve(null);
-      });
+    // Listen for registration errors
+    PushNotifications.addListener(
+      'registrationError',
+      (error) => {
+        console.error('[PUSH] Registration error', {
+          error: error.error || String(error),
+        });
+      }
+    );
 
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        tokenListener.remove();
-        errorListener.remove();
-        resolve(null);
-      }, 10000);
+    // Listen for notifications received while app is in foreground
+    PushNotifications.addListener(
+      'pushNotificationReceived',
+      (notification) => {
+        console.log('[PUSH] Notification received (foreground)', {
+          id: notification.id,
+          title: notification.title,
+          body: notification.body,
+          data: notification.data,
+        });
+      }
+    );
+
+    // Listen for notification actions (user tapped notification)
+    PushNotifications.addListener(
+      'pushNotificationActionPerformed',
+      (action) => {
+        console.log('[PUSH] Notification action performed', {
+          actionId: action.actionId,
+          notification: {
+            id: action.notification.id,
+            title: action.notification.title,
+            body: action.notification.body,
+            data: action.notification.data,
+          },
+        });
+
+        // Handle deep linking if payload contains route/entity_id
+        const data = action.notification.data as PushNotificationData;
+        if (data) {
+          if (data.route) {
+            console.log('[PUSH] Deep linking to route', { route: data.route });
+            // Navigate to route (adjust based on your routing system)
+            if (data.entity_id) {
+              window.location.href = `${data.route}/${data.entity_id}`;
+            } else {
+              window.location.href = data.route;
+            }
+          } else if (data.activity_id) {
+            console.log('[PUSH] Deep linking to activity', { activityId: data.activity_id });
+            window.location.href = `/activity/${data.activity_id}`;
+          } else if (data.actor_id) {
+            console.log('[PUSH] Deep linking to profile', { actorId: data.actor_id });
+            window.location.href = `/profile/${data.actor_id}`;
+          }
+        }
+      }
+    );
+
+    console.log('[PUSH] Listeners registered successfully');
+  } catch (error: any) {
+    console.error('[PUSH] Error initializing push notifications', {
+      error: error?.message || String(error),
+      stack: error?.stack,
     });
-  } catch (error) {
-    console.error('Error registering for push notifications:', error);
-    return null;
-  }
-}
-
-/**
- * Save device token to Supabase
- */
-async function saveDeviceToken(userId: string, deviceToken: string): Promise<void> {
-  try {
-    const deviceId = await getDeviceId();
-    const appVersion = await getAppVersion();
-
-    const { error } = await supabase
-      .from('user_devices')
-      .upsert(
-        {
-          user_id: userId,
-          device_token: deviceToken,
-          platform: 'ios',
-          device_id: deviceId,
-          app_version: appVersion,
-          last_used_at: new Date().toISOString(),
-        },
-        {
-          onConflict: 'user_id,device_token',
-        }
-      );
-
-    if (error) {
-      console.error('Error saving device token:', error);
-    } else {
-      console.log('Device token saved successfully');
-    }
-  } catch (error) {
-    console.error('Exception saving device token:', error);
-  }
-}
-
-/**
- * Get device identifier (optional)
- */
-async function getDeviceId(): Promise<string | null> {
-  try {
-    // Use Capacitor's device plugin if available
-    const { Device } = await import('@capacitor/device');
-    const device = await Device.getInfo();
-    return device.id || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Get app version
- */
-async function getAppVersion(): Promise<string | null> {
-  try {
-    const appInfo = await App.getInfo();
-    return appInfo.version || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Setup push notification listeners
- * Call this once when app starts
- */
-export function setupPushNotificationListeners(
-  onNotificationReceived: (data: PushNotificationData) => void
-): () => void {
-  if (!Capacitor.isNativePlatform()) {
-    return () => {}; // No-op cleanup
-  }
-
-  // Handle notification received while app is in foreground
-  const notificationReceivedListener = PushNotifications.addListener(
-    'pushNotificationReceived',
-    (notification) => {
-      console.log('Push notification received (foreground):', notification);
-      
-      // Extract custom data
-      const data = notification.data as PushNotificationData;
-      if (data) {
-        onNotificationReceived(data);
-      }
-    }
-  );
-
-  // Handle notification tapped (app was in background/closed)
-  const notificationActionPerformedListener = PushNotifications.addListener(
-    'pushNotificationActionPerformed',
-    (action) => {
-      console.log('Push notification action performed:', action);
-      
-      const data = action.notification.data as PushNotificationData;
-      if (data) {
-        onNotificationReceived(data);
-      }
-    }
-  );
-
-  // Cleanup function
-  return () => {
-    notificationReceivedListener.remove();
-    notificationActionPerformedListener.remove();
-  };
-}
-
-/**
- * Navigate to appropriate screen based on notification data
- */
-export function handleNotificationNavigation(data: PushNotificationData): void {
-  // This will be called from your router/navigation system
-  // Adjust based on your routing setup
-  
-  switch (data.type) {
-    case 'like':
-    case 'comment':
-      if (data.activity_id) {
-        // Navigate to activity detail
-        window.location.href = `/activity/${data.activity_id}`;
-      }
-      break;
-    
-    case 'follow':
-      if (data.actor_id) {
-        // Navigate to user profile
-        window.location.href = `/profile/${data.actor_id}`;
-      }
-      break;
-    
-    case 'reminder':
-      // Navigate to home or goals screen
-      window.location.href = '/home';
-      break;
-    
-    default:
-      // Default to home
-      window.location.href = '/home';
   }
 }
 
 /**
  * Remove device token when user logs out
  */
-export async function unregisterDeviceToken(userId: string, deviceToken: string): Promise<void> {
+export async function unregisterPush(userId: string, pushToken: string): Promise<void> {
+  if (!Capacitor.isNativePlatform()) {
+    return;
+  }
+
   try {
     const { error } = await supabase
       .from('user_devices')
       .delete()
       .eq('user_id', userId)
-      .eq('device_token', deviceToken);
+      .eq('push_token', pushToken);
 
     if (error) {
-      console.error('Error removing device token:', error);
+      console.error('[PUSH] Error removing token', {
+        error: error.message,
+        code: error.code,
+      });
+    } else {
+      console.log('[PUSH] Token removed successfully');
     }
-  } catch (error) {
-    console.error('Exception removing device token:', error);
+  } catch (error: any) {
+    console.error('[PUSH] Exception removing token', {
+      error: error?.message || String(error),
+    });
   }
 }
-

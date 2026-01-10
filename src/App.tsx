@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
 import { LoginPage } from './pages/Login';
 import { SignupPage } from './pages/Signup';
+import { ResetPasswordPage } from './pages/ResetPassword';
 import { ProfileOnboarding } from './pages/ProfileOnboarding';
 import { Onboarding } from './components/auth/Onboarding';
 import { LanguageOnboarding } from './components/auth/LanguageOnboarding';
@@ -14,15 +16,18 @@ import { Profile } from './pages/Profile';
 import { Library } from './pages/Library';
 import { Insights } from './pages/Insights';
 import { ActiveSession } from './pages/ActiveSession';
+import { LogActivity } from './pages/LogActivity';
 import { Search } from './pages/Search';
 import { Debug } from './pages/Debug';
+import { OneSignalDebug } from './pages/OneSignalDebug';
 import { ManageBook } from './pages/ManageBook';
+import { ActivityDetailsPage } from './pages/ActivityDetailsPage';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
-import { handleOAuthCallback } from './lib/oauth';
-import { App as CapacitorApp } from '@capacitor/app';
-import { Capacitor } from '@capacitor/core';
 import { debugLog, debugError } from './utils/logger';
+import { App as CapApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
+import { getOneSignalInstance } from './utils/getOneSignal';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
 
@@ -55,9 +60,26 @@ function App() {
     // Use safeTimeEnd to prevent double-invoke issues
     setTimeout(() => safeTimeEnd('FIRST_RENDER'), 0);
   }, []);
-  
+
+  useEffect(() => {
+    console.log('✅ JS LOG TEST: App mounted');
+    
+    // Vérification OneSignal au runtime
+    const OneSignal = getOneSignalInstance();
+    console.log('[ONESIGNAL] window.OneSignal =', OneSignal);
+    console.log('[ONESIGNAL] keys =', Object.keys(OneSignal || {}));
+  }, []);
+
   // Hook 1: Auth context
-  const { user, loading, profile, profileLoading, isOnboardingComplete } = useAuth();
+  const { user, loading, profile, profileLoading, profileResolved, isOnboardingComplete } = useAuth();
+  
+  // NOTE: OneSignal initialization is centralized in main.tsx (initializeOneSignal)
+  // and user linking is handled in AuthContext onAuthStateChange (linkOneSignalUser)
+  // NOTE: Push notifications registration is centralized in registerPush.ts
+  
+  // Hook 1.6: Location (important: déclenche un re-render à chaque navigation)
+  const location = useLocation();
+  const path = location.pathname;
   
   // Hook 2-8: State hooks (toujours dans le même ordre)
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean | null>(null); // null = checking
@@ -65,6 +87,8 @@ function App() {
   const [needsLanguageOnboarding, setNeedsLanguageOnboarding] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('home');
   const [showActiveSession, setShowActiveSession] = useState(false);
+  const [showLogActivity, setShowLogActivity] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -129,88 +153,29 @@ function App() {
     }
   }, [user, needsLanguageOnboarding, profile, profileLoading, isOnboardingComplete]);
 
-  // Hook 10: Routing basé sur l'URL
+  // Hook 10: Routing basé sur l'URL (réactif à location.pathname)
   useEffect(() => {
-    const updateViewFromPath = () => {
-      const path = window.location.pathname;
-      if (path === '/login' || path === '/signup') {
-        // Les pages auth sont gérées séparément
-        return;
-      }
-      // Map paths to AppView
-      const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
-      if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
-        setCurrentView(viewFromPath);
-      } else if (path === '/') {
-        setCurrentView('home');
-      }
-    };
-
-    // Initial load
-    updateViewFromPath();
-
-    // Listen for popstate events (back/forward navigation and programmatic navigation)
-    window.addEventListener('popstate', updateViewFromPath);
-    
-    return () => {
-      window.removeEventListener('popstate', updateViewFromPath);
-    };
-  }, []);
+    if (path === '/login' || path === '/signup' || path === '/reset-password') {
+      // Les pages auth sont gérées séparément
+      return;
+    }
+    // Map paths to AppView
+    const viewFromPath = path.substring(1) as AppView; // Remove leading '/'
+    if (['home', 'profile', 'library', 'insights', 'search', 'debug', 'social'].includes(viewFromPath)) {
+      setCurrentView(viewFromPath);
+    } else if (path === '/') {
+      setCurrentView('home');
+    }
+  }, [path]);
 
   // Hook 11: Initialize iOS swipe back gesture
   useEffect(() => {
     initSwipeBack();
   }, []);
 
-  // Hook 12: Handle OAuth deep links (iOS/Android)
-  useEffect(() => {
-    // Only set up deep link listener on Capacitor platforms
-    if (!Capacitor.isNativePlatform()) {
-      return;
-    }
+  // Hook 12: Deep link handling is now done by DeepLinkGate component (in main.tsx)
+  // This allows using React Router's useNavigate for proper navigation
 
-    let listener: any = null;
-
-    const setupDeepLinkListener = async () => {
-      try {
-        listener = await CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
-          debugLog('[App] Deep link received', { url });
-
-          if (!url) {
-            debugError('[App] Deep link URL is undefined');
-            return;
-          }
-
-          if (url.startsWith('lexu://auth/callback')) {
-            debugLog('[App] Handling OAuth callback', { url });
-            const { error } = await handleOAuthCallback(url);
-            
-            if (error) {
-              debugError('[App] OAuth callback error', error);
-              // TODO: Show toast error to user
-            } else {
-              debugLog('[App] OAuth callback successful');
-            }
-          } else {
-            debugLog('[App] Deep link ignored (not OAuth callback)', { url });
-          }
-        });
-
-        debugLog('[App] Deep link listener registered');
-      } catch (error) {
-        debugError('[App] Error setting up deep link listener', error);
-      }
-    };
-
-    setupDeepLinkListener();
-
-    // Cleanup function
-    return () => {
-      if (listener) {
-        listener.remove();
-      }
-    };
-  }, []);
 
   // ============================================
   // HANDLERS (pas de hooks ici)
@@ -232,6 +197,16 @@ function App() {
     setCurrentView(view);
     setRefreshKey(prev => prev + 1);
   };
+
+  const handleOpenScanner = () => {
+    // Naviguer vers library et ouvrir le scanner
+    setCurrentView('library');
+    setShowScanner(true);
+    setRefreshKey(prev => prev + 1);
+  };
+
+  // Note: "Activité" dans le speed dial doit ouvrir ActiveSession, pas LogActivity
+  // handleOpenCreateActivity n'est plus utilisé car onStartSession est appelé directement
 
   const handleIntroDone = () => {
     if (typeof window !== 'undefined') {
@@ -280,9 +255,15 @@ function App() {
     );
   }
 
+  // Public routes (accessible without auth)
+  // Reset password page (public route, ResetPasswordPage handles session validation)
+  // MUST be before the !user check to allow access without authentication
+  if (path === '/reset-password') {
+    return <ResetPasswordPage />;
+  }
+
   // Pages auth accessibles sans protection
   if (!user) {
-    const path = window.location.pathname;
     if (path === '/signup') {
       return <SignupPage />;
     }
@@ -296,8 +277,23 @@ function App() {
 
   // Profile onboarding (username, display_name, bio, avatar) - NEW
   // CRITICAL: Never show Home if onboarding is not complete
-  if (user && profile && !isOnboardingComplete) {
+  // IMPORTANT: Wait for profileResolved to avoid premature redirects
+  if (user && profile && profileResolved && !isOnboardingComplete) {
+    debugLog('[APP] Gating onboarding:', {
+      userId: user.id,
+      profileResolved,
+      onboarding_completed: profile.onboarding_completed,
+    });
     return <ProfileOnboarding />;
+  }
+  
+  // Don't show onboarding if profile is not resolved yet (avoid flash/redirect)
+  if (user && !profileResolved && profileLoading) {
+    return (
+      <div className="min-h-screen bg-background-light flex items-center justify-center">
+        <div className="text-text-sub-light">Chargement du profil...</div>
+      </div>
+    );
   }
 
   // If user exists but profile is missing, try to refresh and show loading
@@ -329,14 +325,23 @@ function App() {
   }
 
   // Route dédiée pour la gestion d'un livre : /library/manage/:bookId
-  const path = window.location.pathname;
   const manageMatch = path.match(/^\/library\/manage\/([^/]+)$/);
   if (manageMatch) {
     const [, bookId] = manageMatch;
     return <ManageBook bookId={bookId} />;
   }
 
-  // Debug page doesn't use AppLayout
+  // Route dédiée pour les détails d'une activité : /activity/:id
+  const activityMatch = path.match(/^\/activity\/([^/]+)$/);
+  if (activityMatch) {
+    return <ActivityDetailsPage />;
+  }
+
+  // Debug pages don't use AppLayout
+  if (path === '/debug/onesignal') {
+    return <OneSignalDebug />;
+  }
+  
   if (currentView === 'debug') {
     return <Debug />;
   }
@@ -350,10 +355,11 @@ function App() {
             currentView={currentView as 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social'}
             onNavigate={handleNavigate as (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void}
             onStartSession={() => setShowActiveSession(true)}
+            onOpenScanner={handleOpenScanner}
           >
             {currentView === 'home' && <Home key={`home-${refreshKey}`} />}
             {currentView === 'profile' && <Profile key={`profile-${refreshKey}`} onNavigateToLibrary={() => handleNavigate('library')} />}
-            {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} />}
+            {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} showScanner={showScanner} onCloseScanner={() => setShowScanner(false)} onOpenScanner={() => setShowScanner(true)} />}
             {currentView === 'insights' && <Insights key={`insights-${refreshKey}`} />}
           </AppLayout>
 
@@ -368,6 +374,16 @@ function App() {
             <ActiveSession
               onCancel={() => setShowActiveSession(false)}
               onFinish={handleSessionFinish}
+            />
+          )}
+
+          {showLogActivity && (
+            <LogActivity
+              onClose={() => setShowLogActivity(false)}
+              onComplete={() => {
+                setShowLogActivity(false);
+                setRefreshKey(prev => prev + 1);
+              }}
             />
           )}
         </>

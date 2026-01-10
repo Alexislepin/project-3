@@ -8,9 +8,10 @@ interface AppLayoutProps {
   currentView: View;
   onNavigate: (view: View) => void;
   onStartSession: () => void;
+  onOpenScanner?: () => void;
 }
 
-export function AppLayout({ children, currentView, onNavigate, onStartSession }: AppLayoutProps) {
+export function AppLayout({ children, currentView, onNavigate, onStartSession, onOpenScanner }: AppLayoutProps) {
   // Diagnostic: logs mount/unmount
   useEffect(() => {
     console.log('[MOUNT]', 'AppLayout');
@@ -31,6 +32,7 @@ export function AppLayout({ children, currentView, onNavigate, onStartSession }:
         currentView={currentView}
         onNavigate={onNavigate}
         onStartSession={onStartSession}
+        onOpenScanner={onOpenScanner}
       />
     </div>
   );

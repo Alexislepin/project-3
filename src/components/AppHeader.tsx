@@ -33,9 +33,10 @@ export function AppHeader({
 }: AppHeaderProps) {
   return (
     <div
-      className={`sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
+      className={`sticky top-0 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
       style={{
         paddingTop: 'var(--sat)',
+        zIndex: 60, // Au-dessus de la searchBar (zIndex 40)
       }}
     >
       <div className="px-4 py-3">
@@ -45,10 +46,10 @@ export function AppHeader({
               {showBack && onBack && (
                 <button
                   onClick={onBack}
-                  className="p-2 -ml-2 hover:bg-black/5 rounded-full transition-colors flex-shrink-0"
+                  className="p-2 -ml-2 hover:bg-black/10 rounded-full transition-colors flex-shrink-0"
                   aria-label="Retour"
                 >
-                  <ArrowLeft className="w-5 h-5 text-text-main-light" />
+                  <ArrowLeft className="w-5 h-5 text-stone-900" />
                 </button>
               )}
               {showClose && onClose && (

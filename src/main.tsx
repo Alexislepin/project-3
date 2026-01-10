@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { SplashScreen } from './components/SplashScreen';
+import { DeepLinkGate } from './components/DeepLinkGate';
 import App from './App.tsx';
 import './i18n';
 import { initializeAppLanguage } from './lib/appLanguage';
+import { initializeOneSignalOnce } from './notifications/initOneSignal';
 import './index.css';
 
 // Safe timer management to prevent double-invoke issues
@@ -28,6 +30,11 @@ if (!(window as any).__appBootStarted) {
 }
 console.log('[BOOT] Starting app initialization...');
 
+// Initialize OneSignal SDK (must be done before user login)
+initializeOneSignalOnce().catch((error) => {
+  console.error('[BOOT] Error initializing OneSignal:', error);
+});
+
 // Initialize language before rendering (priority: user_profiles > localStorage > navigator > 'fr')
 initializeAppLanguage().then(() => {
   const rootElement = document.getElementById('root');
@@ -39,6 +46,7 @@ initializeAppLanguage().then(() => {
     <StrictMode>
       <SplashScreen>
         <BrowserRouter>
+          <DeepLinkGate />
           <AuthProvider>
             <App />
           </AuthProvider>
@@ -63,6 +71,7 @@ initializeAppLanguage().then(() => {
     <StrictMode>
       <SplashScreen>
         <BrowserRouter>
+          <DeepLinkGate />
           <AuthProvider>
             <App />
           </AuthProvider>

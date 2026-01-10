@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X, Bell, BellOff, Clock, Target } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -86,10 +87,6 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
       .update(updates)
       .eq('id', user.id);
 
-    if (!error) {
-      console.log('Notification settings saved');
-    }
-
     setSaving(false);
   };
 
@@ -98,7 +95,11 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
     setNotificationsEnabled(newValue);
     await saveSettings(newValue, goalReminderEnabled, notificationTime);
 
-    if (newValue) {
+    if (newValue === true && user?.id) {
+      // NOTE: Push notifications registration is now centralized in registerPush.ts
+      // and should only be called once after user authentication
+      // Permissions are requested automatically during OneSignal initialization
+      
       new Notification('Notifications activées !', {
         body: 'Vous recevrez des rappels pour vos objectifs de lecture',
         icon: '/image.png',

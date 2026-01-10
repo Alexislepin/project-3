@@ -169,12 +169,24 @@ export function ReadingSetupModal({
     const current = currentPage.trim() ? parseInt(currentPage.trim(), 10) : 0;
 
     // Final validation
-    if (total !== null && (isNaN(total) || total < 1)) {
+    // If status is 'reading', total_pages is REQUIRED
+    if (initialStatus === 'reading') {
+      if (!totalPages.trim() || !total || isNaN(total) || total < 1) {
+        setError('Le nombre total de pages est obligatoire pour "En cours"');
+        return;
+      }
+    } else if (total !== null && (isNaN(total) || total < 1)) {
       setError('Le nombre total de pages doit être au moins 1');
       return;
     }
 
-    if (isNaN(current) || current < 0) {
+    // If status is 'reading', current_page is REQUIRED (can be 0)
+    if (initialStatus === 'reading') {
+      if (currentPage.trim() === '' || isNaN(current) || current < 0) {
+        setError('La page actuelle est obligatoire pour "En cours"');
+        return;
+      }
+    } else if (isNaN(current) || current < 0) {
       setError('La page actuelle doit être un nombre positif');
       return;
     }

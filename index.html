@@ -12,5 +12,14 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Cordova injecte cordova.js sur mobile uniquement.
+      // En web build, on ne le charge pas.
+      if (location.protocol === 'capacitor:' || location.protocol === 'file:') {
+        const s = document.createElement('script');
+        s.src = 'cordova.js';
+        document.head.appendChild(s);
+      }
+    </script>
   </body>
 </html>

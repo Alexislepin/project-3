@@ -1,72 +1,183 @@
-import { Home, BookOpen, User, Circle, TrendingUp } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useEffect, useState, useRef } from "react";
+import { Home, BookOpen, TrendingUp, User, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { SpeedDial } from "../SpeedDial";
 
-interface BottomNavProps {
-  currentView: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social';
-  onNavigate: (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void;
+type View = "home" | "search" | "library" | "profile" | "insights" | "social";
+
+type BottomNavProps = {
+  currentView: View;
+  onNavigate: (view: View) => void;
   onStartSession: () => void;
-}
 
-export function BottomNav({ currentView, onNavigate, onStartSession }: BottomNavProps) {
+  // ✅ Nouveaux callbacks (optionnels)
+  onOpenScanner?: () => void;
+};
+
+export function BottomNav({
+  currentView,
+  onNavigate,
+  onStartSession,
+  onOpenScanner,
+}: BottomNavProps) {
   const { t } = useTranslation();
-  const navItems = [
-    { id: 'home' as const, icon: Home, label: t('nav.home') },
-    { id: 'insights' as const, icon: TrendingUp, label: t('nav.stats') },
-    { id: 'record' as const, icon: Circle, label: t('nav.session'), isCenter: true },
-    { id: 'library' as const, icon: BookOpen, label: t('nav.library') },
-    { id: 'profile' as const, icon: User, label: t('nav.profile') },
-  ];
+  const [isFabOpen, setIsFabOpen] = useState(false);
+  const fabRef = useRef<HTMLButtonElement>(null);
+  const [fabPosition, setFabPosition] = useState({ bottom: 0, left: 0 });
+  const [modalOpen, setModalOpen] = useState(false);
+
+  // ✅ Lire document.body.dataset.modalOpen pour désactiver la tabbar quand un modal est ouvert
+  useEffect(() => {
+    const checkModalOpen = () => {
+      const isOpen = document.body.dataset.modalOpen === '1';
+      setModalOpen(isOpen);
+    };
+
+    // Check initial
+    checkModalOpen();
+
+    // Observer pour détecter les changements
+    const observer = new MutationObserver(checkModalOpen);
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-modal-open'],
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Calculer la position du FAB pour le SpeedDial
+  useEffect(() => {
+    if (isFabOpen && fabRef.current) {
+      const rect = fabRef.current.getBoundingClientRect();
+      // bottom = distance depuis le bas de la fenêtre jusqu'au HAUT du FAB (pour placer le menu au-dessus)
+      // On utilise rect.top pour avoir le haut du FAB
+      setFabPosition({
+        bottom: window.innerHeight - rect.top,
+        left: rect.left + rect.width / 2,
+      });
+    }
+  }, [isFabOpen]);
+
+  const handleFabClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsFabOpen((v) => !v);
+  };
+
+  const handleScanner = () => {
+    if (onOpenScanner) {
+      onOpenScanner();
+    } else {
+      // fallback si tu n'as rien branché
+      onNavigate("library");
+      window.dispatchEvent(new CustomEvent("lexu:open-scanner"));
+    }
+  };
+
+  const TABBAR_HEIGHT = 64; // h-16 = 64px
+  const FAB_SIZE = 68; // 68px - FAB plus gros et plus présent
+  const FAB_RADIUS = FAB_SIZE / 2; // 34px
+
+  // Calcul exact : le CENTRE du FAB doit être sur le top de la BottomNav
+  // bottom = env(safe-area-inset-bottom) + TABBAR_HEIGHT - (FAB_SIZE / 2)
+  // bottom = env(safe-area-inset-bottom) + 64 - 34 = env(safe-area-inset-bottom) + 30
 
   return (
-    <nav 
-      className="fixed bottom-0 left-0 right-0 bg-card-light border-t border-gray-200 z-50"
-      style={{
-        paddingBottom: 'env(safe-area-inset-bottom)', // Safe-area uniquement, pas de padding supplémentaire
-      }}
-    >
-      <div className="max-w-lg mx-auto flex justify-around items-center h-16 relative">
-        {navItems.map((item) => {
-          if (item.isCenter) {
-            return (
-              <div key={item.id} className="flex-1 flex justify-center">
-                <button
-                  onClick={onStartSession}
-                  className="absolute -top-6 w-16 h-16 bg-primary rounded-full shadow-[0_4px_20px_rgba(249,245,6,0.4)] flex items-center justify-center hover:shadow-[0_6px_24px_rgba(249,245,6,0.5)] hover:scale-105 active:scale-95 transition-all border-4 border-background-light"
-                  aria-label={t('session.title')}
-                >
-                  <Circle className="w-8 h-8 text-black fill-current" />
-                </button>
-              </div>
-            );
-          }
+    <>
+      {/* SpeedDial avec Portal */}
+      <SpeedDial
+        open={isFabOpen}
+        onClose={() => setIsFabOpen(false)}
+        onScan={handleScanner}
+        onStartSession={onStartSession}
+        fabPosition={fabPosition}
+      />
 
-          const Icon = item.icon;
-          const isActive = currentView === item.id;
+      {/* ✅ FAB flottant - positionné en fixed par rapport au viewport */}
+      <button
+        ref={fabRef}
+        onClick={handleFabClick}
+        aria-expanded={isFabOpen}
+        aria-label={isFabOpen ? "Fermer" : "Ouvrir le menu"}
+        className={`fixed rounded-full bg-primary border-4 border-white flex items-center justify-center active:scale-95 transition-all z-[1200] ${
+          isFabOpen ? "animate-pulse-glow" : ""
+        }`}
+        style={{
+          left: "50vw",
+          width: `${FAB_SIZE}px`,
+          height: `${FAB_SIZE}px`,
+          bottom: `calc(env(safe-area-inset-bottom) + ${TABBAR_HEIGHT}px - ${FAB_RADIUS}px)`,
+          transform: "translateX(-50%)",
+          boxShadow: "0 6px 28px rgba(249, 245, 6, 0.5)",
+          pointerEvents: modalOpen ? 'none' : 'auto',
+        }}
+      >
+        {isFabOpen ? (
+          <X className="w-7 h-7 text-black transition-transform duration-300" />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-black" />
+        )}
+      </button>
 
-          return (
-            <button
-              key={item.id}
-              onClick={() => {
-                if (item.id !== 'record') {
-                  onNavigate(item.id as 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social');
-                }
-              }}
-              className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${
-                isActive ? 'text-primary' : 'text-text-sub-light'
-              }`}
-            >
-              <Icon
-                className="w-6 h-6 mb-0.5"
-                strokeWidth={isActive ? 2.5 : 2}
-                fill={isActive ? 'currentColor' : 'none'}
-              />
-              <span className={`text-[10px] ${isActive ? 'font-bold' : 'font-medium'}`}>
-                {item.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
+      {/* ✅ Tabbar - wrapper avec safe-area */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-[1000] bg-white border-t border-black/5 overflow-visible"
+        style={{
+          height: "calc(var(--tabbar-h) + env(safe-area-inset-bottom))",
+          paddingBottom: "env(safe-area-inset-bottom)",
+          pointerEvents: modalOpen ? 'none' : 'auto',
+        }}
+      >
+        {/* Inner bar avec les 4 onglets */}
+        <div className="relative max-w-2xl mx-auto h-16 flex items-center justify-between px-6">
+          {/* Home */}
+          <button
+            onClick={() => onNavigate("home")}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              currentView === "home" ? "text-black font-semibold" : "text-black/50"
+            }`}
+          >
+            <Home className="w-5 h-5" />
+            {t('nav.home')}
+          </button>
+
+          {/* Stats/Insights */}
+          <button
+            onClick={() => onNavigate("insights")}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              currentView === "insights" ? "text-black font-semibold" : "text-black/50"
+            }`}
+          >
+            <TrendingUp className="w-5 h-5" />
+            {t('nav.stats')}
+          </button>
+
+          {/* Espace vide au centre pour le FAB (ne pas rendre de bouton ici) */}
+          <div className="w-16" />
+
+          {/* Library */}
+          <button
+            onClick={() => onNavigate("library")}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              currentView === "library" ? "text-black font-semibold" : "text-black/50"
+            }`}
+          >
+            <BookOpen className="w-5 h-5" />
+            {t('nav.library')}
+          </button>
+
+          {/* Profile */}
+          <button
+            onClick={() => onNavigate("profile")}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              currentView === "profile" ? "text-black font-semibold" : "text-black/50"
+            }`}
+          >
+            <User className="w-5 h-5" />
+            {t('nav.profile')}
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }

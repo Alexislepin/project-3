@@ -4,6 +4,9 @@ import { supabase } from '../lib/supabase';
 import { scheduleGoalCheck } from '../utils/goalNotifications';
 import { debugLog, debugError } from '../utils/logger';
 import { mapAuthError, FriendlyAuthError } from '../lib/authErrors';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { handleOAuthCallback } from '../lib/oauth';
 
 // Safe timer management to prevent double-invoke issues with React StrictMode
 const endedTimers = new Set<string>();
@@ -35,6 +38,7 @@ interface AuthContextType {
   session: Session | null;
   profile: UserProfile | null;
   profileLoading: boolean;
+  profileResolved: boolean;
   loading: boolean;
   signUp: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: FriendlyAuthError | null }>;
@@ -51,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -94,6 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         console.log('[AUTH] User authenticated, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        
+        // Initialize push notifications after initial session restore
+        if (Capacitor.isNativePlatform()) {
+          import('../lib/push').then(({ initPush }) => {
+            initPush(session.user.id).catch((err) => {
+              console.error('[AUTH] Error initializing push notifications:', err);
+            });
+          });
+        }
+        
         // Fetch profile after session is set
         refreshProfile(session.user.id);
       }
@@ -106,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       safeTimeEnd('AUTH_INIT');
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       
       console.log(`[AUTH] Auth state changed: ${event}`, {
@@ -130,7 +145,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else if (event === 'SIGNED_OUT') {
         console.log('[AUTH] SIGNED_OUT: User signed out');
       } else if (event === 'TOKEN_REFRESHED') {
-        console.log('[AUTH] TOKEN_REFRESHED: Access token refreshed');
+        console.log('[AUTH] TOKEN_REFRESHED: Access token refreshed successfully');
+      }
+      
+      // Intercepter les erreurs de refresh token
+      // Si on a une session null inattendue (pas un SIGNED_OUT explicite) ou une erreur de refresh
+      if (!session && event !== 'SIGNED_OUT' && user) {
+        console.error('[AUTH] Session lost unexpectedly, possible refresh token error');
+        // Vérifier explicitement si c'est une erreur de refresh token
+        try {
+          const { data: { session: currentSession }, error: sessionError } = await supabase.auth.getSession();
+          if (sessionError || !currentSession) {
+            console.error('[AUTH] Refresh token error detected:', sessionError);
+            // Émettre un événement personnalisé pour que les composants puissent afficher un toast
+            window.dispatchEvent(new CustomEvent('auth:session-expired', {
+              detail: { message: 'Session expirée, reconnecte-toi' }
+            }));
+            // Forcer signOut propre
+            await supabase.auth.signOut();
+            return;
+          }
+        } catch (err) {
+          console.error('[AUTH] Error checking session after state change:', err);
+          // Si erreur, forcer signOut
+          window.dispatchEvent(new CustomEvent('auth:session-expired', {
+            detail: { message: 'Session expirée, reconnecte-toi' }
+          }));
+          await supabase.auth.signOut();
+          return;
+        }
       }
       
       setSession(session);
@@ -140,6 +183,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         console.log('[AUTH] Session active, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        
+        // Link OneSignal user after SIGNED_IN or INITIAL_SESSION
+        if (Capacitor.isNativePlatform() && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session.user.id) {
+          console.log('[AUTH] 🔵 Linking OneSignal user after auth event:', event);
+          import('../notifications/initOneSignal').then(({ linkOneSignalUser }) => {
+            linkOneSignalUser(session.user.id).catch((err) => {
+              console.error('[AUTH] ❌ Error linking OneSignal user:', {
+                message: err?.message,
+                stack: err?.stack,
+                errorString: JSON.stringify(err),
+              });
+            });
+          });
+
+          // Ensure push permission is requested (after login/onboarding)
+          // This will display iOS popup and trigger APNs registration
+          import('../notifications/ensurePushPermission').then(({ ensurePushPermission }) => {
+            ensurePushPermission().catch((err) => {
+              console.error('[AUTH] ❌ Error ensuring push permission:', {
+                message: err?.message,
+                stack: err?.stack,
+                errorString: JSON.stringify(err),
+              });
+            });
+          });
+        }
+        
         // Fetch profile after session is set
         refreshProfile(session.user.id).then(async () => {
           // If OAuth user (Google), ensure has_password is false
@@ -162,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         console.log('[AUTH] No active session');
         setProfile(null);
+        setProfileResolved(false);
       }
     });
 
@@ -169,6 +240,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isMounted = false;
       if (initTimeout) clearTimeout(initTimeout);
       subscription.unsubscribe();
+    };
+  }, []);
+
+  // NOTE: Push notifications registration is now centralized in registerPush.ts
+  // and should only be called once after user authentication
+
+  // Deep link handler for iOS/Android OAuth callbacks
+  useEffect(() => {
+    const isNative = Capacitor.isNativePlatform();
+    if (!isNative) return;
+
+    let listener: any = null;
+
+    const setupDeepLinkListener = async () => {
+      try {
+        // Handle cold start (app opened via deep link)
+        const launch = await CapacitorApp.getLaunchUrl();
+        if (launch?.url) {
+          debugLog('[AUTH] OAuth callback received (cold start)', { url: launch.url });
+          if (launch.url.startsWith('lexu://auth/callback')) {
+            const { error } = await handleOAuthCallback(launch.url);
+            if (error) {
+              debugError('[AUTH] OAuth callback error (cold start)', error);
+            } else {
+              debugLog('[AUTH] OAuth callback successful (cold start)');
+            }
+          }
+        }
+
+        // Listen for deep links when app is already running
+        listener = await CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
+          debugLog('[AUTH] OAuth callback received', { url });
+
+          if (!url) {
+            debugError('[AUTH] Deep link URL is undefined');
+            return;
+          }
+
+          if (url.startsWith('lexu://auth/callback')) {
+            const { error } = await handleOAuthCallback(url);
+            if (error) {
+              debugError('[AUTH] OAuth callback error', error);
+            } else {
+              debugLog('[AUTH] OAuth callback successful');
+            }
+          } else {
+            debugLog('[AUTH] Deep link ignored (not OAuth callback)', { url });
+          }
+        });
+
+        debugLog('[AUTH] Deep link listener registered');
+      } catch (error) {
+        debugError('[AUTH] Error setting up deep link listener', error);
+      }
+    };
+
+    setupDeepLinkListener();
+
+    return () => {
+      if (listener) {
+        listener.remove();
+      }
     };
   }, []);
 
@@ -200,11 +333,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data) {
         debugLog('[AUTH] Profile fetched successfully');
         setProfile(data as UserProfile);
+        setProfileResolved(true);
         setProfileLoading(false);
+        // NOTE: OneSignal initialization is now centralized in initOneSignal.ts
+        // and should only be called once at app startup (main.tsx) and after auth (onAuthStateChange)
         return;
       }
 
       // Step 4: Profile doesn't exist, create minimal one using upsert
+      // IMPORTANT: Use minimal payload to avoid overwriting existing profile fields
       debugLog('[AUTH] Profile not found, creating minimal profile...');
       
       // Determine has_password based on auth provider
@@ -212,37 +349,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const provider = authUser?.user?.app_metadata?.provider || 'email';
       const hasPassword = provider === 'email';
 
-      const { data: upsertedProfile, error: upsertError } = await supabase
+      // Minimal payload: only id and has_password (don't overwrite sensitive fields)
+      const { error: upsertError } = await supabase
         .from('user_profiles')
         .upsert(
           {
             id: targetUserId,
-            username: null,
-            display_name: null,
-            bio: null,
-            avatar_url: null,
-            onboarding_completed: false,
             has_password: hasPassword,
-            interests: [],
-            xp_total: 0,
-            current_streak: 0,
           },
           {
             onConflict: 'id',
             ignoreDuplicates: false,
           }
         )
-        .select()
+        .select('onboarding_completed')
         .single();
 
       if (upsertError) {
         debugError('[AUTH] Error upserting profile:', upsertError);
-        setProfile(null);
-      } else if (upsertedProfile) {
-        debugLog('[AUTH] Profile created/updated successfully');
-        setProfile(upsertedProfile as UserProfile);
+        // Try to fetch existing profile
+        const { data: existingProfile } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', targetUserId)
+          .maybeSingle();
+        
+        if (existingProfile) {
+          setProfile(existingProfile as UserProfile);
+          setProfileResolved(true);
+        } else {
+          setProfile(null);
+        }
       } else {
-        // Fallback: try to fetch again
+        // Re-fetch full profile after upsert to get actual state
         const { data: fetchedProfile } = await supabase
           .from('user_profiles')
           .select('*')
@@ -250,7 +389,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single();
         
         if (fetchedProfile) {
+          debugLog('[AUTH] Profile created/updated successfully, re-fetched state');
           setProfile(fetchedProfile as UserProfile);
+          setProfileResolved(true);
+          // NOTE: OneSignal initialization is now centralized in initOneSignal.ts
+          // and should only be called once at app startup (main.tsx) and after auth (onAuthStateChange)
         } else {
           setProfile(null);
         }
@@ -258,6 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err: any) {
       debugError('[AUTH] Error in refreshProfile:', err);
       setProfile(null);
+      setProfileResolved(false);
     } finally {
       setProfileLoading(false);
     }
@@ -269,10 +413,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      debugLog('[AUTH] Updating profile...', updates);
+      // Remove onboarding_completed and other protected fields from updates
+      const safeUpdates = { ...updates };
+      
+      // Block regression of onboarding_completed (true -> false)
+      if ('onboarding_completed' in safeUpdates) {
+        const currentOnboardingState = profile?.onboarding_completed;
+        const newOnboardingState = (safeUpdates as any).onboarding_completed;
+        
+        if (currentOnboardingState === true && newOnboardingState === false) {
+          console.warn('[AUTH] ⚠️ Blocked onboarding_completed regression:', {
+            userId: user.id,
+            current: currentOnboardingState,
+            attempted: newOnboardingState,
+          });
+          delete (safeUpdates as any).onboarding_completed;
+        }
+      }
+      
+      delete (safeUpdates as any).has_password;
+      delete (safeUpdates as any).xp_total;
+      delete (safeUpdates as any).current_streak;
+      delete (safeUpdates as any).interests; // Interests should be managed separately
+
+      debugLog('[AUTH] Updating profile safe payload keys:', Object.keys(safeUpdates));
+      debugLog('[AUTH] Updating profile...', safeUpdates);
+      
       const { error } = await supabase
         .from('user_profiles')
-        .update(updates)
+        .update(safeUpdates)
         .eq('id', user.id);
 
       if (error) {
@@ -373,6 +542,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     profile,
     profileLoading,
+    profileResolved,
     loading,
     signUp,
     signIn,
