@@ -17,7 +17,7 @@ import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
-import { computeStreakFromActivities } from '../lib/readingStreak';
+import { fetchStreakInfo } from '../lib/streakService';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
@@ -43,6 +43,7 @@ export function Home() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [unreadSocialCount, setUnreadSocialCount] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
 
@@ -95,6 +96,48 @@ export function Home() {
       .eq('read', false);
 
     setUnreadNotificationsCount(data?.length || 0);
+  };
+
+  const loadUnreadSocialCount = async () => {
+    if (!user) return;
+
+    const { data: p } = await supabase
+      .from('user_profiles')
+      .select('last_social_seen_at')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const since = p?.last_social_seen_at ?? new Date(0).toISOString();
+
+    // Compter les événements sociaux depuis since (unifié avec SocialFeed)
+    // - activity_events (book_like, book_comment) pour les livres
+    // - activity_reactions et activity_comments pour les activités
+    const [bookEventsRes, reactionsRes, commentsRes] = await Promise.all([
+      supabase
+        .from('activity_events')
+        .select('id, actor_id, created_at')
+        .in('event_type', ['book_like', 'book_comment'])
+        .gt('created_at', since),
+      supabase.from('activity_reactions').select('id, user_id, created_at').gt('created_at', since),
+      supabase.from('activity_comments').select('id, user_id, created_at').gt('created_at', since),
+    ]);
+
+    const count =
+      (bookEventsRes.data ?? []).filter(x => x.actor_id !== user.id).length +
+      (reactionsRes.data ?? []).filter(x => x.user_id !== user.id).length +
+      (commentsRes.data ?? []).filter(x => x.user_id !== user.id).length;
+
+    setUnreadSocialCount(count);
+  };
+
+  const markSocialSeen = async () => {
+    if (!user) return;
+    await supabase
+      .from('user_profiles')
+      .update({ last_social_seen_at: new Date().toISOString() })
+      .eq('id', user.id);
+
+    setUnreadSocialCount(0);
   };
 
   const loadRanking = async () => {
@@ -243,6 +286,9 @@ export function Home() {
           *,
           user_id,
           photos,
+          reading_speed_pph,
+          reading_pace_min_per_page,
+          reading_speed_wpm,
           user_profiles!activities_user_id_fkey(id, username, display_name, avatar_url),
           books!activities_book_id_fkey(title, author, cover_url, openlibrary_cover_id, isbn)
         `)
@@ -367,6 +413,9 @@ export function Home() {
           title: activity.title,
           pages_read: activity.pages_read,
           duration_minutes: activity.duration_minutes,
+          reading_speed_pph: activity.reading_speed_pph,
+          reading_pace_min_per_page: activity.reading_pace_min_per_page,
+          reading_speed_wpm: activity.reading_speed_wpm,
           notes: activity.notes,
           quotes: activity.quotes || [],
           book: activity.books,
@@ -398,6 +447,7 @@ export function Home() {
     loadWeeklySummary();
     loadStreak();
     loadUnreadNotificationsCount();
+    loadUnreadSocialCount();
     loadProfile();
     loadRanking();
 
@@ -413,6 +463,7 @@ export function Home() {
 
     const interval = setInterval(() => {
       loadUnreadNotificationsCount();
+      loadUnreadSocialCount();
     }, 30000);
 
     return () => {
@@ -427,32 +478,12 @@ export function Home() {
     if (!user) return;
 
     try {
-      // Load last 200 reading activities (wide range, we'll filter in local timezone)
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('created_at, pages_read, duration_minutes, type')
-        .eq('user_id', user.id)
-        .eq('type', 'reading')
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      if (error) {
-        console.error('[loadStreak] Error:', error);
-        setStreak(0);
-        return;
-      }
-
-      // Compute streak from activities (local timezone)
-      const streak = computeStreakFromActivities(activities || []);
-      setStreak(streak);
-
-      // Update profile's current_streak
-      await supabase
-        .from('user_profiles')
-        .update({ current_streak: streak })
-        .eq('id', user.id);
+      // Use unified streak service (single source of truth)
+      const info = await fetchStreakInfo(user.id);
+      setStreak(info.streak);
+      // Note: DB update is handled by fetchStreakInfo to avoid concurrent updates
     } catch (error) {
-      console.error('[loadStreak] Exception:', error);
+      console.error('[Home] loadStreak exception:', error);
       setStreak(0);
     }
   };
@@ -666,7 +697,8 @@ export function Home() {
   };
 
   // Navigation handlers
-  const handleNavigateToSocial = () => {
+  const handleNavigateToSocial = async () => {
+    await markSocialSeen();
     setShowSocial(true);
   };
 
@@ -687,10 +719,15 @@ export function Home() {
             <StreakBadge streak={streak} onClick={handleNavigateToInsights} />
             <button
               onClick={handleNavigateToSocial}
-              className="p-1.5 hover:bg-black/5 rounded-full transition-colors"
+              className="p-1.5 hover:bg-black/5 rounded-full transition-colors relative"
               title="Social"
             >
               <Heart className="w-4 h-4 text-text-sub-light" />
+              {unreadSocialCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-primary text-black text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {unreadSocialCount > 9 ? '9+' : unreadSocialCount}
+                </span>
+              )}
             </button>
             <button
               onClick={() => setShowSearchUsers(true)}
@@ -718,9 +755,8 @@ export function Home() {
       {/* Scrollable Feed Content with Pull-to-Refresh - SINGLE SCROLL CONTAINER */}
       <div
         ref={(el) => setScrollContainerRef(el)}
-        className="h-full overflow-y-auto relative"
+        className="h-full overflow-y-auto relative safe-bottom-content"
         style={{
-          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',

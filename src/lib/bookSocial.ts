@@ -46,9 +46,9 @@ export function normalizeBookKey(raw?: string | null): string | null {
 /**
  * Checks if a string is a UUID (database ID).
  */
-function isUuid(v?: string | null): boolean {
+export function isUuid(v?: string | null): boolean {
   if (!v) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(v));
 }
 
 /**
@@ -196,6 +196,37 @@ function normalizeOlKeyForCanonical(input?: any): string | null {
 }
 
 /**
+ * Normalizes OpenLibrary edition key to canonical format.
+ * Accepts: "ol:/books/OL...M", "/books/OL...M", "books/OL...M", "OL...M"
+ * Always returns: "ol:/books/OL...M" (canonical format)
+ */
+function normalizeOlEditionKeyForCanonical(input?: any): string | null {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (!s) return null;
+
+  // Already normalized
+  if (s.startsWith("ol:/books/")) return s;
+  
+  // Normalize variants
+  if (s.startsWith("/books/")) return `ol:${s}`;
+  if (s.startsWith("books/")) return `ol:/${s}`;
+  if (s.startsWith("ol:/books/")) return s;
+  if (s.includes("/books/")) {
+    const idx = s.indexOf("/books/");
+    return `ol:${s.slice(idx)}`;
+  }
+  
+  // Extract OL...M pattern if present (edition keys end with M)
+  const match = s.match(/OL\d+M/);
+  if (match) {
+    return `ol:/books/${match[0]}`;
+  }
+  
+  return null;
+}
+
+/**
  * Extracts first valid ISBN from string or array, cleaned.
  */
 function firstIsbn(raw: any): string | null {
@@ -210,17 +241,19 @@ function firstIsbn(raw: any): string | null {
  * Canonical book key function - returns the same key for the same book everywhere.
  * This ensures consistency between Explorer, Modal, and all social features.
  * 
- * Priority order:
- * 1) OpenLibrary work key -> "ol:/works/OLxxxxW" (normalized) - PRIORITY for Explorer stability
- * 2) ISBN (cleaned) -> "isbn:XXXXXXXXXX"
- * 3) Google Books ID -> "google:..."
- * 4) UUID DB -> "uuid:..."
+ * Priority order (STRICT - no fallback to title/author):
+ * 1) ISBN (cleaned) -> "isbn:XXXXXXXXXX"
+ * 2) Google Books ID -> "gb:..."
+ * 3) OpenLibrary work key -> "ol:/works/OLxxxxW" (normalized)
+ * 4) OpenLibrary edition key -> "ol:/books/OLxxxxM" (normalized)
  * 5) "unknown"
  * 
  * Rules:
- * - If book comes from OpenLibrary -> returns "ol:/works/OL...W" (canonical format) - PRIORITY
- * - If book has reliable ISBN -> returns "isbn:${digits}" (cleaned digits)
- * - If book is in books table -> returns "uuid:${books.id}" (UUID format)
+ * - NEVER returns a key based on title/author
+ * - If book has ISBN -> returns "isbn:${digits}" (cleaned digits)
+ * - If book has Google Books ID -> returns "gb:${id}"
+ * - If book has OpenLibrary work key -> returns "ol:/works/OL...W"
+ * - If book has OpenLibrary edition key (but no work key) -> returns "ol:/books/OL...M"
  * - Handles ISBN as string or array (OpenLibrary often returns array)
  * 
  * @param book - Book object (can be DB book, GoogleBook, OpenLibraryDoc, etc.)
@@ -229,8 +262,27 @@ function firstIsbn(raw: any): string | null {
 export function canonicalBookKey(book: any): string {
   if (!book) return 'unknown';
 
-  // 1) OpenLibrary work key FIRST (Explorer stability - most stable identifier)
-  const ol =
+  // 0) book_key direct (highest priority - explicit key like "manual:uuid")
+  if (book?.book_key && typeof book.book_key === 'string' && book.book_key.trim() && book.book_key !== 'unknown') {
+    return book.book_key.trim();
+  }
+
+  // 1) ISBN (handles string or array) - HIGHEST PRIORITY
+  const isbn =
+    firstIsbn(book?.isbn13) ||
+    firstIsbn(book?.isbn10) ||
+    firstIsbn(book?.isbn);
+  if (isbn) return `isbn:${isbn}`;
+
+  // 2) Google Books ID -> "gb:..."
+  const gid = book?.google_books_id || book?.googleBooksId;
+  if (gid && typeof gid === 'string' && gid.trim()) {
+    const cleanGid = gid.startsWith('gb:') ? gid.slice(3) : (gid.startsWith('google:') ? gid.slice(7) : gid.trim());
+    return `gb:${cleanGid}`;
+  }
+
+  // 3) OpenLibrary work key
+  const olWork =
     normalizeOlKeyForCanonical(book?.openLibraryKey) ||
     normalizeOlKeyForCanonical(book?.openlibrary_work_key) ||
     normalizeOlKeyForCanonical(book?.key) ||
@@ -238,33 +290,45 @@ export function canonicalBookKey(book: any): string {
     normalizeOlKeyForCanonical(book?.openlibraryKey) ||
     normalizeOlKeyForCanonical(book?.open_library_key);
   
-  if (ol) return ol;
+  if (olWork) return olWork;
 
-  // 2) ISBN (handles string or array)
-  const isbn =
-    firstIsbn(book?.isbn13) ||
-    firstIsbn(book?.isbn10) ||
-    firstIsbn(book?.isbn);
-  if (isbn) return `isbn:${isbn}`;
+  // 4) OpenLibrary edition key (fallback if no work key)
+  const olEdition =
+    normalizeOlEditionKeyForCanonical(book?.openlibrary_edition_key) ||
+    normalizeOlEditionKeyForCanonical(book?.openLibraryEditionKey) ||
+    normalizeOlEditionKeyForCanonical(book?.editionKey);
+  
+  if (olEdition) return olEdition;
 
-  // 3) Google Books ID
-  const gid = book?.google_books_id || book?.googleBooksId;
-  if (gid && typeof gid === 'string' && gid.trim()) {
-    return gid.startsWith('google:') ? gid : `google:${gid.trim()}`;
-  }
-
-  // 4) UUID DB
-  if (book?.id && typeof book.id === 'string') {
-    if (isUuid(book.id)) {
-      return `uuid:${book.id}`;
-    }
-    // If id is long enough and not a UUID, might be an external ID
-    if (book.id.length >= 16 && !book.id.startsWith('google:') && !book.id.startsWith('isbn:') && !book.id.startsWith('ol:') && !book.id.includes('/')) {
-      return `uuid:${book.id}`;
-    }
-  }
-
+  // 5) No valid identifier found
   return 'unknown';
+}
+
+/**
+ * Vérifie si un livre est en cours de chargement (pas encore d'identifiants stables).
+ * Retourne true si canonicalBookKey === 'unknown' ET qu'il n'y a pas d'ISBN, google_books_id, ou openlibrary_work_key.
+ * 
+ * @param book - Objet livre
+ * @returns true si le livre est en cours de chargement (métadonnées manquantes)
+ */
+export function isBookLoading(book: any): boolean {
+  if (!book) return false;
+  
+  const bookKey = canonicalBookKey(book);
+  if (bookKey !== 'unknown') return false;
+  
+  // Vérifier s'il y a des identifiants (ISBN, google_books_id, openlibrary_work_key)
+  const hasIsbn = firstIsbn(book?.isbn13) || firstIsbn(book?.isbn10) || firstIsbn(book?.isbn);
+  const hasGoogleId = book?.google_books_id || book?.googleBooksId;
+  const hasOpenLibraryKey = normalizeOlKeyForCanonical(book?.openLibraryKey) ||
+    normalizeOlKeyForCanonical(book?.openlibrary_work_key) ||
+    normalizeOlKeyForCanonical(book?.key) ||
+    normalizeOlKeyForCanonical(book?.openLibraryWorkKey) ||
+    normalizeOlKeyForCanonical(book?.openlibraryKey) ||
+    normalizeOlKeyForCanonical(book?.open_library_key);
+  
+  // Si aucun identifiant n'existe, le livre est en cours de chargement
+  return !hasIsbn && !hasGoogleId && !hasOpenLibraryKey;
 }
 
 /**
@@ -470,8 +534,6 @@ export async function getBookSocialCounts(
 
   try {
     // 2) Charger les counts de likes groupés par UNE SEULE clé normalisée
-    // Use COALESCE(book_key, book_id::text) to avoid double counting
-    // This ensures we count each like only once, even if book_id contains a string (legacy bug)
     console.debug('[getBookSocialCounts] Counting likes/comments with variants:', {
       requested_keys: requested,
       variant_count: variantArray.length,
@@ -479,10 +541,12 @@ export async function getBookSocialCounts(
     });
     
     // CRITICAL: Select id and user_id for likes to enable proper deduplication
+    // ✅ SOFT DELETE: Filtrer seulement les likes actifs (deleted_at IS NULL)
     const { data: likesData, error: likesError } = await supabase
       .from('book_likes')
       .select('id, user_id, book_key, book_id')
-      .in('book_key', variantArray);
+      .in('book_key', variantArray)
+      .is('deleted_at', null); // ✅ Seulement les likes actifs
 
     // 3) Charger les counts de commentaires groupés par UNE SEULE clé normalisée
     // CRITICAL: Select id for comments to enable proper deduplication
@@ -493,22 +557,22 @@ export async function getBookSocialCounts(
 
     // 4) Si userId fourni, charger les likes de l'utilisateur pour ces book_keys
     // Use candidate keys to find likes with any variant
-    // CRITICAL: Use COALESCE(book_key, book_id::text) to avoid false positives
     let userLikedKeys: Set<string> = new Set();
     if (userId) {
+      // ✅ SOFT DELETE: Filtrer seulement les likes actifs pour l'utilisateur
       const { data: userLikesData, error: userLikesError } = await supabase
         .from('book_likes')
         .select('id, user_id, book_key, book_id')
         .eq('user_id', userId)
-        .in('book_key', variantArray);
+        .in('book_key', variantArray)
+        .is('deleted_at', null); // ✅ Seulement les likes actifs
 
       if (!userLikesError && userLikesData) {
         // Map each found like back to its canonical key
-        // Use COALESCE(book_key, book_id::text) as the normalized key
         requested.forEach(canonicalKey => {
           const candidates = candidateBookKeysFromBook(canonicalKey);
           const hasLike = userLikesData.some((like: any) => {
-            const normalizedKey = like.book_key || (like.book_id ? String(like.book_id) : null);
+            const normalizedKey = like.book_key;
             return normalizedKey && candidates.includes(normalizedKey);
           });
           if (hasLike) {
@@ -525,16 +589,14 @@ export async function getBookSocialCounts(
     }
 
     // 5) Compter côté JS en utilisant UNE SEULE clé normalisée par row
-    // CRITICAL: Use COALESCE(book_key, book_id::text) to avoid double counting
-    // This ensures we count each like/comment only once, even if book_id contains a string (legacy bug)
     const likesCount: { [bookKey: string]: number } = {};
     const commentsCount: { [bookKey: string]: number } = {};
     const processedLikes = new Set<string>(); // Track processed likes to avoid duplicates
     const processedComments = new Set<string>(); // Track processed comments to avoid duplicates
 
     (likesData || []).forEach((like: any) => {
-      // Use COALESCE(book_key, book_id::text) as the unique identifier
-      const normalizedKey = like.book_key || (like.book_id ? String(like.book_id) : null);
+      // Use book_key as the unique identifier
+      const normalizedKey = like.book_key;
       if (!normalizedKey) return;
       
       // Create a unique identifier for this like
@@ -567,8 +629,8 @@ export async function getBookSocialCounts(
     });
 
     (commentsData || []).forEach((comment: any) => {
-      // Use COALESCE(book_key, book_id::text) as the unique identifier
-      const normalizedKey = comment.book_key || (comment.book_id ? String(comment.book_id) : null);
+      // Use book_key as the unique identifier
+      const normalizedKey = comment.book_key;
       if (!normalizedKey) return;
       
       // Create a unique identifier for this comment
@@ -619,15 +681,152 @@ export async function getBookSocialCounts(
       const comments = commentsCount[bookKey] || 0;
       const isLiked = userId ? userLikedKeys.has(bookKey) : undefined;
       
-      // Inclure même si counts sont 0, pour avoir isLiked
-      if (likes > 0 || comments > 0 || isLiked !== undefined) {
-        result[bookKey] = { likes, comments, ...(isLiked !== undefined && { isLiked }) };
-      }
+      // ✅ NOUVEAU — isLiked est TOUJOURS présent si userId est fourni
+      result[bookKey] = {
+        likes,
+        comments,
+        isLiked: userId ? isLiked === true : undefined,
+      };
     });
 
     return result;
   } catch (error) {
     console.warn('Exception loading social counts:', error);
     return {};
+  }
+}
+
+/**
+ * Toggle like/unlike for a book using RPC only
+ * CRITICAL: Never manipulates book_likes directly. Uses RPC toggle_book_like.
+ * 
+ * @param bookKey - Canonical book key (e.g., "ol:/works/OL123W", "isbn:1234567890")
+ * @param userId - User ID (for validation only, RPC uses auth.uid())
+ * @param book - Optional book object (not used, kept for backward compatibility)
+ * @returns Promise<{ liked: boolean; created: boolean }>
+ */
+export async function toggleBookLike(
+  bookKey: string,
+  userId: string,
+  book?: any
+): Promise<{ liked: boolean; created: boolean }> {
+  console.log('[toggleBookLike]', { bookKey, userId });
+  
+  if (!bookKey || bookKey === 'unknown' || !userId) {
+    console.warn('[toggleBookLike] Invalid parameters:', { bookKey, userId });
+    return { liked: false, created: false };
+  }
+
+  try {
+    // CRITICAL: Ensure canonical key
+    const canonicalKey = canonicalBookKey({ book_key: bookKey }) || bookKey;
+    
+    if (!canonicalKey || canonicalKey === 'unknown') {
+      console.warn('[toggleBookLike] Invalid canonical key:', { bookKey, canonicalKey });
+      return { liked: false, created: false };
+    }
+
+    // CRITICAL: Use RPC only - never touch book_likes directly
+    const { data, error } = await supabase.rpc('toggle_book_like', {
+      p_book_key: canonicalKey
+    });
+
+    if (error) {
+      console.error('toggle_book_like error', error.code, error.message, error.details);
+      throw error;
+    }
+
+    // Handle response: data[0] contains { liked: boolean, likes: number }
+    const row = Array.isArray(data) ? data[0] : data;
+    
+    if (!row || typeof row.liked !== 'boolean') {
+      console.error('[toggleBookLike] Invalid RPC response:', { data, row });
+      return { liked: false, created: false };
+    }
+
+    const liked = row.liked;
+    const likes = typeof row.likes === 'number' ? Math.max(0, row.likes) : 0;
+
+    // Dispatch global event with server response (source of truth)
+    window.dispatchEvent(
+      new CustomEvent('book-social-counts-changed', {
+        detail: { 
+          bookKey: canonicalKey, 
+          likes, 
+          comments: 0, // Comments count not returned by RPC
+          isLiked: liked 
+        },
+      })
+    );
+
+    // Return: liked is the new state, created indicates if a new like was created
+    return { 
+      liked, 
+      created: liked // If liked=true, a like was created/restored; if false, it was deleted
+    };
+  } catch (error: any) {
+    console.error('[toggleBookLike] Unexpected error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get list of users who liked a book
+ * @param bookKey - Canonical book key
+ * @returns Promise<Array<{ user_id: string; display_name: string; avatar_url: string | null; created_at: string }>>
+ */
+export async function getBookLikers(bookKey: string): Promise<Array<{
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  created_at: string;
+}>> {
+  if (!bookKey || bookKey === 'unknown') {
+    return [];
+  }
+
+  try {
+    const candidateKeys = candidateBookKeysFromBook(bookKey);
+    
+    // ✅ SOFT DELETE: Filtrer seulement les likes actifs (deleted_at IS NULL)
+    const { data: likesData, error: likesError } = await supabase
+      .from('book_likes')
+      .select('user_id, created_at')
+      .in('book_key', candidateKeys)
+      .is('deleted_at', null) // ✅ Seulement les likes actifs
+      .order('created_at', { ascending: false });
+
+    if (likesError) {
+      console.error('[getBookLikers] Error loading likes:', likesError);
+      return [];
+    }
+
+    if (!likesData || likesData.length === 0) {
+      return [];
+    }
+
+    // Load user profiles
+    const userIds = [...new Set(likesData.map(like => like.user_id))];
+    const { data: profilesData, error: profilesError } = await supabase
+      .from('user_profiles')
+      .select('id, display_name, avatar_url')
+      .in('id', userIds);
+
+    if (profilesError) {
+      console.error('[getBookLikers] Error loading profiles:', profilesError);
+      return [];
+    }
+
+    const profilesMap = new Map((profilesData || []).map(p => [p.id, p]));
+
+    return likesData.map(like => ({
+      user_id: like.user_id,
+      display_name: profilesMap.get(like.user_id)?.display_name || 'Utilisateur',
+      avatar_url: profilesMap.get(like.user_id)?.avatar_url || null,
+      created_at: like.created_at,
+    }));
+  } catch (error) {
+    console.error('[getBookLikers] Unexpected error:', error);
+    return [];
   }
 }

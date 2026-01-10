@@ -6,6 +6,7 @@ import { ActivityMenu } from './ActivityMenu';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
+import { getReadingUI } from '../utils/formatReadingActivity';
 
 interface ActivityQuote {
   text: string;
@@ -25,6 +26,9 @@ interface Activity {
   title: string;
   pages_read?: number;
   duration_minutes?: number;
+  reading_speed_pph?: number | null;
+  reading_pace_min_per_page?: number | null;
+  reading_speed_wpm?: number | null;
   book?: {
     title: string;
     author: string;
@@ -97,6 +101,14 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
   // Check if this is a reading activity with a book
   const isReadingActivity = activity.type === 'reading' && (activity.book || activity.book_id);
 
+  // Get reading UI data (premium layout)
+  const readingUI = isReadingActivity ? getReadingUI({
+    pages_read: activity.pages_read,
+    duration_minutes: activity.duration_minutes,
+    reading_speed_pph: activity.reading_speed_pph,
+    book: activity.book,
+  }) : null;
+
   if (variant === 'compact') {
     return (
       <div className="bg-white rounded-xl border border-stone-200 p-3">
@@ -106,10 +118,9 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
             <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden">
               <BookCover
                 coverUrl={activity.book.cover_url}
+                custom_cover_url={(activity.book as any).custom_cover_url ?? null}
                 title={activity.book.title || ''}
                 author={activity.book.author || ''}
-                custom_cover_url={(activity.book as any).custom_cover_url ?? null}
-                openlibrary_cover_id={activity.book.openlibrary_cover_id ?? null}
                 className="w-full h-full"
               />
             </div>
@@ -121,25 +132,46 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
 
           {/* Content */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/15 text-stone-900 border border-primary/30">
-                <Icon className="w-3 h-3" />
-                {label}
-              </span>
-              {activity.pages_read && activity.pages_read > 0 && (
-                <span className="text-stone-400 text-[10px] font-medium">+{activity.pages_read} pages</span>
-              )}
-            </div>
-            
-            {isReadingActivity && activity.book ? (
+            {isReadingActivity && readingUI ? (
               <>
-                <h3 className="text-sm font-bold text-stone-900 leading-snug line-clamp-1 mb-0.5">
-                  {activity.book.title}
+                {/* Action label (short, no title) */}
+                <p className="text-xs text-stone-500 mb-1.5">
+                  {readingUI.actionLabel}
+                </p>
+                {/* Book title (main element) */}
+                <h3 className="text-sm font-bold text-stone-900 leading-snug line-clamp-1 mb-1">
+                  {readingUI.title}
                 </h3>
-                <p className="text-stone-500 text-xs line-clamp-1">{activity.book.author}</p>
+                {/* Author (secondary) */}
+                <p className="text-stone-500 text-xs line-clamp-1 mb-2">{readingUI.author}</p>
+                {/* Stats chips */}
+                {readingUI.statsChips.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-1">
+                    {readingUI.statsChips.map((chip, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-stone-700 text-[10px] font-medium"
+                      >
+                        <span className="font-semibold">{chip.value}</span>
+                        <span className="text-stone-500">{chip.label}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </>
             ) : (
-              <h3 className="text-sm font-bold text-stone-900 leading-snug line-clamp-2">{activity.title}</h3>
+              <>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/15 text-stone-900 border border-primary/30">
+                    <Icon className="w-3 h-3" />
+                    {label}
+                  </span>
+                  {activity.pages_read && activity.pages_read > 0 && (
+                    <span className="text-stone-400 text-[10px] font-medium">+{activity.pages_read} pages</span>
+                  )}
+                </div>
+                <h3 className="text-sm font-bold text-stone-900 leading-snug line-clamp-2">{activity.title}</h3>
+              </>
             )}
 
             <p className="text-xs text-stone-400 mt-1.5">{formatDistanceToNow(activity.created_at)}</p>
@@ -191,8 +223,8 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
             className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity cursor-pointer"
           >
             <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
-              {activity.user.avatar_url ? (
-                <img src={avatarUrl || undefined} alt={activity.user.display_name} className="w-full h-full object-cover" />
+              {avatarUrl && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
+                <img src={avatarUrl} alt={activity.user.display_name} className="w-full h-full object-cover" />
               ) : (
                 activity.user.display_name.charAt(0).toUpperCase()
               )}
@@ -218,39 +250,47 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
           </div>
         </div>
 
-        {/* Badge + Content */}
-        {isReadingActivity && activity.book ? (
-          <div className="flex items-start gap-3 mb-3">
+        {/* Reading Activity Content (Premium Layout) */}
+        {isReadingActivity && readingUI && activity.book ? (
+          <div className="flex items-start gap-4 mb-3">
             <div className="flex-1 min-w-0">
-              {/* Badge */}
-              <div className="flex items-center gap-2 mb-2">
-                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide bg-primary/15 text-stone-900 border border-primary/30">
-                  <Icon className="w-3 h-3" />
-                  {label}
-                </span>
-                {activity.pages_read && activity.pages_read > 0 && (
-                  <span className="text-stone-400 text-[10px] font-medium">+{activity.pages_read} pages</span>
-                )}
-              </div>
+              {/* Action label (short, no title duplication) */}
+              <p className="text-sm text-stone-500 mb-2">
+                {readingUI.actionLabel}
+              </p>
               
-              {/* Title */}
-              <h3 className="text-base font-bold text-stone-900 leading-snug line-clamp-2 mb-1">
-                {activity.book.title}
+              {/* Title (main element, large) */}
+              <h3 className="text-lg font-bold text-stone-900 leading-tight line-clamp-2 mb-1.5">
+                {readingUI.title}
               </h3>
               
-              {/* Author */}
-              <p className="text-stone-500 text-sm line-clamp-1">{activity.book.author}</p>
+              {/* Author (secondary) */}
+              <p className="text-stone-500 text-sm line-clamp-1 mb-3">{readingUI.author}</p>
+
+              {/* Stats chips (premium style) */}
+              {readingUI.statsChips.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {readingUI.statsChips.map((chip, idx) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-stone-700 text-xs font-medium"
+                    >
+                      <span className="font-bold text-stone-900">{chip.value}</span>
+                      <span className="text-stone-500">{chip.label}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             
-            {/* Cover */}
+            {/* Cover (small, rounded, with shadow) */}
             {activity.book.cover_url && (
-              <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden">
+              <div className="w-14 h-20 shrink-0 rounded-xl overflow-hidden shadow-sm">
                 <BookCover
                   coverUrl={activity.book.cover_url}
+                  custom_cover_url={(activity.book as any).custom_cover_url ?? null}
                   title={activity.book.title || ''}
                   author={activity.book.author || ''}
-                  custom_cover_url={(activity.book as any).custom_cover_url ?? null}
-                  openlibrary_cover_id={activity.book.openlibrary_cover_id ?? null}
                   className="w-full h-full"
                 />
               </div>

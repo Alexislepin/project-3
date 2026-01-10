@@ -296,13 +296,11 @@ export function BookDetailsModal({
     >
       <div
         data-modal-content
-        className="bg-background-light rounded-3xl w-full max-w-lg flex flex-col overflow-hidden shadow-2xl"
+        className="bg-background-light rounded-3xl w-[min(520px,92vw)] max-h-[calc(100vh-140px)] flex flex-col overflow-hidden shadow-2xl"
         onClick={(e) => e.stopPropagation()}
-        style={{ 
-          maxHeight: '85vh'
-        }}
       >
-        <div className="sticky top-0 bg-background-light z-10 px-6 pt-4 pb-3 border-b border-gray-200">
+        {/* Fixed Header */}
+        <div className="flex-shrink-0 bg-background-light px-6 pt-4 pb-3 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-text-main-light">{t('book.details')}</h2>
             <button
@@ -315,17 +313,18 @@ export function BookDetailsModal({
           </div>
         </div>
 
+        {/* Scrollable Body */}
         <div 
           className="flex-1 overflow-y-auto min-h-0 px-6 py-6" 
           style={{ 
             WebkitOverflowScrolling: 'touch',
-            paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+            paddingBottom: showAddButton || userBookId || onOpenRecap ? 'calc(env(safe-area-inset-bottom) + 80px)' : 'calc(env(safe-area-inset-bottom) + 12px)'
           }}
         >
           <div className="flex gap-4 mb-6 items-start">
             <div className="w-20 h-28 shrink-0">
               <BookCover
-                custom_cover_url={userBook?.custom_cover_url || null}
+                custom_cover_url={userBook?.custom_cover_url || book.custom_cover_url || null}
                 coverUrl={book.cover_url || null}
                 title={book.title}
                 author={book.author || 'Auteur inconnu'}
@@ -448,25 +447,26 @@ export function BookDetailsModal({
             </button>
           )}
 
-          {showAddButton && onAddToLibrary && (
-            <button
-              onClick={() => onAddToLibrary(book)}
-              className="w-full bg-primary text-black py-4 rounded-xl font-bold hover:brightness-95 transition-all shadow-sm"
-            >
-              {t('book.addToLibrary')}
-            </button>
-          )}
+          {/* Remove showAddButton from here - it's now in sticky footer below */}
         </div>
 
-        {/* Footer with actions */}
-        {(userBookId || onOpenRecap) && (
-          <div className="sticky bottom-0 bg-background-light border-t border-gray-200 rounded-b-3xl flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
+        {/* Sticky Footer with actions */}
+        {(showAddButton || userBookId || onOpenRecap) && (
+          <div className="sticky bottom-0 bg-background-light border-t border-gray-200 flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
             <div 
-              className="px-6 py-3 flex gap-3"
+              className="px-6 py-4 flex gap-3"
               style={{ 
-                paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+                paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)'
               }}
             >
+              {showAddButton && onAddToLibrary && (
+                <button
+                  onClick={() => onAddToLibrary(book)}
+                  className="flex-1 bg-primary text-black py-3 px-4 rounded-xl font-bold hover:brightness-95 transition-all shadow-sm"
+                >
+                  {t('book.addToLibrary')}
+                </button>
+              )}
               {userBookId && onEditRequested && (
                 <button
                   onClick={onEditRequested}
@@ -478,7 +478,7 @@ export function BookDetailsModal({
               {onOpenRecap && (
                 <button
                   onClick={onOpenRecap}
-                  className="flex-1 py-3 px-4 bg-stone-900 text-white rounded-xl font-semibold hover:brightness-95 transition-all"
+                  className="flex-1 py-3 px-4 bg-stone-900 text-white rounded-xl font-semibold hover:brightness-95 transition-all flex items-center justify-center gap-2"
                 >
                   <Sparkles className="w-4 h-4" />
                   IA

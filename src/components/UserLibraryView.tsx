@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Book, ArrowLeft } from 'lucide-react';
 import { BookCover } from './BookCover';
 import { BookDetailsModal } from './BookDetailsModal';
+import { resolveBookCover } from '../lib/bookCover';
 
 interface UserLibraryViewProps {
   userId: string;
@@ -81,72 +82,97 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
   const loadLikedBooks = async () => {
     setLoading(true);
 
-    // 1) Fetch liked book_keys from activity_events
-    const { data: likedEvents, error: eventsError } = await supabase
-      .from('activity_events')
-      .select('book_key, created_at')
-      .eq('actor_id', userId)
-      .eq('event_type', 'book_like')
-      .order('created_at', { ascending: false });
+    try {
+      // ✅ Utiliser book_likes avec JOIN books via book_uuid (comme Profile.tsx)
+      // ✅ SOFT DELETE: Filtrer seulement les likes actifs (deleted_at IS NULL)
+      const { data: likesData, error: likesError } = await supabase
+        .from('book_likes')
+        .select(`
+          id,
+          created_at,
+          book_uuid,
+          book_key,
+          book:books!book_likes_book_uuid_fkey (
+            id,
+            title,
+            author,
+            cover_url,
+            isbn,
+            openlibrary_cover_id,
+            google_books_id,
+            openlibrary_work_key,
+            total_pages,
+            description
+          )
+        `)
+        .eq('user_id', userId)
+        .is('deleted_at', null) // ✅ Seulement les likes actifs
+        .not('book_uuid', 'is', null) // ✅ Cache les likes legacy (sans book_uuid)
+        .order('created_at', { ascending: false });
 
-    if (eventsError) {
-      console.error('[loadLikedBooks] Error fetching activity_events:', eventsError);
+      if (likesError) {
+        console.error('[loadLikedBooks] Error fetching book_likes:', likesError);
+        setUserBooks([]);
+        setLoading(false);
+        return;
+      }
+
+      if (!likesData || likesData.length === 0) {
+        setUserBooks([]);
+        setLoading(false);
+        return;
+      }
+
+      // ✅ Charger les covers custom depuis book_covers OU user_books.custom_cover_url
+      const bookIds = (likesData ?? [])
+        .map(x => x.book_uuid)
+        .filter((id: string | null): id is string => !!id);
+
+      // Essayer book_covers d'abord
+      const { data: coversData, error: coversError } = await supabase
+        .from('book_covers')
+        .select('book_id, cover_url')
+        .eq('user_id', userId)
+        .in('book_id', bookIds);
+
+      // Si book_covers n'existe pas ou est vide, essayer user_books.custom_cover_url
+      let coverMap = new Map<string, string | null>();
+      if (!coversError && coversData && coversData.length > 0) {
+        coverMap = new Map((coversData ?? []).map((c: any) => [c.book_id, c.cover_url]));
+      } else {
+        // Fallback: charger depuis user_books.custom_cover_url
+        const { data: userBooksData } = await supabase
+          .from('user_books')
+          .select('book_id, custom_cover_url')
+          .eq('user_id', userId)
+          .in('book_id', bookIds);
+
+        if (userBooksData) {
+          coverMap = new Map((userBooksData ?? []).map((ub: any) => [ub.book_id, ub.custom_cover_url]));
+        }
+      }
+
+      // ✅ Formater comme user_books avec toutes les infos nécessaires + covers custom
+      const formattedBooks = (likesData || [])
+        .filter((x: any) => x.book && x.book_uuid)
+        .map((x: any) => ({
+          id: x.id,
+          book: x.book,
+          status: 'liked' as const,
+          current_page: 0,
+          book_id: x.book_uuid,
+          created_at: x.created_at,
+          updated_at: x.created_at,
+          custom_cover_url: coverMap.get(x.book_uuid) ?? null,
+        }));
+
+      setUserBooks(formattedBooks);
+    } catch (error) {
+      console.error('[loadLikedBooks] Unexpected error:', error);
       setUserBooks([]);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    if (!likedEvents || likedEvents.length === 0) {
-      setUserBooks([]);
-      setLoading(false);
-      return;
-    }
-
-    const bookKeys = likedEvents.map(e => e.book_key).filter(Boolean);
-
-    if (bookKeys.length === 0) {
-      setUserBooks([]);
-      setLoading(false);
-      return;
-    }
-
-    // 2) Fetch book details from books_cache
-    const { data: booksData, error: booksError } = await supabase
-      .from('books_cache')
-      .select('book_key, title, author, cover_url')
-      .in('book_key', bookKeys);
-
-    if (booksError) {
-      console.error('[loadLikedBooks] Error fetching books_cache:', booksError);
-      setUserBooks([]);
-      setLoading(false);
-      return;
-    }
-
-    // 3) Combine data and format like user_books for consistency
-    const formattedBooks = (booksData || []).map((book) => ({
-      id: book.book_key,
-      book: {
-        id: book.book_key,
-        title: book.title || 'Titre inconnu',
-        author: book.author || 'Auteur inconnu',
-        cover_url: book.cover_url || null,
-        total_pages: null,
-        description: null,
-        description_clean: null,
-        isbn: null,
-        google_books_id: null,
-        edition: null,
-      },
-      status: 'liked' as const,
-      current_page: 0,
-      book_id: book.book_key,
-      created_at: likedEvents.find(e => e.book_key === book.book_key)?.created_at || new Date().toISOString(),
-      updated_at: likedEvents.find(e => e.book_key === book.book_key)?.created_at || new Date().toISOString(),
-    }));
-
-    setUserBooks(formattedBooks);
-    setLoading(false);
   };
 
   const getProgress = (currentPage: number, totalPages: number | null) => {
@@ -253,12 +279,22 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
                     });
                   }}
                 >
-                  <BookCover
-                    coverUrl={userBook.custom_cover_url ?? book.cover_url}
-                    title={book.title}
-                    author={book.author || 'Auteur inconnu'}
-                    className="w-20 shrink-0 aspect-[2/3] rounded-lg overflow-hidden shadow-md"
-                  />
+                  {(() => {
+                    // ✅ Utiliser resolveBookCover (fonction canonique)
+                    const coverUrl = resolveBookCover({
+                      customCoverUrl: userBook.custom_cover_url || null,
+                      coverUrl: book?.cover_url || null,
+                    });
+                    return (
+                      <BookCover
+                        coverUrl={coverUrl}
+                        custom_cover_url={userBook.custom_cover_url || null}
+                        title={book.title || 'Livre'}
+                        author={book.author || ''}
+                        className="w-20 shrink-0 aspect-[2/3] rounded-lg overflow-hidden shadow-md"
+                      />
+                    );
+                  })()}
 
                   <div className="flex-1 min-w-0">
                     <h3 className="font-bold text-text-main-light mb-1 line-clamp-2">{book.title}</h3>

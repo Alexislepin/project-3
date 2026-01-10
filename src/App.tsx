@@ -16,16 +16,18 @@ import { Profile } from './pages/Profile';
 import { Library } from './pages/Library';
 import { Insights } from './pages/Insights';
 import { ActiveSession } from './pages/ActiveSession';
+import { LogActivity } from './pages/LogActivity';
 import { Search } from './pages/Search';
 import { Debug } from './pages/Debug';
+import { OneSignalDebug } from './pages/OneSignalDebug';
 import { ManageBook } from './pages/ManageBook';
 import { ActivityDetailsPage } from './pages/ActivityDetailsPage';
-import { LevelsPage } from './pages/LevelsPage';
 import { Intro } from './pages/Intro';
 import { initSwipeBack } from './lib/swipeBack';
 import { debugLog, debugError } from './utils/logger';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
+import { getOneSignalInstance } from './utils/getOneSignal';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
 
@@ -61,12 +63,21 @@ function App() {
 
   useEffect(() => {
     console.log('✅ JS LOG TEST: App mounted');
+    
+    // Vérification OneSignal au runtime
+    const OneSignal = getOneSignalInstance();
+    console.log('[ONESIGNAL] window.OneSignal =', OneSignal);
+    console.log('[ONESIGNAL] keys =', Object.keys(OneSignal || {}));
   }, []);
-  
+
   // Hook 1: Auth context
   const { user, loading, profile, profileLoading, profileResolved, isOnboardingComplete } = useAuth();
   
-  // Hook 1.5: Location (important: déclenche un re-render à chaque navigation)
+  // NOTE: OneSignal initialization is centralized in main.tsx (initializeOneSignal)
+  // and user linking is handled in AuthContext onAuthStateChange (linkOneSignalUser)
+  // NOTE: Push notifications registration is centralized in registerPush.ts
+  
+  // Hook 1.6: Location (important: déclenche un re-render à chaque navigation)
   const location = useLocation();
   const path = location.pathname;
   
@@ -76,6 +87,8 @@ function App() {
   const [needsLanguageOnboarding, setNeedsLanguageOnboarding] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('home');
   const [showActiveSession, setShowActiveSession] = useState(false);
+  const [showLogActivity, setShowLogActivity] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -184,6 +197,16 @@ function App() {
     setCurrentView(view);
     setRefreshKey(prev => prev + 1);
   };
+
+  const handleOpenScanner = () => {
+    // Naviguer vers library et ouvrir le scanner
+    setCurrentView('library');
+    setShowScanner(true);
+    setRefreshKey(prev => prev + 1);
+  };
+
+  // Note: "Activité" dans le speed dial doit ouvrir ActiveSession, pas LogActivity
+  // handleOpenCreateActivity n'est plus utilisé car onStartSession est appelé directement
 
   const handleIntroDone = () => {
     if (typeof window !== 'undefined') {
@@ -314,12 +337,11 @@ function App() {
     return <ActivityDetailsPage />;
   }
 
-  // Levels page
-  if (path === '/levels') {
-    return <LevelsPage />;
+  // Debug pages don't use AppLayout
+  if (path === '/debug/onesignal') {
+    return <OneSignalDebug />;
   }
-
-  // Debug page doesn't use AppLayout
+  
   if (currentView === 'debug') {
     return <Debug />;
   }
@@ -333,10 +355,11 @@ function App() {
             currentView={currentView as 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social'}
             onNavigate={handleNavigate as (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void}
             onStartSession={() => setShowActiveSession(true)}
+            onOpenScanner={handleOpenScanner}
           >
             {currentView === 'home' && <Home key={`home-${refreshKey}`} />}
             {currentView === 'profile' && <Profile key={`profile-${refreshKey}`} onNavigateToLibrary={() => handleNavigate('library')} />}
-            {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} />}
+            {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} showScanner={showScanner} onCloseScanner={() => setShowScanner(false)} onOpenScanner={() => setShowScanner(true)} />}
             {currentView === 'insights' && <Insights key={`insights-${refreshKey}`} />}
           </AppLayout>
 
@@ -351,6 +374,16 @@ function App() {
             <ActiveSession
               onCancel={() => setShowActiveSession(false)}
               onFinish={handleSessionFinish}
+            />
+          )}
+
+          {showLogActivity && (
+            <LogActivity
+              onClose={() => setShowLogActivity(false)}
+              onComplete={() => {
+                setShowLogActivity(false);
+                setRefreshKey(prev => prev + 1);
+              }}
             />
           )}
         </>

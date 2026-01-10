@@ -126,9 +126,10 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
                     {(() => {
                       const avatarUrl = resolveAvatarUrl(profile.avatar_url || null, supabase);
                       const bustedUrl = addCacheBuster(avatarUrl, profile.updated_at);
-                      return bustedUrl ? (
+                      const safeUrl = bustedUrl && (bustedUrl.startsWith('http://') || bustedUrl.startsWith('https://') || bustedUrl.startsWith('data:') || bustedUrl.startsWith('/')) ? bustedUrl : null;
+                      return safeUrl ? (
                         <img
-                          src={bustedUrl}
+                          src={safeUrl}
                           alt={profile.display_name}
                           className="w-full h-full object-cover"
                         />

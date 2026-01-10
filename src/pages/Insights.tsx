@@ -59,7 +59,7 @@ import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { LeaderboardModal } from '../components/LeaderboardModal';
 import { UserProfileView } from '../components/UserProfileView';
 import { ActivityFocus } from '../lib/activityFocus';
-import { computeStreakFromActivities } from '../lib/readingStreak';
+import { fetchStreakInfo } from '../lib/streakService';
 import { last7DaysRangeISO } from '../utils/dateUtils';
 import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
 
@@ -96,6 +96,8 @@ export function Insights() {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showLevelDetails, setShowLevelDetails] = useState(false);
   const [streakDays, setStreakDays] = useState(0);
+  const [streakAtRisk, setStreakAtRisk] = useState(false);
+  const [streakMsLeft, setStreakMsLeft] = useState(0);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
   
@@ -127,43 +129,55 @@ export function Insights() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, refreshProfile]);
 
+  // Timer live pour le countdown (warning "tu vas perdre dans Xh Ym")
+  useEffect(() => {
+    if (!streakAtRisk) return;
+
+    const tick = () => {
+      // on recalc msLeft jusqu'à minuit
+      const now = new Date();
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const end = new Date(today);
+      end.setDate(end.getDate() + 1);
+      setStreakMsLeft(Math.max(0, end.getTime() - now.getTime()));
+    };
+
+    tick();
+    const id = setInterval(tick, 30000); // toutes les 30 sec
+    return () => clearInterval(id);
+  }, [streakAtRisk]);
+
+  // Helper pour formater le temps restant
+  const formatMsLeft = (ms: number) => {
+    const totalMin = Math.floor(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h <= 0) return `${m} min`;
+    return `${h} h ${m} min`;
+  };
+
   const loadStreak = async () => {
     if (!user) {
       setStreakDays(0);
+      setStreakAtRisk(false);
+      setStreakMsLeft(0);
       return;
     }
 
     try {
-      // Load last 200 reading activities (wide range, we'll filter in local timezone)
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('created_at, pages_read, duration_minutes, type, photos')
-        .eq('user_id', user.id)
-        .eq('type', 'reading')
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      if (error) {
-        console.error('[loadStreak] Error:', error);
-        setStreakDays(0);
-        return;
-      }
-
-      // Compute streak from activities (local timezone)
-      const streak = computeStreakFromActivities(activities || []);
-      setStreakDays(streak);
-
-      // Update profile's current_streak
-      await supabase
-        .from('user_profiles')
-        .update({ current_streak: streak })
-        .eq('id', user.id);
-
-      // Synchronize local profile state
-      setProfile((p: any) => p ? { ...p, current_streak: streak } : { current_streak: streak });
+      // Use unified streak service (single source of truth)
+      const info = await fetchStreakInfo(user.id);
+      setStreakDays(info.streak);
+      setStreakAtRisk(info.atRisk);
+      setStreakMsLeft(info.msLeft);
+      // Note: DB update is handled by fetchStreakInfo to avoid concurrent updates
+      // Note: We don't update local profile state here to avoid overwriting incomplete state
     } catch (error) {
-      console.error('[loadStreak] Exception:', error);
+      console.error('[Insights] loadStreak exception:', error);
       setStreakDays(0);
+      setStreakAtRisk(false);
+      setStreakMsLeft(0);
     }
   };
 
@@ -527,7 +541,7 @@ export function Insights() {
       weekly_books: 'Livres hebdomadaires',
       weekly_pages: 'Pages hebdomadaires',
     };
-    return labels[goal.type] || goal.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return labels[goal.type] || goal.type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
   };
 
   const getGoalUnit = (type: string) => {
@@ -620,9 +634,8 @@ export function Insights() {
 
         {/* ✅ SCROLL ICI - Single scrollable container with proper padding */}
         <div
-          className="h-full overflow-y-auto"
+          className="h-full overflow-y-auto safe-bottom-content"
           style={{
-            paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
             WebkitOverflowScrolling: 'touch',
             overscrollBehaviorY: 'contain',
             overscrollBehaviorX: 'none',
@@ -674,9 +687,13 @@ export function Insights() {
                 </p>
               )}
             </div>
-            <div className="mt-2 rounded-full bg-primary/20 px-4 py-1.5">
+            <div className={`mt-2 rounded-full px-4 py-1.5 ${streakAtRisk ? 'bg-yellow-100' : 'bg-primary/20'}`}>
               <p className="text-xs font-semibold text-text-main-light">
-                {streakDays > 0 ? 'Continuez comme ça !' : 'Commencez votre série aujourd\'hui'}
+                {streakDays === 0
+                  ? "Commencez votre série aujourd'hui"
+                  : streakAtRisk
+                    ? `⚠️ Lisez avant minuit : encore ${formatMsLeft(streakMsLeft)}`
+                    : "Continuez comme ça !"}
               </p>
             </div>
           </div>

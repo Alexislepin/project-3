@@ -647,7 +647,7 @@ export function ProfileOnboarding() {
               <div className="flex flex-col items-center space-y-4">
                 <div className="relative">
                   <div className="w-32 h-32 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
-                    {avatarPreviewUrl ? (
+                    {avatarPreviewUrl && (avatarPreviewUrl.startsWith('http://') || avatarPreviewUrl.startsWith('https://') || avatarPreviewUrl.startsWith('data:') || avatarPreviewUrl.startsWith('/')) ? (
                       <img src={avatarPreviewUrl} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-4xl font-bold text-gray-600">

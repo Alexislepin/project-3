@@ -61,7 +61,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     flowType: 'implicit',
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: false, // Disable URL detection for iOS
+    detectSessionInUrl: !Capacitor.isNativePlatform(), // Enable URL detection for web (needed for password reset), disable for iOS
     storage: customStorage,
   },
   // Ensure apikey header is always sent (Supabase client should do this automatically, but we're being explicit)

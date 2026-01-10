@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { X, Trophy } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { LevelBadge } from './LevelProgressBar';
-import { getLevelFromXp } from '../lib/leveling';
 
 interface LeaderboardModalProps {
   onClose: () => void;
@@ -86,7 +84,7 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto px-4 pt-4">
           {loading ? (
             <div className="text-center py-12 text-text-sub-light">Chargement...</div>
           ) : users.length === 0 ? (
@@ -95,12 +93,11 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
               <p className="text-sm">Les utilisateurs apparaîtront ici une fois qu'ils auront gagné des points</p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 pb-24">
               {users.map((profile, index) => {
                 const rank = index + 1;
                 const isCurrentUser = user?.id === profile.id;
                 const isFirstPlace = rank === 1;
-                const level = getLevelFromXp(profile.xp_total || 0);
 
                 return (
                   <button
@@ -115,9 +112,7 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                       onClose();
                     }}
                     className={`w-full flex items-center gap-3 p-4 rounded-2xl transition-colors text-left cursor-pointer ${
-                      isFirstPlace
-                        ? 'bg-amber-50/60 border-2 border-amber-300/40 shadow-sm'
-                        : isCurrentUser
+                      isCurrentUser
                         ? 'bg-primary/10 border-2 border-primary'
                         : 'hover:bg-stone-50 border border-transparent'
                     }`}
@@ -149,21 +144,24 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                       )}
                     </div>
 
-                    {/* User info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-stone-900">{profile.display_name || 'Utilisateur'}</h3>
-                        <LevelBadge xpTotal={profile.xp_total || 0} />
+                    {/* User info - simplifié pour toujours voir les noms complets */}
+                    <div className="flex-1 min-w-0 flex flex-col gap-1 pr-2">
+                      {/* Ligne 1: Nom complet (pas tronqué, peut prendre plusieurs lignes si nécessaire) */}
+                      <h3 className={`font-bold text-stone-900 break-words ${isCurrentUser ? 'text-primary' : ''}`}>
+                        {profile.display_name || 'Utilisateur'}
                         {isCurrentUser && (
-                          <span className="text-xs font-medium !text-[#E6FF00]" style={{ color: '#E6FF00' }}>(Vous)</span>
+                          <span className="ml-2 text-xs font-medium text-black whitespace-nowrap">
+                            (Vous)
+                          </span>
                         )}
-                      </div>
-                      <p className="text-sm text-stone-500">@{profile.username || 'user'}</p>
+                      </h3>
+                      {/* Ligne 2: Username */}
+                      <p className="text-sm text-stone-500 break-words">@{profile.username || 'user'}</p>
                     </div>
 
-                    {/* XP */}
-                    <div className="flex-shrink-0 text-right">
-                      <p className="text-lg font-bold text-text-main-light">
+                    {/* XP - fixed width pour éviter superposition avec le nom */}
+                    <div className="flex-shrink-0 text-right w-[70px] ml-2">
+                      <p className="text-lg font-bold text-text-main-light whitespace-nowrap">
                         {profile.xp_total?.toLocaleString() || 0}
                       </p>
                       <p className="text-xs text-text-sub-light">XP</p>

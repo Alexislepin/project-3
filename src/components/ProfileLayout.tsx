@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase';
 import { formatPagesCount } from '../utils/formatPages';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
+import { resolveBookCover } from '../lib/bookCover';
 
 interface ProfileLayoutProps {
   profile: any;
@@ -26,6 +27,7 @@ interface ProfileLayoutProps {
   readingPace7d: number | null;
   readingSpeedPR: number | null;
   readingPacePR: number | null;
+  bestSessionMinutes?: number | null;
   hasSessions7d?: boolean;
   hasAnySessions?: boolean;
   totalPages7d?: number;
@@ -57,6 +59,7 @@ export function ProfileLayout({
   readingPace7d,
   readingSpeedPR,
   readingPacePR,
+  bestSessionMinutes,
   hasSessions7d = false,
   hasAnySessions = false,
   totalPages7d = 0,
@@ -182,26 +185,26 @@ export function ProfileLayout({
 
   return (
     <>
-      <div 
-        className="px-4 pt-4 pb-6"
-        style={{
-          paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
-        }}
-      >
+      <div className="px-4 pt-4">
         <div className="flex flex-col items-center text-center mb-6" style={{ paddingTop: '8px' }}>
           <div className="relative mb-4">
             <div className="w-32 h-32 bg-gray-200 rounded-full flex items-center justify-center text-4xl font-bold text-text-main-light border-4 border-white shadow-lg overflow-hidden">
-              {profile.avatar_url ? (
-                <img src={avatarUrl || undefined} alt={profile.display_name} className="w-full h-full object-cover" />
+              {avatarUrl && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
+                <img src={avatarUrl} alt={profile.display_name} className="w-full h-full object-cover" />
               ) : (
                 profile.display_name.charAt(0).toUpperCase()
               )}
             </div>
-            {streakDays > 0 && (
-              <div className="absolute bottom-0 right-0 bg-primary text-black rounded-full p-1.5 border-4 border-background-light flex items-center justify-center">
-                <Flame className="w-5 h-5 fill-black" />
-              </div>
-            )}
+            {(() => {
+              const streakValue = Number.isFinite(streakDays) ? streakDays : 0;
+              return (
+                <div className={`absolute bottom-0 right-0 rounded-full p-1.5 border-4 border-background-light flex items-center justify-center ${
+                  streakValue > 0 ? 'bg-primary text-black' : 'bg-stone-200 text-stone-400'
+                }`}>
+                  <Flame className={`w-5 h-5 ${streakValue > 0 ? 'fill-black' : ''}`} />
+                </div>
+              );
+            })()}
           </div>
           <h1 className="text-2xl font-bold tracking-tight mb-1">
             {profile.display_name || profile.username || 'Utilisateur'}
@@ -334,7 +337,7 @@ export function ProfileLayout({
 
           <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Record (PR)</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Meilleure session</p>
               <span className="text-[10px] font-bold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">p/h</span>
             </div>
             {(() => {
@@ -359,11 +362,20 @@ export function ProfileLayout({
               return (
                 <>
                   <p className="text-3xl font-bold leading-none text-text-main-light">
-                    {formatStatValue(readingSpeedPR)}
+                    {readingSpeedPR != null ? formatStatValue(readingSpeedPR) : '—'}
                   </p>
                   <p className="text-xs text-text-sub-light">
-                    Meilleur pace: {readingPacePR.toFixed(1)} min/page
+                    Meilleure vitesse sur une session
                   </p>
+                  {bestSessionMinutes != null && bestSessionMinutes > 0 ? (
+                    <p className="text-[10px] text-text-sub-light/70 mt-0.5">
+                      Basé sur {Math.round(bestSessionMinutes)} min de lecture
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-text-sub-light/70 mt-0.5">
+                      Record sur une session
+                    </p>
+                  )}
                 </>
               );
             })()}
@@ -580,20 +592,31 @@ export function ProfileLayout({
                   }
                 }
 
+                // ✅ Utiliser resolveBookCover (fonction canonique)
+                const coverUrl = resolveBookCover({
+                  customCoverUrl: item.actor_custom_cover_url || null,
+                  coverUrl: book?.cover_url || null,
+                });
+
                 return (
                   <button
                     key={item.book_key}
                     onClick={() => {
                       const bookObj = {
-                        id: item.book_key,
+                        id: item.book_id,            // ✅ UUID
+                        book_uuid: item.book_id,     // ✅ explicite
                         book_key: item.book_key,
-                        title: book.title ?? 'Titre inconnu',
-                        author: book.author ?? 'Auteur inconnu',
-                        cover_url: book.cover_url ?? null,
-                        thumbnail: book.cover_url ?? null,
+                        title: book.title ?? 'Métadonnées en cours…',
+                        author: book.author ?? 'Métadonnées en cours…',
+                        cover_url: coverUrl,
+                        thumbnail: coverUrl,
+                        custom_cover_url: item.actor_custom_cover_url || null, // ✅ Passer custom_cover_url
                         openLibraryKey,
                         isbn13,
                         isbn10,
+                        openlibrary_cover_id: book.openlibrary_cover_id || null,
+                        google_books_id: book.google_books_id || null,
+                        openlibrary_work_key: book.openlibrary_work_key || null,
                       };
                       setSelectedLikedBook(bookObj);
                     }}
@@ -601,12 +624,16 @@ export function ProfileLayout({
                   >
                     <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
                       <BookCover
-                        coverUrl={book.cover_url || undefined}
-                        title={book.title || ''}
+                        custom_cover_url={item.actor_custom_cover_url || null}
+                        coverUrl={coverUrl || undefined}
+                        title={book.title || 'Livre'}
                         author={book.author || ''}
                         className="w-full h-full"
+                        isbn={book.isbn || null}
                         isbn13={isbn13}
                         isbn10={isbn10}
+                        openlibrary_cover_id={book.openlibrary_cover_id || null}
+                        googleCoverUrl={book.google_books_id ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                       />
                     </div>
                   </button>

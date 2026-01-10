@@ -217,9 +217,10 @@ export function CommentModal({ activityId, onClose, onCommentAdded, onUserClick 
                       {(() => {
                         const avatarUrl = resolveAvatarUrl(comment.user?.avatar_url || null, supabase);
                         const bustedUrl = addCacheBuster(avatarUrl, comment.user?.updated_at);
-                        return bustedUrl ? (
+                        const safeUrl = bustedUrl && (bustedUrl.startsWith('http://') || bustedUrl.startsWith('https://') || bustedUrl.startsWith('data:') || bustedUrl.startsWith('/')) ? bustedUrl : null;
+                        return safeUrl ? (
                           <img 
-                            src={bustedUrl} 
+                            src={safeUrl} 
                             alt={comment.user.display_name || 'Avatar'} 
                             className="w-full h-full object-cover rounded-full"
                           />

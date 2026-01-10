@@ -10,10 +10,11 @@ export interface GroupedEvent {
   };
   event_type: 'book_like' | 'book_comment';
   book: {
-    book_key: string;
+    book_key: string | null;
     title: string;
-    author?: string;
-    cover_url?: string;
+    author?: string | null;
+    cover_url?: string | null;
+    id?: string | null;
   };
   comment_content?: string | null;
   created_at: string;
@@ -60,7 +61,7 @@ export function groupSocialEvents(events: GroupedEvent[]): GroupedEvent[] {
       return;
     }
 
-    const key = like.book?.book_key || 'unknown';
+    const key = like.book?.book_key || like.book?.id || 'unknown';
     if (!likesByBook.has(key)) {
       likesByBook.set(key, []);
     }

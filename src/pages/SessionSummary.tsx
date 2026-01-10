@@ -9,6 +9,7 @@ import { Toast } from '../components/Toast';
 import { Camera as CapacitorCamera } from '@capacitor/camera';
 import { Capacitor } from '@capacitor/core';
 import { uploadFileToBucket } from '../lib/storageUpload';
+import { BOTTOM_INSET } from '../lib/layoutConstants';
 
 interface SessionSummaryProps {
   bookTitle: string;
@@ -385,8 +386,13 @@ export function SessionSummary({
     }
   };
 
+  const SHARE_FOOTER_H = 104;
+
   return (
-    <div className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden">
+    <div 
+      className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden"
+      style={{ paddingBottom: BOTTOM_INSET }}
+    >
       {/* Sticky Header with safe-area top */}
       <AppHeader
         title="Partager votre activité"
@@ -398,7 +404,7 @@ export function SessionSummary({
       <div 
         className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-6"
         style={{
-          paddingBottom: 'calc(16px + var(--sab))',
+          paddingBottom: `calc(${SHARE_FOOTER_H}px + ${BOTTOM_INSET})`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -462,7 +468,7 @@ export function SessionSummary({
           })()}
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-5">
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -644,16 +650,19 @@ export function SessionSummary({
         </div>
       </div>
 
-      <div className="p-6 pt-4 shrink-0 bg-background-light border-t border-gray-200" style={{ paddingBottom: 'calc(16px + var(--sab))' }}>
-        <button
-          onClick={handleShare}
-          disabled={saving || uploadingPhotos}
-          className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50"
-        >
-          <span className="text-black text-lg font-bold uppercase tracking-wide">
-            {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
-          </span>
-        </button>
+      {/* ✅ Footer FIXED CTA */}
+      <div className="fixed left-0 right-0 z-[210]" style={{ bottom: BOTTOM_INSET }}>
+        <div className="max-w-md mx-auto px-6 pb-4">
+          <button
+            onClick={handleShare}
+            disabled={saving || uploadingPhotos}
+            className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50 font-black tracking-wide"
+          >
+            <span className="text-black text-lg font-bold uppercase tracking-wide">
+              {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Modal ajouter note */}

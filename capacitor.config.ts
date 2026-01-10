@@ -5,11 +5,12 @@ const config: CapacitorConfig = {
   appName: 'Lexu',
   webDir: 'dist',
   ios: {
-    customUrlScheme: 'lexu'
-  },
+    customUrlScheme: 'lexu',
+    swiftPackageManager: false
+  } as any,
   android: {
     customUrlScheme: 'lexu'
-  }
+  } as any
 };
 
 export default config;

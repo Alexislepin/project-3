@@ -7,7 +7,6 @@ import { mapAuthError, FriendlyAuthError } from '../lib/authErrors';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { handleOAuthCallback } from '../lib/oauth';
-import { registerPush } from '../lib/push';
 
 // Safe timer management to prevent double-invoke issues with React StrictMode
 const endedTimers = new Set<string>();
@@ -100,6 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         console.log('[AUTH] User authenticated, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        
+        // Initialize push notifications after initial session restore
+        if (Capacitor.isNativePlatform()) {
+          import('../lib/push').then(({ initPush }) => {
+            initPush(session.user.id).catch((err) => {
+              console.error('[AUTH] Error initializing push notifications:', err);
+            });
+          });
+        }
+        
         // Fetch profile after session is set
         refreshProfile(session.user.id);
       }
@@ -174,6 +183,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         console.log('[AUTH] Session active, scheduling goal check');
         scheduleGoalCheck(session.user.id);
+        
+        // Link OneSignal user after SIGNED_IN or INITIAL_SESSION
+        if (Capacitor.isNativePlatform() && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session.user.id) {
+          console.log('[AUTH] 🔵 Linking OneSignal user after auth event:', event);
+          import('../notifications/initOneSignal').then(({ linkOneSignalUser }) => {
+            linkOneSignalUser(session.user.id).catch((err) => {
+              console.error('[AUTH] ❌ Error linking OneSignal user:', {
+                message: err?.message,
+                stack: err?.stack,
+                errorString: JSON.stringify(err),
+              });
+            });
+          });
+
+          // Ensure push permission is requested (after login/onboarding)
+          // This will display iOS popup and trigger APNs registration
+          import('../notifications/ensurePushPermission').then(({ ensurePushPermission }) => {
+            ensurePushPermission().catch((err) => {
+              console.error('[AUTH] ❌ Error ensuring push permission:', {
+                message: err?.message,
+                stack: err?.stack,
+                errorString: JSON.stringify(err),
+              });
+            });
+          });
+        }
+        
         // Fetch profile after session is set
         refreshProfile(session.user.id).then(async () => {
           // If OAuth user (Google), ensure has_password is false
@@ -206,6 +242,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
+
+  // NOTE: Push notifications registration is now centralized in registerPush.ts
+  // and should only be called once after user authentication
 
   // Deep link handler for iOS/Android OAuth callbacks
   useEffect(() => {
@@ -296,10 +335,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(data as UserProfile);
         setProfileResolved(true);
         setProfileLoading(false);
-        // Register for push notifications if enabled
-        if ((data as any).notifications_enabled && user?.id) {
-          registerPush(user.id);
-        }
+        // NOTE: OneSignal initialization is now centralized in initOneSignal.ts
+        // and should only be called once at app startup (main.tsx) and after auth (onAuthStateChange)
         return;
       }
 
@@ -313,7 +350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const hasPassword = provider === 'email';
 
       // Minimal payload: only id and has_password (don't overwrite sensitive fields)
-      const { data: upsertedProfile, error: upsertError } = await supabase
+      const { error: upsertError } = await supabase
         .from('user_profiles')
         .upsert(
           {
@@ -355,10 +392,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           debugLog('[AUTH] Profile created/updated successfully, re-fetched state');
           setProfile(fetchedProfile as UserProfile);
           setProfileResolved(true);
-          // Register for push notifications if enabled
-          if ((fetchedProfile as any).notifications_enabled && user?.id) {
-            registerPush(user.id);
-          }
+          // NOTE: OneSignal initialization is now centralized in initOneSignal.ts
+          // and should only be called once at app startup (main.tsx) and after auth (onAuthStateChange)
         } else {
           setProfile(null);
         }

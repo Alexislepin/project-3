@@ -19,6 +19,16 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
   const isStartingRef = useRef<boolean>(false);
   const lastScannedIsbnRef = useRef<string | null>(null);
   const lastScanTimeRef = useRef<number>(0);
+  
+  // Store callbacks in refs to avoid stale closures
+  const onScanRef = useRef(onScan);
+  const onCloseRef = useRef(onClose);
+
+  // Update refs when callbacks change
+  useEffect(() => {
+    onScanRef.current = onScan;
+    onCloseRef.current = onClose;
+  }, [onScan, onClose]);
 
   useEffect(() => {
     startScanner();
@@ -88,12 +98,12 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           // Log successful scan (dev only)
           debugLog('ISBN scanned:', cleanIsbn);
 
-          // Call onScan immediately
-          onScan(cleanIsbn);
+          // Call onScan immediately (use ref to get latest callback)
+          onScanRef.current(cleanIsbn);
 
           // Stop scanner and close modal immediately
           stopScanner();
-          onClose();
+          onCloseRef.current();
         },
         (error: any) => {
           // Silently ignore normal scanner behavior (no barcode in frame)
@@ -175,7 +185,7 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           stopScanner();
-          onClose();
+          onCloseRef.current();
         }
       }}
     >
@@ -185,7 +195,7 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           showClose
           onClose={() => {
             stopScanner();
-            onClose();
+            onCloseRef.current();
           }}
           className="bg-black/50 border-b border-white/10 [&_h1]:text-black [&_button_svg]:text-black"
         />

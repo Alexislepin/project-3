@@ -8,6 +8,7 @@ import { AppHeader } from '../components/AppHeader';
 import { Toast } from '../components/Toast';
 import { BookRecapModal } from '../components/BookRecapModal';
 import { RecapUIState, DEFAULT_RECAP_UI } from '../lib/recapUI';
+import { BOTTOM_INSET } from '../lib/layoutConstants';
 
 
 type NoteTag = 'citation' | 'idee' | 'question' | null;
@@ -49,12 +50,34 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [activityId, setActivityId] = useState<string | null>(null);
   const { user } = useAuth();
+  
+  // Guard anti double-submit
+  const isSavingRef = useRef(false);
+  const activityIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadUserBooks();
     loadUserStreak();
     loadActiveSession();
+    
+    // Reset refs au montage (nouvelle session)
+    isSavingRef.current = false;
+    activityIdRef.current = null;
   }, []);
+  
+  // Wrapper pour onCancel avec reset des refs
+  const handleCancel = () => {
+    isSavingRef.current = false;
+    activityIdRef.current = null;
+    onCancel();
+  };
+  
+  // Wrapper pour onFinish avec reset des refs
+  const handleFinishWrapper = () => {
+    isSavingRef.current = false;
+    activityIdRef.current = null;
+    onFinish();
+  };
 
   // Tick for rerender (not source of truth)
   useEffect(() => {
@@ -208,8 +231,16 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const startSession = async () => {
     if (!user || !selectedBook) return;
 
+    // Guard anti double-submit
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+
+    const activityId = activityIdRef.current ?? (crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    activityIdRef.current = activityId;
+
     const now = new Date().toISOString();
-    const activityData: any = {
+    const payload: any = {
+      id: activityId,
       user_id: user.id,
       type: 'reading',
       visibility: 'private',
@@ -221,24 +252,43 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       last_pause_at: null,
     };
 
-    const { data: activityResult, error: activityError } = await supabase
-      .from('activities')
-      .insert(activityData)
-      .select('id, started_at, paused_total_seconds, last_pause_at')
-      .single();
+    try {
+      const { data: activityResult, error: activityError } = await supabase
+        .from('activities')
+        .insert(payload)
+        .select('id, started_at, paused_total_seconds, last_pause_at')
+        .single();
 
-    if (activityError || !activityResult) {
-      console.error('[startSession] Failed to insert activity:', activityError);
-      return;
+      if (activityError) {
+        if ((activityError as any).code === '23505') {
+          // Déjà inséré, utiliser l'ID existant et continuer
+          setActivityId(activityId);
+          setStartedAt(now);
+          setPausedTotalSeconds(0);
+          setLastPauseAt(null);
+          setStartPage(selectedBook.current_page || 0);
+          setShowBookSelect(false);
+          setIsRunning(true);
+          return;
+        }
+        throw activityError;
+      }
+
+      if (!activityResult) {
+        throw new Error('No activity result returned');
+      }
+
+      setActivityId(activityResult.id);
+      setStartedAt(activityResult.started_at);
+      setPausedTotalSeconds(activityResult.paused_total_seconds || 0);
+      setLastPauseAt(activityResult.last_pause_at);
+      setStartPage(selectedBook.current_page || 0);
+      setShowBookSelect(false);
+      setIsRunning(true);
+    } finally {
+      isSavingRef.current = false;
+      activityIdRef.current = null;
     }
-
-    setActivityId(activityResult.id);
-    setStartedAt(activityResult.started_at);
-    setPausedTotalSeconds(activityResult.paused_total_seconds || 0);
-    setLastPauseAt(activityResult.last_pause_at);
-    setStartPage(selectedBook.current_page || 0);
-    setShowBookSelect(false);
-    setIsRunning(true);
   };
 
   const togglePause = async () => {
@@ -840,7 +890,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             pagesPerHour={pagesPerHour}
             minPerPage={minPerPage}
             activityId={activityId}
-            onComplete={onFinish}
+            onComplete={handleFinishWrapper}
             onCancel={() => setShowSummary(false)}
           />
         )}
@@ -857,13 +907,18 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       }, 50);
     };
 
+    const BOOK_SELECT_FOOTER_H = 180; // ~ IA + bouton + hint + padding
+
     return (
-      <div className="fixed inset-0 bg-background-light z-50 flex flex-col h-[100dvh] overflow-hidden">
+      <div 
+        className="fixed inset-0 bg-background-light z-50 flex flex-col h-[100dvh] overflow-hidden"
+        style={{ paddingBottom: BOTTOM_INSET }}
+      >
         {/* Sticky Header with safe-area top */}
         <AppHeader
           title="Démarrer une session de lecture"
           showClose
-          onClose={onCancel}
+          onClose={handleCancel}
         />
 
         {/* Scrollable content container */}
@@ -873,7 +928,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             WebkitOverflowScrolling: 'touch',
             overscrollBehaviorY: 'contain',
             overscrollBehaviorX: 'none',
-            paddingBottom: 'calc(16px + var(--sab))',
+            paddingBottom: `calc(${BOOK_SELECT_FOOTER_H}px + ${BOTTOM_INSET})`,
           }}
         >
           <div className="w-full max-w-md mx-auto flex flex-col justify-center min-h-full py-8">
@@ -930,11 +985,27 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                 </div>
               </div>
             )}
+          </div>
+        </div>
 
-            <div
-              className="sticky bottom-0 left-0 right-0 bg-background-light/95 backdrop-blur border-t border-gray-200 pt-4 pb-2"
-              style={{ paddingBottom: 'calc(16px + var(--sab))' }}
-            >
+        {/* ✅ Footer FIXED (ne scroll plus avec la liste) */}
+        <div
+          className="fixed left-0 right-0 z-[60]"
+          style={{ bottom: BOTTOM_INSET }}
+        >
+          <div className="max-w-md mx-auto px-6">
+            <div className="bg-background-light/95 backdrop-blur border border-gray-200 rounded-2xl shadow-lg p-4 space-y-3">
+              {/* ✅ IA toujours visible quand un livre est sélectionné */}
+              {selectedBook?.book && (
+                <button
+                  type="button"
+                  onClick={handleRecapClick}
+                  className="w-full py-3 px-4 rounded-xl bg-card-light border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
+                >
+                  IA {selectedBook.current_page === 0 ? '(début)' : `(jusqu'à p.${selectedBook.current_page})`}
+                </button>
+              )}
+
               <button
                 onClick={() => {
                   if (!selectedBook) return;
@@ -952,33 +1023,24 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
               </button>
 
               {!selectedBook && (
-                <p className="text-center text-xs text-text-sub-light mt-2">
+                <p className="text-center text-xs text-text-sub-light">
                   Sélectionne un livre pour afficher le rappel IA et ajouter une note
                 </p>
-            )}
+              )}
             </div>
-
-            {/* Bouton "Rappel IA" sous le livre sélectionné */}
-            {selectedBook && selectedBook.book && (
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={handleRecapClick}
-                  className="w-full py-3 px-4 rounded-xl bg-card-light border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
-                >
-                  IA {selectedBook.current_page === 0 ? '(début)' : `(jusqu'à p.${selectedBook.current_page})`}
-                </button>
-              </div>
-            )}
           </div>
         </div>
+
         {renderModalsAndToast()}
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden">
+    <div 
+      className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden"
+      style={{ paddingBottom: BOTTOM_INSET }}
+    >
       {/* Sticky Header with safe-area top */}
       <AppHeader
         showClose
@@ -995,9 +1057,8 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
       {/* Scrollable content container */}
       <div 
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 pb-6"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 pb-6 safe-bottom-content"
         style={{
-          paddingBottom: 'calc(24px + var(--sab))',
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',

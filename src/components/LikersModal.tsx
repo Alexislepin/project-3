@@ -77,7 +77,7 @@ export function LikersModal({
                   className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-black/5 transition-colors"
                 >
                   <div className="w-9 h-9 bg-stone-200 rounded-full flex items-center justify-center text-stone-600 font-medium flex-shrink-0 overflow-hidden">
-                      {avatarUrl ? (
+                      {avatarUrl && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
                       <img
                           src={avatarUrl}
                         alt={u.display_name}

@@ -74,7 +74,22 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
       if (followError) {
         console.error('Erreur lors du follow:', followError);
       } else {
-        // La notification sera créée automatiquement par le trigger create_follow_notification()
+        // Créer la notification avec upsert pour éviter les doublons
+        await supabase
+          .from('notifications')
+          .upsert(
+            {
+              user_id: userId,   // celui qui reçoit la notif
+              actor_id: user.id,       // celui qui follow
+              type: 'follow',
+              read: false,
+              created_at: new Date().toISOString(), // remonte en haut à chaque re-follow
+            },
+            {
+              onConflict: 'user_id,actor_id,type',
+            }
+          );
+        
         setFollowingIds([...followingIds, userId]);
       }
     }
@@ -176,9 +191,10 @@ export function SearchUsersModal({ onClose, onUserClick }: SearchUsersModalProps
                     {(() => {
                       const avatarUrl = resolveAvatarUrl(profile.avatar_url || null, supabase);
                       const bustedUrl = avatarUrl ? addCacheBuster(avatarUrl, profile.updated_at) : null;
-                      return bustedUrl ? (
+                      const safeUrl = bustedUrl && (bustedUrl.startsWith('http://') || bustedUrl.startsWith('https://') || bustedUrl.startsWith('data:') || bustedUrl.startsWith('/')) ? bustedUrl : null;
+                      return safeUrl ? (
                         <img
-                          src={bustedUrl}
+                          src={safeUrl}
                           alt={profile.display_name}
                           className="w-full h-full object-cover"
                         />

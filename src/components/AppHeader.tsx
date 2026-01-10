@@ -33,9 +33,10 @@ export function AppHeader({
 }: AppHeaderProps) {
   return (
     <div
-      className={`sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
+      className={`sticky top-0 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
       style={{
         paddingTop: 'var(--sat)',
+        zIndex: 60, // Au-dessus de la searchBar (zIndex 40)
       }}
     >
       <div className="px-4 py-3">

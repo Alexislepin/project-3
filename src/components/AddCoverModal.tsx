@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
-import { X, Image as ImageIcon, Upload, Loader2, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Image as ImageIcon, Loader2, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { pickImageBlob } from '../lib/pickImage';
 import { UploadOverlay } from './UploadOverlay';
-import { Capacitor } from '@capacitor/core';
 import { useImagePicker } from '../hooks/useImagePicker';
+import { uploadImageToSupabase } from '../lib/imageUpload';
 
 interface AddCoverModalProps {
   open: boolean;
@@ -19,7 +19,6 @@ interface AddCoverModalProps {
 export function AddCoverModal({
   open,
   bookId,
-  bookTitle = 'ce livre',
   onUploaded,
   onClose,
   onShowToast,
@@ -34,20 +33,21 @@ export function AddCoverModal({
 
   // Reset state when modal closes
   const handleClose = () => {
-    // Prevent close during upload or picking
+    // CRITICAL: Prevent close during upload or picking
     if (uploading || shouldBlockClose()) {
       if (import.meta.env.DEV) {
         console.log('[AddCoverModal] Prevented close during upload/picking');
       }
       return;
     }
-      if (previewUrl && previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(previewUrl);
-      }
-      setPreviewUrl(null);
-      setCoverBlob(null);
+    // Cleanup blob URLs
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    setPreviewUrl(null);
+    setCoverBlob(null);
     setUploadToast(null);
-      onClose();
+    onClose();
   };
 
   // Cleanup blob URLs on unmount
@@ -114,60 +114,21 @@ export function AddCoverModal({
   };
 
   // Upload image to Supabase Storage
-  const handleUpload = async (blobToUpload?: Blob, contentTypeOverride?: string, extOverride?: string) => {
-    const blob = blobToUpload || coverBlob;
-    const contentType = contentTypeOverride || `image/${coverExt === 'jpg' ? 'jpeg' : coverExt}`;
-    const ext = extOverride || coverExt;
-
-    if (!blob || !bookId || uploading || !user) return;
+  const handleUpload = async () => {
+    if (!coverBlob || !bookId || uploading || !user) return;
 
     setUploading(true);
 
     try {
-      const path = `${user.id}/${bookId}/cover_${Date.now()}.${ext}`;
-
-      if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] Uploading', {
-          platform: Capacitor.getPlatform(),
-          bucket: 'book-covers',
-          path,
-          userId: user.id,
-          bookId,
-          contentType,
-          blobSize: blob.size,
-        });
-      }
-
-      // Upload directly to Supabase Storage
-      const { error: uploadError } = await supabase.storage
-        .from('book-covers')
-        .upload(path, blob, {
-          contentType,
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('[AddCoverModal] Upload error', {
+      // Use unified upload helper
+      const { publicUrl } = await uploadImageToSupabase(supabase, {
         bucket: 'book-covers',
-          path,
-          error: uploadError,
-          code: uploadError.statusCode,
-          message: uploadError.message,
-        });
-        throw uploadError;
-      }
-
-      // Get public URL
-      const { data: publicUrlData } = supabase.storage.from('book-covers').getPublicUrl(path);
-      const publicUrl = publicUrlData?.publicUrl;
-
-      if (!publicUrl) {
-        throw new Error('Failed to get public URL');
-      }
-
-      if (import.meta.env.DEV) {
-      console.log('[AddCoverModal] Upload OK', { path, publicUrl });
-      }
+        userId: user.id,
+        kind: 'cover',
+        blob: coverBlob,
+        ext: coverExt,
+        bookId,
+      });
 
       // Update user_books.custom_cover_url with public URL (not path)
       const { error: updateError } = await supabase
@@ -188,8 +149,21 @@ export function AddCoverModal({
         return;
       }
 
+      // ALSO update books.cover_url ONLY IF it is currently NULL
+      // This ensures Explorer shows the uploaded cover too
+      const { error: booksUpdateError } = await supabase
+        .from('books')
+        .update({ cover_url: publicUrl })
+        .eq('id', bookId)
+        .is('cover_url', null);
+
+      if (booksUpdateError) {
+        // Log error but don't fail the upload (non-critical)
+        console.warn('[AddCoverModal] Failed to update books.cover_url:', booksUpdateError);
+      }
+
       if (import.meta.env.DEV) {
-      console.log('[AddCoverModal] DB update OK');
+        console.log('[AddCoverModal] DB update OK');
       }
 
       // Update preview with public URL
@@ -302,7 +276,7 @@ export function AddCoverModal({
             <div className="space-y-3">
               <button
                 type="button"
-                onClick={() => handleUpload()}
+                onClick={handleUpload}
                 disabled={uploading || !coverBlob}
                 className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-stone-900 text-white rounded-xl font-medium hover:bg-stone-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >

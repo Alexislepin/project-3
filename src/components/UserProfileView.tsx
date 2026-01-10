@@ -8,6 +8,7 @@ import { UserLibraryView } from './UserLibraryView';
 import { AppHeader } from './AppHeader';
 import { ProfileLayout } from './ProfileLayout';
 import { computeReadingStats, computePR } from '../lib/readingStats';
+import { isRealReadingSession } from '../lib/readingSessions';
 import { MyActivities } from '../pages/MyActivities';
 import { countRows } from '../lib/supabaseCounts';
 import { LevelProgressBar } from './LevelProgressBar';
@@ -124,7 +125,7 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
         countRows('follows', q => q.eq('follower_id', userId)),  // following = ceux que cet user suit
         countRows('activities', q => q.eq('user_id', userId).eq('visibility', 'public')),
         countRows('user_books', q => q.eq('user_id', userId)),
-        countRows('book_likes', q => q.eq('user_id', userId)),
+        countRows('book_likes', q => q.eq('user_id', userId).is('deleted_at', null)), // ✅ Seulement les likes actifs
       ]);
 
       console.log('[loadStats counts]', { userId, followers, following, activities, books, likes });
@@ -212,25 +213,27 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     }
 
     const all = allActivities ?? [];
+    // Filter to only real reading sessions (pages > 0 AND duration > 0)
+    const sessions = all.filter(isRealReadingSession);
 
-    // total pages all time (single source of truth: activities)
-    const totalPagesAll = all.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
+    // total pages all time (single source of truth: real sessions only)
+    const totalPagesAll = sessions.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
     setTotalPagesAllTime(totalPagesAll);
 
-    const totalMins = all.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
+    const totalMins = sessions.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
     setTotalMinutes(totalMins);
 
-    // Check if user has any sessions
-    const hasAny = all.some(a => (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0));
+    // Check if user has any real sessions
+    const hasAny = sessions.length > 0;
     setHasAnySessions(hasAny);
 
-    // Compute PR using centralized function
-    const prResult = computePR(all, 30);
+    // Compute PR using centralized function (real sessions only)
+    const prResult = computePR(sessions, 30);
     setReadingSpeedPR(prResult.speedPph);
     setReadingPacePR(prResult.paceMinPerPage);
 
-    // 7d stats using centralized function
-    const last7d = all.filter(a => a.created_at && new Date(a.created_at) >= new Date(sinceISO));
+    // 7d stats using centralized function (real sessions only)
+    const last7d = sessions.filter(a => a.created_at && new Date(a.created_at) >= new Date(sinceISO));
 
     const sumPages7d = last7d.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
     const sumMins7d = last7d.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
@@ -426,6 +429,22 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
           return;
         }
 
+        // Créer la notification avec upsert pour éviter les doublons
+        await supabase
+          .from('notifications')
+          .upsert(
+            {
+              user_id: userId,   // celui qui reçoit la notif
+              actor_id: user.id,       // celui qui follow
+              type: 'follow',
+              read: false,
+              created_at: new Date().toISOString(), // remonte en haut à chaque re-follow
+            },
+            {
+              onConflict: 'user_id,actor_id,type',
+            }
+          );
+
         setIsFollowing(true);
       }
 
@@ -546,11 +565,13 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
         readingPace7d={readingPace7d}
         readingSpeedPR={readingSpeedPR}
         readingPacePR={readingPacePR}
+        bestSessionMinutes={null}
         hasSessions7d={hasSessions7d}
         hasAnySessions={hasAnySessions}
         totalPages7d={totalPages7d}
         totalPagesAllTime={totalPagesAllTime}
         totalMinutes7d={totalMinutes7d}
+        streakDays={profile?.current_streak ?? 0}
         currentlyReading={currentlyReading}
         likedBooks={likedBooks}
         interests={profile.interests}

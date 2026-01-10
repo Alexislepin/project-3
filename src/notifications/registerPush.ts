@@ -2,58 +2,67 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from '../lib/supabase';
 import { Capacitor } from '@capacitor/core';
 
-// Prevent duplicate listeners
-let listenersAdded = false;
+let registeredForUserId: string | null = null;
 
 export async function registerPush(userId: string) {
-  // Only work on native platforms
-  if (!Capacitor.isNativePlatform()) {
-    return;
-  }
+  if (!Capacitor.isNativePlatform()) return;
+  if (!userId) return;
 
-  // Prevent duplicate listeners
-  if (listenersAdded) {
-    return;
-  }
-  listenersAdded = true;
+  if (registeredForUserId === userId) return;
+  registeredForUserId = userId;
+
+  console.log('[PUSH] registerPush called', { userId });
 
   try {
-    // Request permissions
     const perm = await PushNotifications.requestPermissions();
+    console.log('[PUSH] permission result', perm);
+
     if (perm.receive !== 'granted') {
-      console.log('[PUSH] Permissions not granted');
+      registeredForUserId = null;
       return;
     }
 
-    // Register for push notifications
-    await PushNotifications.register();
+    // Anti-doublons : removeAllListeners avant d'ajouter
+    await PushNotifications.removeAllListeners();
 
-    // Add listener for registration success
+    // IMPORTANT: listeners AVANT register (moins de race conditions)
     PushNotifications.addListener('registration', async (token) => {
-      console.log('[PUSH] PUSH TOKEN', token.value);
+      console.log('[PUSH] ✅ registration event received', token.value);
 
-      try {
-        await supabase.from('user_devices').upsert({
-          user_id: userId,
-          platform: 'ios',
-          push_token: token.value,
-          last_seen_at: new Date().toISOString(),
-        }, {
-          onConflict: 'user_id,platform',
-        });
-        console.log('[PUSH] Device token saved to database');
-      } catch (error) {
-        console.error('[PUSH] Error saving device token:', error);
-      }
+      const { data, error } = await supabase
+        .from('user_devices')
+        .upsert(
+          {
+            user_id: userId,
+            platform: 'ios',
+            push_token: token.value,
+            last_seen_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,platform' }
+        )
+        .select();
+
+      console.log('[PUSH] upsert', { data, error });
     });
 
-    // Add listener for registration errors
     PushNotifications.addListener('registrationError', (err) => {
-      console.error('[PUSH] registrationError', err);
+      console.error('[PUSH] ❌ registrationError', err);
+      registeredForUserId = null;
     });
-  } catch (error) {
-    console.error('[PUSH] Error registering push notifications:', error);
-    listenersAdded = false; // Reset on error to allow retry
+
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.log('[PUSH] received foreground', notification);
+    });
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      console.log('[PUSH] action performed', action);
+    });
+
+    console.log('[PUSH] calling PushNotifications.register()');
+    await PushNotifications.register();
+  } catch (e) {
+    console.error('[PUSH] registerPush error', e);
+    registeredForUserId = null;
   }
 }
 

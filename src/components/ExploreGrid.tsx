@@ -13,6 +13,7 @@ interface ExploreGridProps {
   onCountsChange: (bookKey: string, nextLikes: number, nextComments: number, nextLiked: boolean) => void;
   onOpenComments: (book: any) => void;
   onShowToast: (message: string, type?: 'success' | 'info' | 'error') => void;
+  showPages?: boolean; // Afficher le nombre de pages (default: true)
 }
 
 export const ExploreGrid = memo(function ExploreGrid({
@@ -26,6 +27,7 @@ export const ExploreGrid = memo(function ExploreGrid({
   onCountsChange,
   onOpenComments,
   onShowToast,
+  showPages = true,
 }: ExploreGridProps) {
   // Memoize converted books and keys
   const booksWithKeys = useMemo(() => {
@@ -112,6 +114,7 @@ export const ExploreGrid = memo(function ExploreGrid({
           onCountsChange={onCountsChange}
           onOpenComments={onOpenComments}
           onShowToast={onShowToast}
+          showPages={showPages}
         />
       ))}
     </div>

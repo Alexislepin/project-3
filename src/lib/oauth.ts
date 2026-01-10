@@ -31,7 +31,7 @@ export async function signInWithGoogle(options?: { forceAccount?: boolean }): Pr
         provider: 'google',
         options: {
           redirectTo,
-          skipBrowserRedirect: true,
+          skipBrowserRedirect: true, // IMPORTANT en mobile
           queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
         },
       });
@@ -41,17 +41,19 @@ export async function signInWithGoogle(options?: { forceAccount?: boolean }): Pr
         return { error };
       }
 
-      const authUrl = data?.url;
-      if (!authUrl) {
-        const err = new Error('No OAuth URL returned');
+      // ✅ GARDE-FOU: ne JAMAIS appeler Browser.open si l'URL n'existe pas
+      if (!data?.url) {
+        console.error('[OAUTH] Missing auth URL', data);
+        const err = new Error('OAuth URL missing (data.url is empty)');
         debugError('[OAuth] No URL received', err);
         return { error: err };
       }
 
-      debugLog('[OAuth] Opening browser with URL', { url: authUrl });
+      console.log('[OAUTH] Opening URL:', data.url);
+      debugLog('[OAuth] Opening browser with URL', { url: data.url });
 
       try {
-        await Browser.open({ url: authUrl, presentationStyle: 'popover' });
+        await Browser.open({ url: data.url, presentationStyle: 'popover' });
         return {};
       } catch (browserError: any) {
         debugError('[OAuth] Browser.open error', browserError);

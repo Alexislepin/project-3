@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react';
 import { X, Bell, BellOff, Clock, Target } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
-import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { registerPush } from '../lib/push';
 
 interface NotificationSettingsModalProps {
   onClose: () => void;
@@ -98,12 +96,9 @@ export function NotificationSettingsModal({ onClose }: NotificationSettingsModal
     await saveSettings(newValue, goalReminderEnabled, notificationTime);
 
     if (newValue === true && user?.id) {
-      // On native platforms, request permissions and register before calling registerPush
-      if (Capacitor.isNativePlatform()) {
-        await PushNotifications.requestPermissions();
-        await PushNotifications.register();
-        registerPush(user.id);
-      }
+      // NOTE: Push notifications registration is now centralized in registerPush.ts
+      // and should only be called once after user authentication
+      // Permissions are requested automatically during OneSignal initialization
       
       new Notification('Notifications activées !', {
         body: 'Vous recevrez des rappels pour vos objectifs de lecture',

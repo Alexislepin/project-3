@@ -6,10 +6,12 @@ import { ensureBookInDB } from '../lib/booksUpsert';
 import { ManageBookModal } from './ManageBookModal';
 import { AddBookStatusModal } from './AddBookStatusModal';
 import { BookCover } from './BookCover';
+import { BookSocial } from './BookSocial';
 import { smartFormatDescription } from '../utils/descriptionFormatter';
 import { debugLog, fatalError } from '../utils/logger';
 import { ReadingSetupModal } from './ReadingSetupModal';
 import { normalizeReadingState } from '../lib/readingState';
+import { hydrateBookMeta } from '../lib/hydrateBookMeta';
 
 interface BookDetailsWithManagementProps {
   bookId: string;
@@ -56,6 +58,34 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
 
       if (bookData) {
         setBook(bookData);
+        
+        // Hydrate les métadonnées si manquantes
+        const needsHydration = 
+          !bookData.cover_url || 
+          !bookData.total_pages || 
+          !bookData.description;
+        
+        if (needsHydration) {
+          // Hydrate en arrière-plan (ne bloque pas l'affichage)
+          hydrateBookMeta(supabase, bookData, { force: false })
+            .then((hydrated) => {
+              if (hydrated) {
+                // Mettre à jour l'état local pour rafraîchir l'UI
+                setBook((prev: any) => ({
+                  ...prev,
+                  cover_url: hydrated.cover_url || prev.cover_url,
+                  total_pages: hydrated.total_pages || prev.total_pages,
+                  description: hydrated.description || prev.description,
+                  openlibrary_cover_id: hydrated.openlibrary_cover_id || prev.openlibrary_cover_id,
+                  openlibrary_work_key: hydrated.openlibrary_work_key || prev.openlibrary_work_key,
+                  openlibrary_edition_key: hydrated.openlibrary_edition_key || prev.openlibrary_edition_key,
+                }));
+              }
+            })
+            .catch((error) => {
+              console.error('[BookDetailsWithManagement] Error hydrating book:', error);
+            });
+        }
       }
 
       if (user) {
@@ -101,6 +131,23 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
       .from('user_books')
       .update({ status })
       .eq('id', userBook.id);
+
+    // Create book event based on new status
+    if (userBook.book_id) {
+      try {
+        const { createBookEvent } = await import('../lib/bookEvents');
+        if (status === 'reading') {
+          await createBookEvent(user.id, userBook.book_id, 'book_started');
+        } else if (status === 'want_to_read') {
+          await createBookEvent(user.id, userBook.book_id, 'book_added');
+        } else if (status === 'completed') {
+          await createBookEvent(user.id, userBook.book_id, 'book_finished');
+        }
+      } catch (eventError) {
+        console.error('[handleStatusChange] Error creating book event:', eventError);
+        // Don't fail the whole operation if event creation fails
+      }
+    }
 
     setShowManageModal(false);
     loadBookDetails();
@@ -388,7 +435,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
               </div>
             )}
 
-            {book.description && (
+            {book.description ? (
               <div className="mb-6">
                 <h4 className="text-sm font-bold text-text-main-light mb-3 uppercase tracking-wide">
                   Résumé
@@ -397,7 +444,21 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
                   {smartFormatDescription(book.description, 350)}
                 </p>
               </div>
+            ) : (
+              <div className="mb-6">
+                <h4 className="text-sm font-bold text-text-main-light mb-3 uppercase tracking-wide">
+                  Résumé
+                </h4>
+                <p className="text-text-sub-light italic text-sm">
+                  Résumé indisponible pour l'instant
+                </p>
+              </div>
             )}
+
+            {/* Section sociale : likes et commentaires */}
+            <div className="mb-6">
+              <BookSocial book={book} bookId={book.id} />
+            </div>
 
             {!userBook && !showReadingSetup && !pendingStatus && (
               <AddBookStatusModal

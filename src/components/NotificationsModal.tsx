@@ -48,10 +48,11 @@ function formatAgo(iso: string) {
 
 function Avatar({ name, url }: { name: string; url?: string | null }) {
   const letter = (name?.trim()?.[0] ?? '?').toUpperCase();
+  const safeUrl = url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('/')) ? url : undefined;
   return (
     <div className="h-10 w-10 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-      {url ? (
-        <img src={url} alt={name} className="h-full w-full object-cover" />
+      {safeUrl ? (
+        <img src={safeUrl} alt={name} className="h-full w-full object-cover" />
       ) : (
         <span className="text-sm font-semibold text-gray-600">{letter}</span>
       )}
@@ -487,6 +488,22 @@ export function NotificationsModal({ onClose, onUserClick, onOpenMyActivity }: N
       if (followError) {
         console.error('Erreur lors du follow:', followError);
       } else {
+        // Créer la notification avec upsert pour éviter les doublons
+        await supabase
+          .from('notifications')
+          .upsert(
+            {
+              user_id: userId,   // celui qui reçoit la notif
+              actor_id: user.id,       // celui qui follow
+              type: 'follow',
+              read: false,
+              created_at: new Date().toISOString(), // remonte en haut à chaque re-follow
+            },
+            {
+              onConflict: 'user_id,actor_id,type',
+            }
+          );
+        
         setFollowingIds([...followingIds, userId]);
       }
     }

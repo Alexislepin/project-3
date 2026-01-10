@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CAPACITOR_DEBUG</key>
-	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
@@ -23,8 +21,10 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.alexis.lexu</string>
+			<string>lexu</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>lexu</string>
@@ -35,12 +35,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>Nous utilisons la caméra pour scanner le code-barres (ISBN) des livres et prendre une photo de profil.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Nous sauvegardons des images dans votre photothèque si vous choisissez de les enregistrer.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Nous accédons à votre photothèque pour choisir une photo de profil ou une image de couverture de livre.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
@@ -68,5 +62,11 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Lexu a besoin d'accéder à vos photos pour choisir une couverture et votre avatar.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Lexu a besoin d'accéder à vos photos pour choisir une couverture et votre avatar.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Lexu a besoin d'accéder à votre caméra pour prendre une photo de couverture ou d'avatar.</string>
 </dict>
 </plist>

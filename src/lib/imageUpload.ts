@@ -1,131 +1,112 @@
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
-import { Capacitor } from '@capacitor/core';
 import { SupabaseClient } from '@supabase/supabase-js';
-
-/**
- * Pick an image using Capacitor Camera (iOS/Android) or fallback to file input (web)
- * @returns Object with blob, extension, and mime type, or null if cancelled/error
- */
-export async function pickImage(): Promise<{ blob: Blob; ext: string; mime: string } | null> {
-  try {
-    // Web: use file input
-    if (!Capacitor.isNativePlatform()) {
-      return new Promise((resolve) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0];
-          if (!file) {
-            resolve(null);
-            return;
-          }
-
-          if (!file.type.startsWith('image/')) {
-            resolve(null);
-            return;
-          }
-
-          const blob = file as Blob;
-          const mime = blob.type || 'image/jpeg';
-          const ext = getExtensionFromMime(mime);
-
-          resolve({ blob, ext, mime });
-        };
-        input.oncancel = () => resolve(null);
-        input.click();
-      });
-    }
-
-    // Native: use Capacitor Camera
-    const photo = await Camera.getPhoto({
-      quality: 75,
-      allowEditing: false,
-      resultType: CameraResultType.Uri,
-      source: CameraSource.Photos,
-      width: 1024,
-    });
-
-    if (!photo.webPath) {
-      return null;
-    }
-
-    // Convert webPath to Blob
-    const response = await fetch(photo.webPath);
-    const blob = await response.blob();
-
-    // Determine mime type and extension from blob
-    const mime = blob.type || 'image/jpeg';
-    const ext = getExtensionFromMime(mime);
-
-    return { blob, ext, mime };
-  } catch (error: any) {
-    // User cancelled - return null silently
-    if (error?.message?.includes('cancel') || error?.message?.includes('User cancelled')) {
-      return null;
-    }
-    
-    // Other errors - log and return null
-    console.error('[pickImage] Error:', error);
-    return null;
-  }
-}
-
-/**
- * Get file extension from MIME type
- */
-function getExtensionFromMime(mime: string): string {
-  const mimeMap: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-  };
-  return mimeMap[mime.toLowerCase()] || 'jpg';
-}
+import { Capacitor } from '@capacitor/core';
+import { pickImageBlob } from './pickImage';
 
 /**
  * Upload an image blob to Supabase Storage
+ * Normalizes path, handles errors, and returns public URL
+ * 
  * @param supabase - Supabase client instance
- * @param bucket - Storage bucket name
- * @param path - Storage path (e.g., "userId/avatar.jpg")
- * @param blob - Image blob to upload
- * @param mime - MIME type (e.g., "image/jpeg")
- * @returns Object with path and public URL
+ * @param params - Upload parameters
+ * @returns Object with path and publicUrl
  */
 export async function uploadImageToSupabase(
   supabase: SupabaseClient,
   params: {
     bucket: string;
-    path: string;
+    userId: string;
+    kind: 'avatar' | 'cover';
     blob: Blob;
-    mime: string;
+    ext: string;
+    bookId?: string; // Optional, for book covers
   }
-): Promise<{ path: string; url: string }> {
-  const { bucket, path, blob, mime } = params;
+): Promise<{ path: string; publicUrl: string }> {
+  const { bucket, userId, kind, blob, ext, bookId } = params;
 
-  // Upload to Supabase Storage
-  const { error: uploadError } = await supabase.storage
-    .from(bucket)
-    .upload(path, blob, {
-      contentType: mime,
-      upsert: true,
+  // Normalize path: ${userId}/${kind}/${timestamp}.${ext}
+  // For covers: ${userId}/${bookId}/cover_${timestamp}.${ext}
+  const timestamp = Date.now();
+  const path = bookId
+    ? `${userId}/${bookId}/cover_${timestamp}.${ext}`
+    : `${userId}/${kind}/${timestamp}.${ext}`;
+
+  // Determine content type
+  const contentType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+
+  // Log for iOS debug
+  if (import.meta.env.DEV || Capacitor.isNativePlatform()) {
+    console.log('[uploadImageToSupabase] Starting upload', {
+      platform: Capacitor.getPlatform(),
+      bucket,
+      path,
+      userId,
+      kind,
+      bookId: bookId || 'N/A',
+      contentType,
+      blobSize: blob.size,
     });
-
-  if (uploadError) {
-    console.error('[uploadImageToSupabase] Upload error:', uploadError);
-    throw new Error(`Upload failed: ${uploadError.message}`);
   }
 
-  // Get public URL
-  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-  const url = data?.publicUrl;
+  try {
+    // Upload to Supabase Storage with upsert
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(path, blob, {
+        contentType,
+        upsert: true,
+      });
 
-  if (!url) {
-    throw new Error('Failed to get public URL');
+    if (uploadError) {
+      console.error('[uploadImageToSupabase] Upload error', {
+        bucket,
+        path,
+        error: uploadError,
+        message: uploadError.message,
+      });
+      throw new Error(`Upload failed: ${uploadError.message}`);
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage.from(bucket).getPublicUrl(path);
+    const publicUrl = publicUrlData?.publicUrl;
+
+    if (!publicUrl) {
+      throw new Error('Failed to get public URL');
+    }
+
+    // Log success
+    if (import.meta.env.DEV || Capacitor.isNativePlatform()) {
+      console.log('[uploadImageToSupabase] Upload success', {
+        path,
+        publicUrl: publicUrl.substring(0, 100) + '...',
+      });
+    }
+
+    return { path, publicUrl };
+  } catch (error: any) {
+    console.error('[uploadImageToSupabase] Upload failed', {
+      bucket,
+      path,
+      error: error?.message || String(error),
+    });
+    throw error;
   }
-
-  return { path, url };
 }
 
+/**
+ * Pick an image and return as Blob with metadata
+ * Wrapper around pickImageBlob for compatibility
+ * 
+ * @returns Object with blob, ext, and mime, or null if cancelled/error
+ */
+export async function pickImage(): Promise<{ blob: Blob; ext: string; mime: string } | null> {
+  const result = await pickImageBlob();
+  if (!result) {
+    return null;
+  }
+  return {
+    blob: result.blob,
+    ext: result.ext,
+    mime: result.contentType,
+  };
+}

@@ -3,12 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { debugError } from '../utils/logger';
-import { LogOut, Edit, Bell, UserPlus, Settings, Globe, BookOpen } from 'lucide-react';
-import { setAppLanguage } from '../lib/appLanguage';
+import { LogOut, Edit, Bell, UserPlus, HelpCircle, BookOpen, Shield, Bug, ArrowRight } from 'lucide-react';
 import { Clubs } from './Clubs';
 import { EditProfileModal } from '../components/EditProfileModal';
 import { NotificationsModal } from '../components/NotificationsModal';
-import { NotificationSettingsModal } from '../components/NotificationSettingsModal';
 import { SearchUsersModal } from '../components/SearchUsersModal';
 import { FollowersModal } from '../components/FollowersModal';
 import { FollowingModal } from '../components/FollowingModal';
@@ -16,17 +14,21 @@ import { UserProfileView } from '../components/UserProfileView';
 import { BookCover } from '../components/BookCover';
 import { BookDetailsModal } from '../components/BookDetailsModal';
 import { AppHeader } from '../components/AppHeader';
-import { LanguageSelectorModal } from '../components/LanguageSelectorModal';
+import { HelpCenterModal } from '../components/HelpCenterModal';
 import { ProfileLayout } from '../components/ProfileLayout';
 import { computeReadingStats, computePR } from '../lib/readingStats';
+import { ActivityFocus } from '../lib/activityFocus';
+import { isRealReadingSession } from '../lib/readingSessions';
 import { LevelProgressBar } from '../components/LevelProgressBar';
 import { LevelDetailsModal } from '../components/LevelDetailsModal';
-import { computeStreakFromActivities } from '../lib/readingStreak';
+import { fetchStreakInfo } from '../lib/streakService';
 import { MyActivities } from './MyActivities';
 import { countRows } from '../lib/supabaseCounts';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 import { XpHistoryModal } from '../components/XpHistoryModal';
 import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
+import { resolveBookCover } from '../lib/bookCover';
+import { canonicalBookKey } from '../lib/bookSocial';
 
 interface ProfileProps {
   onNavigateToLibrary: () => void;
@@ -45,7 +47,6 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [showMyActivities, setShowMyActivities] = useState(false);
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [currentlyReading, setCurrentlyReading] = useState<any[]>([]);
   const [showFollowersModal, setShowFollowersModal] = useState(false);
@@ -56,7 +57,8 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [likedBooks, setLikedBooks] = useState<any[]>([]);
   const [showAllLikedBooks, setShowAllLikedBooks] = useState(false);
   const [selectedLikedBook, setSelectedLikedBook] = useState<any | null>(null);
-  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const [showHelpCenter, setShowHelpCenter] = useState(false);
+  const [helpCenterView, setHelpCenterView] = useState<'home' | 'faq' | 'privacy' | 'bug'>('home');
   const [showXpHistory, setShowXpHistory] = useState(false);
   const [showLevelDetails, setShowLevelDetails] = useState(false);
   const [totalMinutes, setTotalMinutes] = useState(0);
@@ -64,6 +66,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [readingPace7d, setReadingPace7d] = useState<number | null>(null);  // min/page
   const [readingSpeedPR, setReadingSpeedPR] = useState<number | null>(null); // max pages/h
   const [readingPacePR, setReadingPacePR] = useState<number | null>(null);  // best (min) min/page
+  const [bestSessionMinutes, setBestSessionMinutes] = useState<number | null>(null);
   const [hasSessions7d, setHasSessions7d] = useState(false);
   const [hasAnySessions, setHasAnySessions] = useState(false);
   const [totalPages7d, setTotalPages7d] = useState(0);
@@ -77,7 +80,9 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const likedReqRef = useRef(0);
   const weeklyReqRef = useRef(0);
   const readingReqRef = useRef(0);
-  const streakReqRef = useRef(0);
+  
+  // Debounce pour éviter les races sur les likes
+  const likeRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync with context profile
   useEffect(() => {
@@ -112,9 +117,49 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
       loadUnreadNotificationsCount();
     }, 30000);
 
-    const handleBookLikeChanged = () => {
-      loadLikedBooks();
-      loadStats();
+    const handleBookLikeChanged = (event: any) => {
+      const { book_key, book_uuid, liked } = event.detail || {};
+      
+      // ✅ Update optimistic immédiat UNIQUEMENT pour UNLIKE (safe)
+      if (book_key && liked === false) {
+        // UNLIKE : retirer immédiatement l'item
+        setLikedBooks(prev => prev.filter(item => {
+          if (book_uuid && item.book_id === book_uuid) return false;
+          if (item.book_key === book_key) return false;
+          return true;
+        }));
+        // Décrémenter stats.likes (sans passer sous 0)
+        setStats(prev => ({
+          ...prev,
+          likes: Math.max(0, prev.likes - 1)
+        }));
+      }
+      
+      // ✅ Pour LIKE : ne pas faire d'optimistic add (évite les placeholders "Métadonnées en cours…")
+      // ✅ Debounce le refresh pour éviter les races
+      if (likeRefreshTimeoutRef.current) {
+        clearTimeout(likeRefreshTimeoutRef.current);
+      }
+      likeRefreshTimeoutRef.current = setTimeout(() => {
+        loadLikedBooks();
+        loadStats();
+      }, 200);
+    };
+
+    // Also listen to book-social-counts-changed for consistency (dispatched by toggleBookLike RPC)
+    const handleBookSocialCountsChanged = (event: any) => {
+      const { bookKey, isLiked } = event.detail || {};
+      
+      // Only refresh if it's an unlike (to avoid placeholders for likes)
+      if (bookKey && isLiked === false) {
+        if (likeRefreshTimeoutRef.current) {
+          clearTimeout(likeRefreshTimeoutRef.current);
+        }
+        likeRefreshTimeoutRef.current = setTimeout(() => {
+          loadLikedBooks();
+          loadStats();
+        }, 200);
+      }
     };
 
     const handleActivityCreated = () => {
@@ -137,12 +182,17 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     };
 
     window.addEventListener('book-like-changed', handleBookLikeChanged);
+    window.addEventListener('book-social-counts-changed', handleBookSocialCountsChanged);
     window.addEventListener('activity-created', handleActivityCreated);
     window.addEventListener('xp-updated', handleXpUpdated);
 
     return () => {
       clearInterval(interval);
+      if (likeRefreshTimeoutRef.current) {
+        clearTimeout(likeRefreshTimeoutRef.current);
+      }
       window.removeEventListener('book-like-changed', handleBookLikeChanged);
+      window.removeEventListener('book-social-counts-changed', handleBookSocialCountsChanged);
       window.removeEventListener('activity-created', handleActivityCreated);
       window.removeEventListener('xp-updated', handleXpUpdated);
     };
@@ -193,17 +243,18 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
     const reqId = ++statsReqRef.current;
     try {
-      const [followers, following, activities, books, likes] = await Promise.all([
+      const [followers, following, activities, books] = await Promise.all([
         countRows('follows', q => q.eq('following_id', profileId)), // followers = ceux qui me suivent
         countRows('follows', q => q.eq('follower_id', profileId)),  // following = ceux que je suis
         countRows('activities', q => q.eq('user_id', profileId)),
         countRows('user_books', q => q.eq('user_id', profileId)),
-        countRows('book_likes', q => q.eq('user_id', profileId)),
+        // ✅ likes est maintenant calculé depuis likedBooks.length (source de vérité unique)
     ]);
 
       if (reqId !== statsReqRef.current) return; // ✅ ignore stale
-      console.log('[loadStats counts]', { profileId, followers, following, activities, books, likes });
-      setStats({ followers, following, activities, books, likes });
+      console.log('[loadStats counts]', { profileId, followers, following, activities, books });
+      // ✅ Garder likes depuis le state actuel (calculé depuis likedBooks)
+      setStats(prev => ({ followers, following, activities, books, likes: prev.likes }));
     } catch (e: any) {
       console.error('[loadStats] FAILED', e);
       // ✅ ne pas reset à 0 (sinon "flash 0")
@@ -242,29 +293,86 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     }
 
     const all = allActivities ?? [];
+    // Filter to only real reading sessions (pages > 0 AND duration > 0)
+    const sessions = all.filter(isRealReadingSession);
 
-    // total pages all time (single source of truth: activities)
-    const totalPagesAll = all.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
+    // total pages all time (single source of truth: real sessions only)
+    const totalPagesAll = sessions.reduce((acc: number, a: any) => acc + (Number(a.pages_read) || 0), 0);
     setTotalPagesAllTime(totalPagesAll);
 
-    // total minutes
-    const totalMins = all.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
+    // total minutes (real sessions only)
+    const totalMins = sessions.reduce((acc: number, a: any) => acc + (Number(a.duration_minutes) || 0), 0);
     setTotalMinutes(totalMins);
 
-    // Check if user has any sessions
-    const hasAny = all.some(a => (Number(a.pages_read) > 0 || Number(a.duration_minutes) > 0));
+    // Check if user has any real sessions
+    const hasAny = sessions.length > 0;
     setHasAnySessions(hasAny);
 
-    // Compute PR using centralized function
-    const prResult = computePR(all, 30);
+    // Compute PR using centralized function (real sessions only)
+    const prResult = computePR(sessions, 30);
     setReadingSpeedPR(prResult.speedPph);
     setReadingPacePR(prResult.paceMinPerPage);
+    
+    // Find the best session minutes (the session that achieved the PR)
+    if (prResult.speedPph != null && prResult.paceMinPerPage != null) {
+      const now = new Date();
+      const lookbackDate = new Date(now);
+      lookbackDate.setDate(lookbackDate.getDate() - 30);
+      
+      const recentActivities = sessions.filter((a: any) => {
+        if (!a.created_at) return false;
+        return new Date(a.created_at) >= lookbackDate;
+      });
+      
+      let bestSessionMins: number | null = null;
+      
+      for (const a of recentActivities) {
+        const pages = Number(a.pages_read) || 0;
+        const mins = Number(a.duration_minutes) || 0;
+        
+        if (mins < 1 || pages < 5) continue;
+        
+        // Check if this session matches the PR
+        let sessionPPH: number | null = null;
+        if (a.reading_speed_pph != null) {
+          sessionPPH = Number(a.reading_speed_pph);
+        } else {
+          sessionPPH = pages / (mins / 60);
+        }
+        
+        // If this session's speed matches the PR (within tolerance), use its minutes
+        if (sessionPPH != null && Math.abs(sessionPPH - prResult.speedPph) < 0.1) {
+          bestSessionMins = mins;
+          break;
+        }
+      }
+      
+      // Fallback: if no exact match, use the session with highest speed
+      if (bestSessionMins == null) {
+        let maxPPH = 0;
+        for (const a of recentActivities) {
+          const pages = Number(a.pages_read) || 0;
+          const mins = Number(a.duration_minutes) || 0;
+          if (mins < 1 || pages < 5) continue;
+          
+          const pph = a.reading_speed_pph != null ? Number(a.reading_speed_pph) : pages / (mins / 60);
+          if (pph > maxPPH) {
+            maxPPH = pph;
+            bestSessionMins = mins;
+          }
+        }
+      }
+      
+      setBestSessionMinutes(bestSessionMins);
+    } else {
+      setBestSessionMinutes(null);
+    }
 
-    // 2) 7d stats using centralized function
-    const last7d = all.filter(a => a.created_at && new Date(a.created_at) >= new Date(sinceISO));
+    // 2) 7d stats using centralized function (real sessions only)
+    const last7d = sessions.filter((a: any) => a.created_at && new Date(a.created_at) >= new Date(sinceISO));
 
-    const sumPages7d = last7d.reduce((acc, a) => acc + (Number(a.pages_read) || 0), 0);
-    const sumMins7d  = last7d.reduce((acc, a) => acc + (Number(a.duration_minutes) || 0), 0);
+    const sumPages7d = last7d.reduce((acc: number, a: any) => acc + (Number(a.pages_read) || 0), 0);
+    const sumMins7d  = last7d.reduce((acc: number, a: any) => acc + (Number(a.duration_minutes) || 0), 0);
 
     if (reqId !== readingReqRef.current) return; // ✅ ignore stale
 
@@ -335,41 +443,14 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
   const loadStreak = async () => {
     if (!user?.id) return;
-    const profileId = user.id;
-
-    const reqId = ++streakReqRef.current;
 
     try {
-      // Load last 200 reading activities (wide range, we'll filter in local timezone)
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('created_at, pages_read, duration_minutes, type, photos')
-        .eq('user_id', profileId)
-        .eq('type', 'reading')
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      if (reqId !== streakReqRef.current) return; // ✅ ignore stale
-
-      if (error) {
-        console.error('[loadStreak] Error:', error);
-        setStreakDays(0);
-        return;
-      }
-
-      // Compute streak from activities (local timezone)
-      const streak = computeStreakFromActivities(activities || []);
-      
-      if (reqId !== streakReqRef.current) return; // ✅ ignore stale
-      setStreakDays(streak);
-
-      // Update profile's current_streak (always self profile)
-        await supabase
-          .from('user_profiles')
-          .update({ current_streak: streak })
-          .eq('id', user.id);
+      // Use unified streak service (single source of truth)
+      const info = await fetchStreakInfo(user.id);
+      setStreakDays(info.streak);
+      // Note: DB update is handled by fetchStreakInfo to avoid concurrent updates
     } catch (error) {
-      console.error('[loadStreak] Exception:', error);
+      console.error('[Profile] loadStreak exception:', error);
       // ✅ ne pas reset à 0 (sinon "flash 0")
     }
   };
@@ -379,14 +460,34 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     const profileId = user.id;
 
     const reqId = ++likedReqRef.current;
+    console.log('[loadLikedBooks] req', reqId);
 
     try {
+      // ✅ Utiliser book_uuid (UUID) avec join direct sur books via FK
+      // ✅ SOFT DELETE: Filtrer seulement les likes actifs (deleted_at IS NULL)
       const { data: likesData, error: likesError } = await supabase
         .from('book_likes')
-        .select('book_key, created_at')
+        .select(`
+          id,
+          created_at,
+          book_uuid,
+          book_key,
+          books:books!book_likes_book_uuid_fkey (
+            id,
+            title,
+            author,
+            cover_url,
+            isbn,
+            openlibrary_cover_id,
+            google_books_id,
+            openlibrary_work_key
+          )
+        `)
         .eq('user_id', profileId)
+        .is('deleted_at', null) // ✅ Seulement les likes actifs
+        .not('book_uuid', 'is', null) // ✅ Cache les likes legacy (sans book_uuid)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(60);
 
       if (reqId !== likedReqRef.current) return; // ✅ ignore stale
 
@@ -401,84 +502,81 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         return;
       }
 
-      console.log('[loadLikedBooks] likes:', likesData.length);
+      // ✅ Charger les covers custom depuis book_covers OU user_books.custom_cover_url
+      const bookIds = (likesData ?? [])
+        .map(x => x.book_uuid)
+        .filter((id): id is string => !!id);
 
-      // Normalize variants (works + isbn)
-      const normalizeKey = (key: string): string[] => {
-        if (!key) return [];
-        const k = key.trim();
+      // Essayer book_covers d'abord (table recommandée)
+      const { data: coversData, error: coversError } = await supabase
+        .from('book_covers')
+        .select('book_id, cover_url')
+        .eq('user_id', profileId)
+        .in('book_id', bookIds);
 
-        const out = new Set<string>();
-        out.add(k);
+      // Si book_covers n'existe pas ou est vide, essayer user_books.custom_cover_url
+      let coverMap = new Map<string, string | null>();
+      if (!coversError && coversData && coversData.length > 0) {
+        coverMap = new Map((coversData ?? []).map((c: any) => [c.book_id, c.cover_url]));
+      } else {
+        // Fallback: charger depuis user_books.custom_cover_url
+        const { data: userBooksData } = await supabase
+          .from('user_books')
+          .select('book_id, custom_cover_url')
+          .eq('user_id', profileId)
+          .in('book_id', bookIds);
 
-        // ol:/works/.. -> /works/..
-        if (k.startsWith('ol:/works/')) out.add(k.replace(/^ol:/, ''));
-
-        // ol:OLxxxxW -> /works/OLxxxxW
-        if (k.startsWith('ol:') && !k.startsWith('ol:/works/')) out.add(`/works/${k.replace(/^ol:/, '')}`);
-
-        // /works/.. already ok
-        if (k.startsWith('/works/')) out.add(k);
-
-        // isbn:... keep as-is too (if you store isbn in cache)
-        if (k.startsWith('isbn:')) out.add(k);
-
-        return Array.from(out);
-      };
-
-      const rawKeys = likesData.map(l => l.book_key).filter(Boolean);
-      const candidateKeys = Array.from(new Set(rawKeys.flatMap(normalizeKey)));
-
-      console.log('[loadLikedBooks] candidateKeys sample:', candidateKeys.slice(0, 10));
-
-      if (candidateKeys.length === 0) {
-        setLikedBooks([]);
-        return;
-      }
-
-      const { data: booksData, error: booksError } = await supabase
-        .from('books_cache')
-        .select('book_key, title, author, cover_url, isbn')
-        .in('book_key', candidateKeys);
-
-      if (booksError) {
-        console.error('[loadLikedBooks] books_cache error:', booksError);
-        setLikedBooks([]);
-        return;
-      }
-
-      console.log('[loadLikedBooks] books_cache fetched:', (booksData ?? []).length);
-
-      const booksMap = new Map((booksData ?? []).map(b => [b.book_key, b]));
-
-      const pickCached = (likeKey: string) => {
-        if (!likeKey) return null;
-        if (booksMap.has(likeKey)) return booksMap.get(likeKey);
-
-        const norms = normalizeKey(likeKey);
-        for (const nk of norms) {
-          if (booksMap.has(nk)) return booksMap.get(nk);
+        if (userBooksData) {
+          coverMap = new Map((userBooksData ?? []).map((ub: any) => [ub.book_id, ub.custom_cover_url]));
         }
-        return null;
-      };
+      }
 
-      const combined = likesData.map(like => {
-        const cached = pickCached(like.book_key);
-        return {
-          book_key: like.book_key,
-          created_at: like.created_at,
-          book: cached ?? {
-            book_key: like.book_key,
-            title: 'Titre inconnu',
-            author: 'Auteur inconnu',
-            cover_url: null,
-            isbn: null,
-          },
-        };
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      // ✅ Construire les items même si books join est null (fallback)
+      const cleaned = (likesData ?? []).map((x: any) => {
+        if (x.books && x.book_uuid) {
+          // Cas normal : join réussi
+          return {
+            liked_at: x.created_at,
+            book: x.books,
+            book_id: x.book_uuid,
+            book_key: x.book_key,
+            actor_custom_cover_url: coverMap.get(x.book_uuid) ?? null,
+          };
+        } else {
+          // Fallback : construire un book object minimal depuis book_key
+          const bookKey = x.book_key || '';
+          let title = 'Métadonnées en cours…';
+          let author = '—';
+          let isbn: string | null = null;
+          
+          if (bookKey.startsWith('isbn:')) {
+            isbn = bookKey.replace(/^isbn:/, '').replace(/[-\s]/g, '');
+          }
+          
+          return {
+            liked_at: x.created_at,
+            book: {
+              id: x.book_uuid || bookKey, // Use book_uuid if available, else book_key as id
+              title,
+              author,
+              cover_url: null,
+              isbn,
+              openlibrary_cover_id: null,
+              google_books_id: null,
+              openlibrary_work_key: bookKey.startsWith('ol:') || bookKey.startsWith('/works/') ? bookKey : null,
+            },
+            book_id: x.book_uuid || bookKey,
+            book_key: bookKey,
+            actor_custom_cover_url: x.book_uuid ? (coverMap.get(x.book_uuid) ?? null) : null,
+          };
+        }
+      });
 
       if (reqId !== likedReqRef.current) return; // ✅ ignore stale
-      setLikedBooks(combined);
+      setLikedBooks(cleaned);
+      
+      // ✅ Source de vérité unique : stats.likes = cleaned.length
+      setStats(prev => ({ ...prev, likes: cleaned.length }));
     } catch (error) {
       console.error('[loadLikedBooks] Unexpected error:', error);
       setLikedBooks([]);
@@ -681,13 +779,13 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
       {/* ✅ SCROLL ICI - Single scrollable container with proper padding */}
       <div
-        className="h-full overflow-y-auto"
+        className="h-full overflow-y-auto safe-bottom-content"
         style={{
-          paddingBottom: `calc(${TABBAR_HEIGHT}px + env(safe-area-inset-bottom) + 32px)`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
           touchAction: 'pan-y', // Allow vertical panning only
+          paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
         }}
       >
         {/* Level Progress Bar */}
@@ -739,6 +837,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         readingPace7d={readingPace7d}
         readingSpeedPR={readingSpeedPR}
         readingPacePR={readingPacePR}
+        bestSessionMinutes={bestSessionMinutes}
         hasSessions7d={hasSessions7d}
         hasAnySessions={hasAnySessions}
         totalPages7d={totalPages7d}
@@ -759,18 +858,11 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               {t('profile.edit')}
             </button>
             <button
-              onClick={() => setShowNotificationSettings(true)}
+              onClick={() => setShowHelpCenter(true)}
               className="flex items-center gap-2 px-4 py-2.5 bg-card-light border-2 border-gray-200 text-text-main-light rounded-xl hover:bg-gray-50 transition-colors font-medium"
-              title={t('common.settings')}
+              title="Centre d'aide"
             >
-              <Settings className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setShowLanguageSelector(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-card-light border-2 border-gray-200 text-text-main-light rounded-xl hover:bg-gray-50 transition-colors font-medium"
-              title={t('onboarding.language.title')}
-            >
-              <Globe className="w-4 h-4" />
+              <HelpCircle className="w-4 h-4" />
             </button>
           </div>
         }
@@ -784,6 +876,71 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         viewedUserId={user?.id}
         formatInterestTag={formatInterestTag}
       />
+
+      {/* Centre d'aide - 3 cartes cliquables en bas */}
+      <div 
+        className="px-4 pt-4 space-y-4"
+        style={{
+          paddingBottom: `calc(24px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+        }}
+      >
+        <div
+          onClick={() => {
+            setHelpCenterView('faq');
+            setShowHelpCenter(true);
+          }}
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-50 rounded-lg">
+              <HelpCircle className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-text-main-light">Aide (FAQ)</h3>
+              <p className="text-sm text-text-sub-light">Questions fréquentes</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-text-sub-light" />
+        </div>
+
+        <div
+          onClick={() => {
+            setHelpCenterView('privacy');
+            setShowHelpCenter(true);
+          }}
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-50 rounded-lg">
+              <Shield className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-text-main-light">Confidentialité</h3>
+              <p className="text-sm text-text-sub-light">Données et vie privée</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-text-sub-light" />
+        </div>
+
+        <div
+          onClick={() => {
+            setHelpCenterView('bug');
+            setShowHelpCenter(true);
+          }}
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-red-50 rounded-lg">
+              <Bug className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-text-main-light">Signaler un bug</h3>
+              <p className="text-sm text-text-sub-light">Problème technique ?</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-text-sub-light" />
+        </div>
+      </div>
       </div>
 
       {isEditModalOpen && (
@@ -823,17 +980,23 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         />
       )}
 
-      {showNotificationSettings && (
-        <NotificationSettingsModal onClose={() => setShowNotificationSettings(false)} />
-      )}
-
-      {showLanguageSelector && (
-        <LanguageSelectorModal
-          onClose={() => setShowLanguageSelector(false)}
-          onLanguageChange={async (lang: 'fr' | 'en') => {
-            // Use centralized function (single source of truth)
-            await setAppLanguage(lang);
-            setShowLanguageSelector(false);
+      {showHelpCenter && (
+        <HelpCenterModal
+          open={showHelpCenter}
+          onClose={() => {
+            setShowHelpCenter(false);
+            setHelpCenterView('home'); // Reset view when closing
+          }}
+          initialView={helpCenterView}
+          onOpenScanner={() => {
+            window.dispatchEvent(new CustomEvent('open-scanner'));
+          }}
+          onOpenXpInfo={() => {
+            setShowHelpCenter(false);
+            setShowLevelDetails(true);
+          }}
+          onOpenManualAdd={() => {
+            window.dispatchEvent(new CustomEvent('open-manual-add'));
           }}
         />
       )}
@@ -891,19 +1054,19 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                     let isbn10: string | undefined;
                     let openLibraryKey: string | undefined;
 
-                    // Priority 1: Use book_key from books_cache (format: /works/OLxxxxW)
-                    if (book.book_key && book.book_key.startsWith('/works/')) {
-                      openLibraryKey = book.book_key;
+                    // Priority 1: Use openlibrary_work_key from books table
+                    if (book.openlibrary_work_key && book.openlibrary_work_key.startsWith('/works/')) {
+                      openLibraryKey = book.openlibrary_work_key;
                     } else if (bookKey.startsWith('ol:') || bookKey.startsWith('/works/')) {
                       // Fallback: Extract from item.book_key
                       const keyPart = bookKey.replace(/^ol:/, '').replace(/^\/works\//, '');
                       openLibraryKey = keyPart ? `/works/${keyPart}` : undefined;
                     }
 
-                    // Priority 2: Extract ISBN from books_cache first
-                    const cacheIsbn = book.isbn;
-                    if (cacheIsbn) {
-                      const cleanIsbn = cacheIsbn.replace(/[-\s]/g, '');
+                    // Priority 2: Extract ISBN from books table
+                    const bookIsbn = book.isbn;
+                    if (bookIsbn) {
+                      const cleanIsbn = bookIsbn.replace(/[-\s]/g, '');
                       if (cleanIsbn.length === 13) {
                         isbn13 = cleanIsbn;
                       } else if (cleanIsbn.length === 10) {
@@ -919,21 +1082,38 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                       }
                     }
 
+                    // ✅ Utiliser resolveBookCover (fonction canonique)
+                    const cover = resolveBookCover({
+                      customCoverUrl: item.actor_custom_cover_url || null,
+                      coverUrl: book?.cover_url || null,
+                    });
+
+                    // Safe title/author (avoid displaying placeholder values)
+                    const safeTitle =
+                      !book.title || book.title === '(OpenLibrary book)' ? 'Métadonnées en cours…' : book.title;
+
+                    const safeAuthor =
+                      !book.author || book.author === 'Auteur inconnu' ? 'Métadonnées en cours…' : book.author;
 
                     return (
                       <button
-                        key={item.book_key}
+                        key={item.book_id || item.book_key}
                         onClick={() => {
                           const bookObj = {
-                            id: item.book_key,         // Use book_key as id (not UUID)
-                            book_key: item.book_key,  // string (ol:/works... or isbn:...)
-                            title: book.title ?? 'Titre inconnu',
-                            author: book.author ?? 'Auteur inconnu',
-                            cover_url: book.cover_url ?? null,
-                            thumbnail: book.cover_url ?? null,
+                            id: item.book_id,            // ✅ UUID
+                            book_uuid: item.book_id,     // ✅ explicite
+                            book_key: item.book_key,
+                            title: safeTitle,
+                            author: safeAuthor,
+                            cover_url: cover ?? null,
+                            thumbnail: cover ?? null,
+                            custom_cover_url: item.actor_custom_cover_url || null, // ✅ Passer custom_cover_url
                             openLibraryKey,
                             isbn13,
                             isbn10,
+                            openlibrary_cover_id: book.openlibrary_cover_id || null,
+                            google_books_id: book.google_books_id || null,
+                            openlibrary_work_key: book.openlibrary_work_key || null,
                           };
                           setSelectedLikedBook(bookObj);
                         }}
@@ -941,12 +1121,16 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                       >
                         <div className="relative w-full aspect-[2/3] rounded-lg overflow-hidden shadow-md cursor-pointer hover:shadow-xl transition-shadow">
                           <BookCover
-                            coverUrl={book.cover_url || undefined}
-                            title={book.title || ''}
-                            author={book.author || ''}
+                            custom_cover_url={item.actor_custom_cover_url || null}
+                            coverUrl={cover || undefined}
+                            title={safeTitle}
+                            author={safeAuthor}
                             className="w-full h-full"
+                            isbn={book.isbn || null}
                             isbn13={isbn13}
                             isbn10={isbn10}
+                            openlibrary_cover_id={book.openlibrary_cover_id || null}
+                            googleCoverUrl={book.google_books_id ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
                           />
                         </div>
                       </button>

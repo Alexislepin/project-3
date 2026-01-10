@@ -416,15 +416,20 @@
 | `actor_id` | `uuid` | ❌ NO | - | REFERENCES `user_profiles(id)` ON DELETE CASCADE (who performed the action) |
 | `event_type` | `text` | ❌ NO | - | CHECK: `'like'`, `'comment'` (or `'book_like'`, `'book_comment'` in code) |
 | `book_key` | `text` | ❌ NO | - | Book key (OpenLibrary key, ISBN, or UUID) |
+| `book_id` | `uuid` | ✅ YES | `NULL` | REFERENCES `books(id)` ON DELETE CASCADE (UUID from books table, added in migration `20250131000006_add_book_id_to_activity_events.sql`) |
 | `comment_id` | `uuid` | ✅ YES | `NULL` | ID of the comment (null for likes) |
 | `created_at` | `timestamptz` | ❌ NO | `now()` | Creation timestamp |
 
 **Primary Key:** `id`  
 **Unique Constraints:** `(actor_id, event_type, book_key)` WHERE `event_type = 'like'` - One like per user per book  
-**Foreign Keys:** `actor_id` → `user_profiles(id)` ON DELETE CASCADE  
+**Foreign Keys:**
+- `actor_id` → `user_profiles(id)` ON DELETE CASCADE
+- `book_id` → `books(id)` ON DELETE CASCADE (nullable, added in migration `20250131000006_add_book_id_to_activity_events.sql`)  
 **RLS Enabled:** ✅ YES
 
-**Note:** The column was renamed from `actor_user_id` to `actor_id` in migration `20250124000000_fix_activity_events_actor_id.sql`.
+**Note:** 
+- The column was renamed from `actor_user_id` to `actor_id` in migration `20250124000000_fix_activity_events_actor_id.sql`.
+- `book_id` was added in migration `20250131000006_add_book_id_to_activity_events.sql` to enable direct joins with `books` table and avoid "Titre inconnu" issues.
 
 ---
 

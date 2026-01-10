@@ -1,233 +1,315 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { BrandLogo } from '../components/BrandLogo';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
+import { Loader2 } from 'lucide-react';
 
-type InitResult = { ok: true } | { ok: false; message: string };
+type BootstrapStatus = 'idle' | 'bootstraping' | 'ready' | 'error';
 
-function parseParamsFromUrl(url: string) {
-  // Support query (?a=b) + hash (#a=b)
-  let query = '';
-  let hash = '';
+/**
+ * Parse URL parameters from query string or hash fragment
+ */
+function parseUrlParams(url: string): {
+  code?: string;
+  access_token?: string;
+  refresh_token?: string;
+  token_hash?: string;
+  type?: string;
+} {
   try {
-    const u = new URL(url);
-    query = u.search || '';
-    hash = u.hash || '';
-  } catch {
-    // For safety if URL parsing fails (shouldn't on iOS)
-    const qIdx = url.indexOf('?');
-    const hIdx = url.indexOf('#');
-    query = qIdx >= 0 ? url.slice(qIdx, hIdx >= 0 ? hIdx : undefined) : '';
-    hash = hIdx >= 0 ? url.slice(hIdx) : '';
+    const urlObj = new URL(url);
+    const params: Record<string, string> = {};
+
+    // Parse query string (?code=...)
+    urlObj.searchParams.forEach((value, key) => {
+      params[key] = value;
+    });
+
+    // Parse hash fragment (#access_token=...)
+    if (urlObj.hash) {
+      const hashParams = new URLSearchParams(urlObj.hash.substring(1));
+      hashParams.forEach((value, key) => {
+        params[key] = value;
+      });
+    }
+
+    return params;
+  } catch (error) {
+    console.error('[ResetPassword] Error parsing URL:', error);
+    return {};
   }
+}
 
-  const searchParams = new URLSearchParams(query.startsWith('?') ? query.slice(1) : query);
-  const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+/**
+ * Bootstrap recovery session from URL tokens/code
+ * Supports both PKCE (code) and implicit (hash fragment) flows
+ */
+async function bootstrapRecoverySession(url: string): Promise<{ ok: boolean; message?: string }> {
+  console.log('[ResetPassword] bootstrapRecoverySession started', { url: url.substring(0, 100) });
 
-  const get = (k: string) => searchParams.get(k) || hashParams.get(k) || '';
+  try {
+    // 1) Check if session already exists
+    const { data: { session: existingSession } } = await supabase.auth.getSession();
+    if (existingSession) {
+      console.log('[ResetPassword] Session already exists');
+      return { ok: true };
+    }
 
-  return {
-    code: get('code'),
-    access_token: get('access_token'),
-    refresh_token: get('refresh_token'),
-    token_hash: get('token_hash') || get('token'), // some templates use token_hash
-    type: get('type'),
-  };
+    // 2) Parse URL parameters
+    const params = parseUrlParams(url);
+    console.log('[ResetPassword] Parsed params:', {
+      hasCode: !!params.code,
+      hasAccessToken: !!params.access_token,
+      hasTokenHash: !!params.token_hash,
+      type: params.type,
+    });
+
+    // 3) PKCE flow: ?code=... (or ?code=...&type=recovery)
+    if (params.code) {
+      console.log('[ResetPassword] Exchanging code for session (PKCE flow)');
+      const { data, error } = await supabase.auth.exchangeCodeForSession(params.code);
+      
+      if (error) {
+        console.error('[ResetPassword] exchangeCodeForSession error:', error);
+        return { ok: false, message: error.message || 'Erreur lors de l\'échange du code' };
+      }
+
+      if (!data.session) {
+        return { ok: false, message: 'Session non établie après échange du code' };
+      }
+
+      console.log('[ResetPassword] Session established via PKCE');
+      return { ok: true };
+    }
+
+    // 4) Implicit flow: #access_token=...&refresh_token=... (or ?access_token=...)
+    if (params.access_token && params.refresh_token) {
+      console.log('[ResetPassword] Setting session from tokens (implicit flow)');
+      const { data, error } = await supabase.auth.setSession({
+        access_token: params.access_token,
+        refresh_token: params.refresh_token,
+      });
+
+      if (error) {
+        console.error('[ResetPassword] setSession error:', error);
+        return { ok: false, message: error.message || 'Erreur lors de la création de la session' };
+      }
+
+      if (!data.session) {
+        return { ok: false, message: 'Session non établie après setSession' };
+      }
+
+      console.log('[ResetPassword] Session established via implicit flow');
+      return { ok: true };
+    }
+
+    // 5) OTP recovery: ?token_hash=...&type=recovery
+    if (params.token_hash) {
+      console.log('[ResetPassword] Verifying OTP token (recovery flow)');
+      const { data, error } = await supabase.auth.verifyOtp({
+        type: (params.type as any) || 'recovery',
+        token_hash: params.token_hash,
+      } as any);
+
+      if (error) {
+        console.error('[ResetPassword] verifyOtp error:', error);
+        return { ok: false, message: error.message || 'Erreur lors de la vérification du token' };
+      }
+
+      if (!data.session) {
+        return { ok: false, message: 'Session non établie après verifyOtp' };
+      }
+
+      console.log('[ResetPassword] Session established via OTP');
+      return { ok: true };
+    }
+
+    // No valid tokens found
+    console.warn('[ResetPassword] No valid tokens/code found in URL');
+    return { ok: false, message: 'Lien invalide ou incomplet. Réessaie depuis l\'email.' };
+  } catch (error: any) {
+    console.error('[ResetPassword] bootstrapRecoverySession error:', error);
+    return { ok: false, message: error?.message || 'Erreur lors de l\'initialisation' };
+  }
 }
 
 export function ResetPasswordPage() {
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [status, setStatus] = useState<"idle" | "ready" | "saving" | "done" | "error">("idle");
-  const [msg, setMsg] = useState<string>("");
-  const [initError, setInitError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus>('idle');
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Bootstrap recovery session on mount
   useEffect(() => {
-    let alive = true;
-    let sub: any = null;
-    let timeoutId: any = null;
+    let isMounted = true;
+    let authStateSubscription: any = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    const initFromUrl = async (url: string): Promise<InitResult> => {
-      try {
-        const { code, access_token, refresh_token, token_hash, type } = parseParamsFromUrl(url);
+    const tryBootstrap = async () => {
+      console.log('[ResetPassword] Starting bootstrap...');
+      setBootstrapStatus('bootstraping');
+      setBootstrapError(null);
 
-        // 1) PKCE style: ?code=...
-        if (code) {
-          console.log('[ResetPassword] Exchanging code for session');
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) throw new Error('Session non établie après échange du code');
-          return { ok: true };
-        }
-
-        // 2) Implicit style: #access_token=...&refresh_token=...
-        if (access_token && refresh_token) {
-          console.log('[ResetPassword] Setting session from tokens');
-          const { error } = await supabase.auth.setSession({ access_token, refresh_token });
-          if (error) throw error;
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) throw new Error('Session non établie après setSession');
-          return { ok: true };
-        }
-
-        // 3) OTP recovery style: ?token_hash=...&type=recovery
-        // (some Supabase templates use token_hash for password recovery)
-        if (token_hash) {
-          const otpType = (type as any) || 'recovery';
-          console.log('[ResetPassword] Verifying OTP', { otpType });
-          const { error } = await supabase.auth.verifyOtp({
-            type: otpType,
-            token_hash,
-          } as any);
-          if (error) throw error;
-
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) throw new Error('Session non établie après verifyOtp');
-          return { ok: true };
-        }
-
-        return { ok: false, message: 'Lien invalide ou incomplet (pas de code/token).' };
-      } catch (e: any) {
-        return { ok: false, message: e?.message || "Erreur lors de l'initialisation. Réessaie depuis l'email." };
-      }
-    };
-
-    const tryInitWithStorageOrUrl = async () => {
-      // 1) Session storage (DeepLinkGate)
-      const fromStorage = sessionStorage.getItem("pending_deeplink");
+      // 1) Try sessionStorage (from DeepLinkGate on native)
+      const fromStorage = sessionStorage.getItem('pending_deeplink');
       if (fromStorage) {
-        // ⚠️ IMPORTANT: remove ONLY if init succeeds
-        const res = await initFromUrl(fromStorage);
-        if (!alive) return;
+        console.log('[ResetPassword] Found deeplink in sessionStorage');
+        const result = await bootstrapRecoverySession(fromStorage);
+        if (!isMounted) return;
 
-        if (res.ok) {
-          sessionStorage.removeItem("pending_deeplink");
-          setInitError(null);
-          setStatus("ready");
+        if (result.ok) {
+          sessionStorage.removeItem('pending_deeplink');
+          setBootstrapStatus('ready');
           return;
+        } else {
+          console.warn('[ResetPassword] Bootstrap failed from storage:', result.message);
+          // Keep it for potential retry, don't remove
         }
-
-        // keep it for potential retry (do not remove)
-        console.warn('[ResetPassword] init failed from storage:', res.message);
       }
 
-      // 2) Web fallback
+      // 2) Try current URL (web)
       if (!Capacitor.isNativePlatform()) {
-        const res = await initFromUrl(window.location.href);
-        if (!alive) return;
-        if (res.ok) {
-          setInitError(null);
-          setStatus("ready");
+        const result = await bootstrapRecoverySession(window.location.href);
+        if (!isMounted) return;
+
+        if (result.ok) {
+          setBootstrapStatus('ready');
+          return;
         } else {
-          setInitError(res.message);
-          setStatus("error");
+          console.warn('[ResetPassword] Bootstrap failed from URL:', result.message);
         }
-        return;
       }
 
-      // 3) Native: try getLaunchUrl
-      try {
-        const launch = await CapApp.getLaunchUrl();
-        if (launch?.url) {
-          const res = await initFromUrl(launch.url);
-          if (!alive) return;
+      // 3) Try getLaunchUrl (native cold start)
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const launch = await CapApp.getLaunchUrl();
+          if (launch?.url) {
+            console.log('[ResetPassword] Found launch URL');
+            const result = await bootstrapRecoverySession(launch.url);
+            if (!isMounted) return;
 
-          if (res.ok) {
-            setInitError(null);
-            setStatus("ready");
-            return;
+            if (result.ok) {
+              setBootstrapStatus('ready');
+              return;
+            }
           }
+        } catch (error) {
+          console.error('[ResetPassword] Error getting launch URL:', error);
         }
-      } catch (e) {
-        // ignore
       }
 
-      // Still nothing -> stay idle and wait for appUrlOpen (up to 2s)
-    };
+      // 4) Listen for appUrlOpen (native, app already open)
+      if (Capacitor.isNativePlatform()) {
+        authStateSubscription = await CapApp.addListener('appUrlOpen', async ({ url }) => {
+          if (!isMounted || !url) return;
+          console.log('[ResetPassword] appUrlOpen received:', url);
 
-    (async () => {
-      setStatus("idle");
-      await tryInitWithStorageOrUrl();
-      if (!alive) return;
+          const result = await bootstrapRecoverySession(url);
+          if (!isMounted) return;
 
-      if (!Capacitor.isNativePlatform()) return;
+          if (result.ok) {
+            setBootstrapStatus('ready');
+          } else {
+            console.warn('[ResetPassword] Bootstrap failed from appUrlOpen:', result.message);
+          }
+        });
+      }
 
-      // Listen for deep links arriving AFTER mount (cold start timing)
-      sub = await CapApp.addListener("appUrlOpen", async ({ url }) => {
-        if (!alive || !url) return;
-        console.log('[ResetPassword] appUrlOpen received:', url);
+      // 5) Listen for PASSWORD_RECOVERY event from onAuthStateChange
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (!isMounted) return;
+        console.log('[ResetPassword] Auth state changed:', event);
 
-        const res = await initFromUrl(url);
-        if (!alive) return;
-
-        if (res.ok) {
-          setInitError(null);
-          setStatus("ready");
-        } else {
-          // Don't instantly fail; could receive a non-reset link
-          console.warn('[ResetPassword] appUrlOpen init failed:', res.message);
+        if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
+          console.log('[ResetPassword] PASSWORD_RECOVERY event detected');
+          setBootstrapStatus('ready');
         }
       });
 
-      // Final timeout: if still not ready after 2s, show error
+      // 6) Timeout: if still not ready after 3s, show error
       timeoutId = setTimeout(() => {
-        if (!alive) return;
-        if (status !== "ready") {
-          setInitError("Lien invalide ou expiré. Réessaie depuis l'email.");
-          setStatus("error");
+        if (!isMounted) return;
+        if (bootstrapStatus !== 'ready') {
+          console.warn('[ResetPassword] Bootstrap timeout');
+          setBootstrapError('Lien invalide ou expiré. Réessaie depuis l\'email.');
+          setBootstrapStatus('error');
         }
-      }, 2000);
-    })();
+      }, 3000);
+
+      // Cleanup subscription
+      return () => {
+        subscription.unsubscribe();
+      };
+    };
+
+    tryBootstrap().catch((error) => {
+      console.error('[ResetPassword] Bootstrap error:', error);
+      if (isMounted) {
+        setBootstrapError('Erreur lors de l\'initialisation. Réessaie depuis l\'email.');
+        setBootstrapStatus('error');
+      }
+    });
 
     return () => {
-      alive = false;
+      isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
-      sub?.remove?.();
+      authStateSubscription?.remove?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSave = async () => {
-    setMsg("");
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaveError(null);
 
+    // Validation
+    if (password.length < 8) {
+      setSaveError('Le mot de passe doit contenir au moins 8 caractères.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setSaveError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+
+    // Check session
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
-      setMsg("Session expirée. Réessaie depuis l'email.");
-      setStatus("error");
+      setSaveError('Session expirée. Réessaie depuis l\'email.');
       return;
     }
 
-    if (password.length < 8) {
-      setMsg("Mot de passe trop court (8 caractères minimum).");
-      return;
-    }
-    if (password !== confirm) {
-      setMsg("Les mots de passe ne correspondent pas.");
-      return;
-    }
-
-    setStatus("saving");
+    setSaving(true);
     try {
+      console.log('[ResetPassword] Updating password...');
       const { error } = await supabase.auth.updateUser({ password });
+
       if (error) {
-        setStatus("error");
-        setMsg(error.message || "Impossible de changer le mot de passe.");
+        console.error('[ResetPassword] updateUser error:', error);
+        setSaveError(error.message || 'Impossible de changer le mot de passe.');
+        setSaving(false);
         return;
       }
 
-      setStatus("done");
-      setMsg("Mot de passe mis à jour ✅");
+      console.log('[ResetPassword] Password updated successfully');
+      setSaveSuccess(true);
 
+      // Sign out and redirect to login after 2s
       await supabase.auth.signOut();
-
       setTimeout(() => {
-        window.location.href = '/login';
+        navigate('/login', { replace: true });
       }, 2000);
-    } catch (err: any) {
-      setStatus("error");
-      setMsg(err?.message || "Une erreur inattendue est survenue.");
+    } catch (error: any) {
+      console.error('[ResetPassword] Unexpected error:', error);
+      setSaveError(error?.message || 'Une erreur inattendue est survenue.');
+      setSaving(false);
     }
   };
 
@@ -239,73 +321,108 @@ export function ResetPasswordPage() {
             <BrandLogo size={48} color="#111" />
           </div>
         </div>
+
         <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-6">
           <h1 className="text-xl font-bold mb-2 text-text-main-light">Nouveau mot de passe</h1>
 
-          {status === "idle" && <p className="text-text-sub-light">Chargement…</p>}
-          
-          {status === "ready" && (
-            <>
-              <label className="block text-sm font-medium mb-2 text-text-main-light">
-                Nouveau mot de passe
-              </label>
-              <input
-                type="password"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoFocus
-              />
-              <label className="block text-sm font-medium mb-2 text-text-main-light">
-                Confirmer
-              </label>
-              <input
-                type="password"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                placeholder="••••••••"
-              />
-              <button
-                onClick={handleSave}
-                className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors"
-              >
-                Valider
-              </button>
-            </>
-          )}
-
-          {status === "saving" && <p className="text-text-sub-light">Enregistrement…</p>}
-          
-          {status === "done" && (
-            <div className="text-center">
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <p className="text-text-main-light font-medium mb-4">{msg}</p>
-              <button
-                onClick={() => {
-                  window.location.href = '/login';
-                }}
-                className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors"
-              >
-                Se connecter
-              </button>
+          {/* Bootstrap loading */}
+          {(bootstrapStatus === 'idle' || bootstrapStatus === 'bootstraping') && (
+            <div className="flex flex-col items-center justify-center py-8">
+              <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
+              <p className="text-text-sub-light">Chargement…</p>
             </div>
           )}
-          
-          {msg && status === "error" && (
-            <div className="mt-3">
-              <p className="text-sm text-red-600 mb-4">{initError || msg}</p>
+
+          {/* Bootstrap error */}
+          {bootstrapStatus === 'error' && bootstrapError && (
+            <div className="py-4">
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">
+                <p className="text-sm font-medium mb-1">Erreur</p>
+                <p className="text-sm">{bootstrapError}</p>
+              </div>
               <a
                 href="/login"
                 className="text-sm text-primary hover:underline font-medium"
               >
                 ← Retour à la connexion
               </a>
+            </div>
+          )}
+
+          {/* Ready: show form */}
+          {bootstrapStatus === 'ready' && !saveSuccess && (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2 text-text-main-light">
+                  Nouveau mot de passe
+                </label>
+                <input
+                  type="password"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  autoFocus
+                  disabled={saving}
+                  minLength={8}
+                />
+                <p className="text-xs text-text-sub-light">Minimum 8 caractères</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2 text-text-main-light">
+                  Confirmer le mot de passe
+                </label>
+                <input
+                  type="password"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={saving}
+                  minLength={8}
+                />
+              </div>
+
+              {saveError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {saveError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={saving || !password || !confirmPassword}
+                className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Enregistrement…
+                  </span>
+                ) : (
+                  'Valider'
+                )}
+              </button>
+            </form>
+          )}
+
+          {/* Success */}
+          {saveSuccess && (
+            <div className="text-center py-4">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <p className="text-text-main-light font-medium mb-4">Mot de passe mis à jour ✅</p>
+              <p className="text-sm text-text-sub-light mb-4">Redirection vers la connexion...</p>
+              <button
+                onClick={() => navigate('/login', { replace: true })}
+                className="w-full bg-primary text-black font-bold py-2 rounded-lg hover:brightness-95 transition-colors"
+              >
+                Se connecter
+              </button>
             </div>
           )}
         </div>
