@@ -2,7 +2,7 @@ import { BRAND } from '../lib/brand';
 
 type BrandLogoProps = {
   size?: number;
-  color?: string;
+  color?: string; // optional override; defaults to inherit (so dark uses white)
   className?: string;
 };
 
@@ -16,7 +16,7 @@ type BrandLogoProps = {
  */
 export function BrandLogo({
   size = 28,
-  color = '#000',
+  color,
   className = '',
 }: BrandLogoProps) {
   return (
@@ -28,7 +28,8 @@ export function BrandLogo({
         fontWeight: BRAND.weight,
         letterSpacing: BRAND.letterSpacing,
         textTransform: 'uppercase', // Safety: ensure uppercase even if name changes
-        color,
+        color: color || 'rgb(var(--color-text))', // dark => blanc (245,245,247), light => noir
+        verticalAlign: 'middle',
       }}
     >
       {BRAND.name}

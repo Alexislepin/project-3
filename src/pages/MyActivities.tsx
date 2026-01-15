@@ -19,11 +19,17 @@ interface MyActivitiesProps {
   autoOpenComments?: boolean;
   onFocusConsumed?: () => void;
   onUserClick?: (userId: string) => void; // Optional: callback when user clicks on a profile
+  viewerIsFollowing?: boolean; // Whether the viewer follows the target user
 }
 
-export function MyActivities({ onClose, userId: targetUserId, title, focusActivityId, focusCommentId, autoOpenComments, onFocusConsumed, onUserClick }: MyActivitiesProps) {
+export function MyActivities({ onClose, userId: targetUserId, title, focusActivityId, focusCommentId, autoOpenComments, onFocusConsumed, onUserClick, viewerIsFollowing = false }: MyActivitiesProps) {
   const { user } = useAuth();
   const userId = targetUserId || user?.id;
+  const isOwner = user && userId === user.id;
+  const getAllowedVisibilities = () => {
+    if (isOwner) return ['public', 'followers', 'private'] as const;
+    return viewerIsFollowing ? (['public', 'followers'] as const) : (['public'] as const);
+  };
   const [activities, setActivities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
@@ -44,7 +50,8 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
         // L'activité n'est pas dans les résultats, on la charge séparément
         const loadTargetActivity = async () => {
           try {
-            const { data: activityData, error } = await supabase
+            const allowedVisibilities = getAllowedVisibilities();
+            let query = supabase
               .from('activities')
               .select(`
                 *,
@@ -54,8 +61,14 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
                 books!activities_book_id_fkey(title, author, cover_url, openlibrary_cover_id, isbn)
               `)
               .eq('id', focusActivityId)
-              .eq('user_id', userId)
-              .single();
+              .eq('user_id', userId);
+
+            query =
+              allowedVisibilities.length === 1
+                ? query.eq('visibility', allowedVisibilities[0])
+                : query.in('visibility', allowedVisibilities);
+
+            const { data: activityData, error } = await query.single();
 
             if (activityData && !error) {
               // Charger custom_cover_url si book_id existe
@@ -173,7 +186,8 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
+      const allowedVisibilities = getAllowedVisibilities();
+      let query = supabase
         .from('activities')
         .select(`
           *,
@@ -185,7 +199,14 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
           user_profiles!activities_user_id_fkey(id, username, display_name, avatar_url),
           books!activities_book_id_fkey(title, author, cover_url, openlibrary_cover_id, isbn)
         `)
-        .eq('user_id', userId)
+        .eq('user_id', userId);
+
+      query =
+        allowedVisibilities.length === 1
+          ? query.eq('visibility', allowedVisibilities[0])
+          : query.in('visibility', allowedVisibilities);
+
+      const { data, error } = await query
         .order('created_at', { ascending: false })
         .limit(50);
 
@@ -207,17 +228,23 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
         const bookIds = data.map(a => a.book_id).filter(Boolean) as string[];
         
         if (bookIds.length > 0) {
-          const { data: userBooksData } = await supabase
-            .from('user_books')
-            .select('book_id, user_id, custom_cover_url')
-            .in('book_id', bookIds)
-            .eq('user_id', userId);
+        const { data: userBooksData } = await supabase
+          .from('user_books')
+          .select('book_id, user_id, custom_cover_url, custom_total_pages, current_page')
+          .in('book_id', bookIds)
+          .eq('user_id', userId);
           
           const customCoverMap = new Map<string, string | null>();
           if (userBooksData) {
             userBooksData.forEach(ub => {
               const key = `${ub.user_id}:${ub.book_id}`;
               customCoverMap.set(key, ub.custom_cover_url);
+              if (ub.current_page !== undefined) {
+                (ub as any).current_page_value = ub.current_page;
+              }
+              if (ub.custom_total_pages !== undefined) {
+                (ub as any).custom_total_pages_value = ub.custom_total_pages;
+              }
             });
           }
           
@@ -227,6 +254,13 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
               const customCoverUrl = customCoverMap.get(key);
               if (customCoverUrl !== undefined) {
                 (activity.books as any).custom_cover_url = customCoverUrl;
+              }
+              const ub = userBooksData?.find(ub => `${ub.user_id}:${ub.book_id}` === key);
+              if (ub && typeof ub.current_page === 'number') {
+                (activity as any).current_page = ub.current_page;
+              }
+              if (ub && typeof ub.custom_total_pages === 'number') {
+                (activity.books as any).custom_total_pages = ub.custom_total_pages;
               }
             }
           });
@@ -288,6 +322,7 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
           notes: activity.notes,
           quotes: activity.quotes || [],
           book: activity.books,
+          photos: activity.photos || null,
           created_at: activity.created_at,
           reactions_count: reactions.count,
           comments_count: commentsCount,
@@ -306,8 +341,6 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
   useEffect(() => {
     loadActivities();
   }, [loadActivities]);
-
-  const isOwner = user && userId === user.id;
 
   const handleReact = async (activityId: string) => {
     if (!user) return;
@@ -407,9 +440,10 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
         }}
       >
         <div 
-          className="p-4"
+          className="px-4 pb-4"
           style={{
-            paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+            paddingTop: '30px',
+            paddingBottom: '10px',
           }}
         >
           {loading ? (
@@ -456,6 +490,8 @@ export function MyActivities({ onClose, userId: targetUserId, title, focusActivi
           initialPages={editingActivity.pages_read}
           initialDuration={editingActivity.duration_minutes}
           initialNotes={editingActivity.notes}
+          initialPhotos={editingActivity.photos}
+          initialVisibility={editingActivity.visibility}
           onClose={() => {
             setEditingActivityId(null);
             setEditingActivity(null);

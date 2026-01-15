@@ -4,11 +4,13 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from './Toast';
 import { useScrollLock } from '../hooks/useScrollLock';
-import { pickImageBlob } from '../lib/pickImage';
 import { uploadImageToSupabase } from '../lib/imageUpload';
 import { useImagePicker } from '../hooks/useImagePicker';
 import { UploadOverlay } from './UploadOverlay';
 import { AddCoverModal } from './AddCoverModal';
+import { upsertPooledCover } from '../lib/pooledCovers';
+import { canonicalBookKey } from '../lib/bookSocial';
+import { ModalPortal } from './ModalPortal';
 
 interface EditBookModalProps {
   userBookId: string;
@@ -76,15 +78,36 @@ export function EditBookModal({
       e.stopPropagation();
     }
     
-    if (uploadingCover || shouldBlockClose()) return;
+    console.log('[EditBookModal] choose cover click');
     
+    if (uploadingCover || shouldBlockClose()) {
+      console.log('[EditBookModal] blocked: uploading or shouldBlockClose', {
+        uploadingCover,
+        shouldBlockClose: shouldBlockClose(),
+      });
+      return;
+    }
+    
+    console.log('[EditBookModal] opening file picker', {
+      inputRef: fileInputRef.current,
+    });
+    
+    // SYNCHRONE: pas d'await avant click()
     fileInputRef.current?.click();
   };
 
   // Handle file selection from input
-  const handleCoverFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    
+    console.log('[EditBookModal] file selected', {
+      file: file ? { type: file.type, size: file.size, name: file.name } : null,
+    });
+    
+    if (!file) {
+      console.log('[EditBookModal] canceled/no file');
+      return;
+    }
 
     // ✅ IMPORTANT: iOS Safari / WebView → reset value pour pouvoir re-choisir le même fichier
     e.target.value = '';
@@ -117,53 +140,15 @@ export function EditBookModal({
       // Create preview URL from blob (NO auto-upload)
       const previewUrl = URL.createObjectURL(blob);
       setCoverPreview(previewUrl);
+      
+      console.log('[EditBookModal] Image selected', {
+        contentType: file.type,
+        size: file.size,
+        ext,
+      });
     } catch (err: any) {
       console.error('[EditBookModal] handleCoverFileChange error:', err);
       setToast({ message: 'Erreur lors de la sélection de l\'image', type: 'error' });
-    }
-  };
-
-  // Fallback: use pickImageBlob for native (if file input doesn't work)
-  const handleSelectCover = async (e?: React.MouseEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    
-    if (!user || uploadingCover || shouldBlockClose()) return;
-
-    setError(null);
-    
-    // Release previous blob URL if exists
-    if (coverPreview && coverPreview.startsWith('blob:')) {
-      URL.revokeObjectURL(coverPreview);
-    }
-    
-    // Set global picking state (prevents modal closure)
-    setIsPicking(true);
-    
-    try {
-      const result = await pickImageBlob();
-      
-      if (!result) {
-        return; // User cancelled
-      }
-
-      const { blob, contentType, ext } = result;
-      setCoverBlob(blob);
-      setCoverExt(ext);
-      
-      // Create preview URL from blob (NO auto-upload)
-      const previewUrl = URL.createObjectURL(blob);
-      setCoverPreview(previewUrl);
-    } catch (err: any) {
-      console.error('[EditBookModal] pickImageBlob error:', err);
-      setToast({ message: 'Erreur lors de la sélection de l\'image', type: 'error' });
-    } finally {
-      // Reset picking state after delay (iOS needs time to settle)
-      setTimeout(() => {
-        setIsPicking(false);
-      }, 500);
     }
   };
 
@@ -175,7 +160,7 @@ export function EditBookModal({
     setError(null);
 
     try {
-      const { publicUrl } = await uploadImageToSupabase(supabase, {
+      const { path: storagePath, publicUrl } = await uploadImageToSupabase(supabase, {
         bucket: 'book-covers',
         userId: user.id,
         kind: 'cover',
@@ -206,6 +191,53 @@ export function EditBookModal({
       if (booksUpdateError) {
         // Log error but don't fail the upload (non-critical)
         console.warn('[EditBookModal] Failed to update books.cover_url:', booksUpdateError);
+      }
+
+      // Upsert into public.book_covers pool (non-blocking, non-critical)
+      // This allows other users to reuse this cover for the same book_key
+      if (bookIdForCover) {
+        try {
+          // Load book to get book_key
+          const { data: bookData } = await supabase
+            .from('books')
+            .select('id, isbn, isbn13, isbn10, google_books_id, openlibrary_work_key, openlibrary_edition_key')
+            .eq('id', bookIdForCover)
+            .maybeSingle();
+
+          if (bookData) {
+            // Get book_key using canonicalBookKey
+            const bookKey = canonicalBookKey(bookData);
+
+            if (bookKey && bookKey !== 'unknown') {
+              // Upsert into pool (non-blocking)
+              const { success, error: upsertError } = await upsertPooledCover({
+                bookKey,
+                storagePath,
+                width: null, // Optional: can be obtained later if needed
+                height: null, // Optional: can be obtained later if needed
+                createdBy: user.id,
+              });
+
+              if (!success && upsertError) {
+                // Log error but don't fail the upload (non-critical)
+                console.warn('[EditBookModal] Failed to upsert pooled cover:', upsertError);
+                // Show toast only for unexpected RLS errors (not "first upload wins" case)
+                // Note: "first upload wins" case returns success: true, so this won't trigger
+                if (upsertError.includes('RLS') || upsertError.includes('row-level security')) {
+                  setToast({ 
+                    message: '⚠️ Couverture enregistrée mais partage non disponible', 
+                    type: 'error' 
+                  });
+                }
+              } else if (success) {
+                console.debug('[EditBookModal] Successfully added/updated cover in pool:', bookKey);
+              }
+            }
+          }
+        } catch (poolError: any) {
+          // Non-critical error, log but don't fail upload
+          console.warn('[EditBookModal] Error upserting pooled cover (non-critical):', poolError);
+        }
       }
 
       // Cleanup blob URL and update preview
@@ -349,32 +381,27 @@ export function EditBookModal({
 
   useScrollLock(true);
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[Modal] mounted EditBookModal');
+    }
+  }, []);
+
   return (
     <>
-      <div
-        className="fixed inset-0 z-[300] bg-black/60 flex items-center justify-center p-4"
-        data-modal-overlay
-        onPointerDown={(e) => {
-          if (e.target === e.currentTarget) {
-            // Prevent close during picker or upload
-            if (shouldBlockClose() || uploadingCover || saving) {
-              return;
-            }
-            handleClose();
+      <ModalPortal
+        onBackdropClick={() => {
+          // Prevent close during picker or upload
+          if (shouldBlockClose() || uploadingCover || saving) {
+            return;
           }
+          handleClose();
         }}
-        onTouchMove={(e) => {
-          // Prevent scroll on overlay
-          const target = e.target as HTMLElement;
-          if (!target.closest('[data-modal-content]')) {
-            e.preventDefault();
-          }
+        onContentClick={(e) => {
+          e.stopPropagation();
         }}
       >
-        <div 
-          data-modal-content
-          className="bg-white rounded-2xl max-w-md w-full shadow-xl max-h-[85vh] overflow-hidden flex flex-col z-[400]"
-        >
+        <div className="bg-white rounded-2xl max-w-md w-full shadow-xl max-h-[85vh] overflow-hidden flex flex-col">
           <div className="shrink-0 border-b border-gray-200 p-5 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
@@ -388,6 +415,7 @@ export function EditBookModal({
               </div>
             </div>
             <button
+              type="button"
               onClick={handleClose}
               disabled={shouldBlockClose() || uploadingCover || saving}
               className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -541,7 +569,7 @@ export function EditBookModal({
               type="file"
               accept="image/*"
               onChange={handleCoverFileChange}
-              style={{ display: 'none' }}
+              className="hidden"
             />
           </div>
 
@@ -579,7 +607,7 @@ export function EditBookModal({
             </div>
           </div>
         </div>
-      </div>
+      </ModalPortal>
 
       {/* Upload overlay - blocks UI during upload */}
       <UploadOverlay open={uploadingCover} label="Importation de la couverture…" />

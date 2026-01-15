@@ -12,6 +12,7 @@ export function ProfileOnboarding() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showCongrats, setShowCongrats] = useState(false);
 
   // Extra safety: prevent showing onboarding if user is already onboarded
   useEffect(() => {
@@ -43,15 +44,8 @@ export function ProfileOnboarding() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Step 4: Password (optional, only for OAuth users)
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [skipPassword, setSkipPassword] = useState(false);
-
-  const isOAuthUser = user?.app_metadata?.provider === 'google' || !profile?.has_password;
-  const totalSteps = isOAuthUser ? 4 : 3;
+  // Always 3 steps (username, profil, avatar)
+  const totalSteps = 3;
 
   // Initialize display name from user email if available (only once)
   const didInitDisplayName = useRef(false);
@@ -408,42 +402,8 @@ export function ProfileOnboarding() {
 
       setStep(3);
     } else if (step === 3) {
-      // Avatar is already uploaded immediately when selected, just move to next step
-      debugLog('[ProfileOnboarding] Step 3: Moving forward', { isOAuthUser });
-      if (isOAuthUser) {
-        setStep(4);
-      } else {
-        debugLog('[ProfileOnboarding] Step 3: Finishing onboarding (non-OAuth)');
-        await finishOnboarding();
-      }
-    } else if (step === 4) {
-      // Password step (optional)
-      if (!skipPassword) {
-        if (!password || password.length < 6) {
-          setPasswordError('Le mot de passe doit contenir au moins 6 caractères');
-          return;
-        }
-
-        if (password !== confirmPassword) {
-          setPasswordError('Les mots de passe ne correspondent pas');
-          return;
-        }
-
-        // Set password
-        try {
-          const { error } = await supabase.auth.updateUser({ password });
-          if (error) {
-            setPasswordError(error.message);
-            return;
-          }
-          await updateProfile({ has_password: true });
-        } catch (err: any) {
-          debugError('[ProfileOnboarding] Password update error:', err);
-          setPasswordError('Erreur lors de la définition du mot de passe');
-          return;
-        }
-      }
-
+      // Avatar déjà géré à la sélection, on termine
+      debugLog('[ProfileOnboarding] Step 3: Finishing onboarding');
       await finishOnboarding();
     }
   };
@@ -474,10 +434,9 @@ export function ProfileOnboarding() {
 
       // Refresh profile to get latest data
       await refreshProfile();
-
-      // Navigate to home
-      window.history.pushState('/home', '', '/home');
-      window.dispatchEvent(new PopStateEvent('popstate'));
+      // Show celebration screen; navigation will happen after user clicks "Commencer"
+      setShowCongrats(true);
+      setLoading(false);
     } catch (err: any) {
       debugError('[ProfileOnboarding] Error finishing onboarding:', err);
       setError('Erreur lors de la sauvegarde');
@@ -486,10 +445,15 @@ export function ProfileOnboarding() {
   };
 
   const handleBack = () => {
-    if (step > 1) {
+    if (step > 1 && !showCongrats) {
       setStep(step - 1);
       setError('');
     }
+  };
+
+  const handleGoHome = () => {
+    window.history.pushState('/home', '', '/home');
+    window.dispatchEvent(new PopStateEvent('popstate'));
   };
 
   return (
@@ -731,76 +695,6 @@ export function ProfileOnboarding() {
             </div>
           )}
 
-          {/* Step 4: Password (OAuth users only) */}
-          {step === 4 && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-2xl font-bold text-text-main-light mb-2">
-                  Définir un mot de passe
-                </h2>
-                <p className="text-text-sub-light">
-                  Vous pourrez vous connecter aussi par email avec ce mot de passe. (Optionnel)
-                </p>
-              </div>
-
-              {!skipPassword ? (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-text-main-light mb-2">
-                      Mot de passe
-                    </label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => {
-                        setPassword(e.target.value);
-                        setPasswordError('');
-                      }}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                      placeholder="••••••••"
-                      disabled={loading}
-                    />
-                    <p className="text-xs text-text-sub-light mt-1">Minimum 6 caractères</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-text-main-light mb-2">
-                      Confirmer le mot de passe
-                    </label>
-                    <input
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => {
-                        setConfirmPassword(e.target.value);
-                        setPasswordError('');
-                      }}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
-                      placeholder="••••••••"
-                      disabled={loading}
-                    />
-                  </div>
-
-                  {passwordError && (
-                    <p className="text-xs text-red-600">{passwordError}</p>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => setSkipPassword(true)}
-                    className="text-sm text-text-sub-light hover:text-text-main-light"
-                  >
-                    Plus tard
-                  </button>
-                </>
-              ) : (
-                <div className="text-center py-4">
-                  <p className="text-text-sub-light">
-                    Vous pourrez définir un mot de passe plus tard dans les paramètres.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -850,6 +744,27 @@ export function ProfileOnboarding() {
           </button>
         </div>
       </div>
+
+      {/* Celebration overlay */}
+      {showCongrats && (
+        <div className="fixed inset-0 bg-black/50 z-[1200] flex items-center justify-center px-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 w-full max-w-md p-6 space-y-4 text-center">
+            <div className="text-5xl">🎉</div>
+            <h3 className="text-2xl font-bold text-text-main-light">
+              Bienvenue sur Lexu !
+            </h3>
+            <p className="text-text-sub-light text-sm">
+              Ton profil est prêt. Découvre tes livres, tes sessions et partage avec tes amis.
+            </p>
+            <button
+              onClick={handleGoHome}
+              className="w-full bg-primary text-black py-3 rounded-lg font-semibold hover:brightness-95 transition-colors"
+            >
+              Commencer
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

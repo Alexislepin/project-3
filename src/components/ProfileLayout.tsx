@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Flame, BookOpen, Clock, Users, Activity, ChevronRight } from 'lucide-react';
+import { Flame, BookOpen, Clock, Users, Activity, ChevronRight, ChevronLeft } from 'lucide-react';
 import { BookCover } from './BookCover';
 import { BookDetailsModal } from './BookDetailsModal';
 import { BookDetailsWithManagement } from './BookDetailsWithManagement';
@@ -22,6 +22,15 @@ interface ProfileLayoutProps {
     activities?: number;
   };
   weeklyActivity: number[];
+  weeklyRangeLabel?: string;
+  onPrevWeek?: () => void;
+  onNextWeek?: () => void;
+  isCurrentWeek?: boolean;
+  weeklyLoading?: boolean;
+  weeklyRangeLabel?: string;
+  onPrevWeek?: () => void;
+  onNextWeek?: () => void;
+  isCurrentWeek?: boolean;
   totalMinutes: number;
   readingSpeed7d: number | null;
   readingPace7d: number | null;
@@ -41,6 +50,7 @@ interface ProfileLayoutProps {
   actionButtons?: React.ReactNode;
   onNavigateToLibrary?: () => void;
   onShowAllLikedBooks?: () => void;
+  onShowReadingLibrary?: () => void;
   onShowFollowers?: () => void;
   onShowFollowing?: () => void;
   onShowClubs?: () => void;
@@ -54,6 +64,11 @@ export function ProfileLayout({
   profile,
   stats,
   weeklyActivity,
+  weeklyRangeLabel,
+  onPrevWeek,
+  onNextWeek,
+  isCurrentWeek = true,
+  weeklyLoading = false,
   totalMinutes,
   readingSpeed7d,
   readingPace7d,
@@ -77,6 +92,7 @@ export function ProfileLayout({
   onShowFollowing,
   onShowClubs,
   onShowMyActivities,
+  onShowReadingLibrary,
   formatInterestTag,
   mode = 'self',
   viewedUserId,
@@ -84,7 +100,11 @@ export function ProfileLayout({
   const { t } = useTranslation();
   const [selectedUserBook, setSelectedUserBook] = useState<any | null>(null);
   const [selectedLikedBook, setSelectedLikedBook] = useState<any | null>(null);
+  const [selectedReadingBook, setSelectedReadingBook] = useState<any | null>(null);
   const [showAllCurrentlyReading, setShowAllCurrentlyReading] = useState(false);
+  const displayName = profile?.display_name || profile?.username || 'Utilisateur';
+  const sectionLabel = (selfLabel: string, otherLabel: string) =>
+    mode === 'self' ? selfLabel : `${otherLabel} ${displayName}`;
   const [lastActivity, setLastActivity] = useState<any | null>(null);
   const [loadingLastActivity, setLoadingLastActivity] = useState(false);
 
@@ -188,7 +208,7 @@ export function ProfileLayout({
       <div className="px-4 pt-4">
         <div className="flex flex-col items-center text-center mb-6" style={{ paddingTop: '8px' }}>
           <div className="relative mb-4">
-            <div className="w-32 h-32 bg-gray-200 rounded-full flex items-center justify-center text-4xl font-bold text-text-main-light border-4 border-white shadow-lg overflow-hidden">
+            <div className="w-32 h-32 bg-surface-2 rounded-full flex items-center justify-center text-4xl font-bold text-text-main border-4 border-surface shadow-lg overflow-hidden">
               {avatarUrl && (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('data:') || avatarUrl.startsWith('/')) ? (
                 <img src={avatarUrl} alt={profile.display_name} className="w-full h-full object-cover" />
               ) : (
@@ -198,8 +218,8 @@ export function ProfileLayout({
             {(() => {
               const streakValue = Number.isFinite(streakDays) ? streakDays : 0;
               return (
-                <div className={`absolute bottom-0 right-0 rounded-full p-1.5 border-4 border-background-light flex items-center justify-center ${
-                  streakValue > 0 ? 'bg-primary text-black' : 'bg-stone-200 text-stone-400'
+                <div className={`absolute bottom-0 right-0 rounded-full p-1.5 border-4 border-surface flex items-center justify-center ${
+                  streakValue > 0 ? 'bg-primary text-black' : 'bg-surface-2 text-text-muted'
                 }`}>
                   <Flame className={`w-5 h-5 ${streakValue > 0 ? 'fill-black' : ''}`} />
                 </div>
@@ -210,12 +230,12 @@ export function ProfileLayout({
             {profile.display_name || profile.username || 'Utilisateur'}
           </h1>
           {profile.username && (
-            <p className="text-sm text-text-sub-light mb-3">
+            <p className="text-sm text-text-sub mb-3">
               @{profile.username}
             </p>
           )}
           {profile.bio && (
-            <p className="text-text-sub-light text-sm max-w-md mb-4">{profile.bio}</p>
+            <p className="text-text-sub text-sm max-w-md mb-4">{profile.bio}</p>
           )}
           {actionButtons && (
             <div className="flex items-center gap-3">
@@ -227,34 +247,34 @@ export function ProfileLayout({
         <div className="grid grid-cols-5 gap-2.5 mb-5">
           <button
             onClick={onShowFollowers}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
+            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-surface border border-border shadow-sm hover:shadow-md transition-all aspect-square"
           >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.followers}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.followers')}</p>
+            <p className="text-2xl font-bold leading-none text-text-main">{stats.followers}</p>
+            <p className="text-[10px] text-text-sub font-medium text-center whitespace-nowrap">{t('profile.followers')}</p>
           </button>
 
           <button
             onClick={onShowFollowing}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
+            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-surface border border-border shadow-sm hover:shadow-md transition-all aspect-square"
           >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.following}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.following')}</p>
+            <p className="text-2xl font-bold leading-none text-text-main">{stats.following}</p>
+            <p className="text-[10px] text-text-sub font-medium text-center whitespace-nowrap">{t('profile.following')}</p>
           </button>
 
           <button
             onClick={onNavigateToLibrary}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
+            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-surface border border-border shadow-sm hover:shadow-md transition-all aspect-square"
           >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.books}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.booksShort')}</p>
+            <p className="text-2xl font-bold leading-none text-text-main">{stats.books}</p>
+            <p className="text-[10px] text-text-sub font-medium text-center whitespace-nowrap">{t('profile.booksShort')}</p>
           </button>
 
           <button
             onClick={onShowAllLikedBooks}
-            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-card-light border border-gray-200 shadow-sm hover:shadow-md transition-all aspect-square"
+            className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-surface border border-border shadow-sm hover:shadow-md transition-all aspect-square"
           >
-            <p className="text-2xl font-bold leading-none text-text-main-light">{stats.likes}</p>
-            <p className="text-[10px] text-text-sub-light font-medium text-center whitespace-nowrap">{t('profile.likedBooks')}</p>
+            <p className="text-2xl font-bold leading-none text-text-main">{stats.likes}</p>
+            <p className="text-[10px] text-text-sub font-medium text-center whitespace-nowrap">{t('profile.likedBooks')}</p>
           </button>
 
           <div className="flex flex-col items-center justify-center gap-1 rounded-xl p-3 bg-primary text-black border border-primary shadow-md relative overflow-hidden aspect-square">
@@ -262,44 +282,44 @@ export function ProfileLayout({
               <Flame className="w-16 h-16" />
             </div>
             <p className="text-2xl font-bold leading-none relative z-10">{streakDays}</p>
-            <p className="text-[10px] text-black/70 font-bold relative z-10 text-center">{t('profile.streak')}</p>
+            <p className="text-[10px] text-[#000] font-bold relative z-10 text-center">{t('profile.streak')}</p>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 mb-6">
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
-            <div className="flex items-center gap-2 text-text-sub-light mb-1">
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-surface border border-border shadow-sm">
+            <div className="flex items-center gap-2 text-text-sub mb-1">
               <BookOpen className="w-5 h-5" />
               <p className="text-xs font-bold uppercase tracking-wide">{t('profile.pages')}</p>
             </div>
-            <p className="text-3xl font-bold leading-none text-text-main-light">
+            <p className="text-3xl font-bold leading-none text-text-main">
               {formatPagesCount(totalPagesAllTime)}
             </p>
-            <p className="text-xs text-text-sub-light">{t('profile.totalRead')}</p>
+            <p className="text-xs text-text-sub">{t('profile.totalRead')}</p>
           </div>
 
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
-            <div className="flex items-center gap-2 text-text-sub-light mb-1">
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-surface border border-border shadow-sm">
+            <div className="flex items-center gap-2 text-text-sub mb-1">
               <Clock className="w-5 h-5" />
               <p className="text-xs font-bold uppercase tracking-wide">{t('profile.hours')}</p>
             </div>
-            <p className="text-3xl font-bold leading-none text-text-main-light">
+            <p className="text-3xl font-bold leading-none text-text-main">
               {totalMinutes < 60 ? `${totalMinutes} min` : `${(totalMinutes / 60).toFixed(1)} h`}
             </p>
-            <p className="text-xs text-text-sub-light">{t('profile.timeSpent')}</p>
+            <p className="text-xs text-text-sub">{t('profile.timeSpent')}</p>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 mb-6">
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+          <div className="flex flex-col gap-1 rounded-xl p-5 bg-surface border border-border shadow-sm">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Vitesse (7 jours)</p>
-              <span className="text-[10px] font-bold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">p/h</span>
+              <p className="text-xs font-bold uppercase tracking-wide text-text-sub">Vitesse (7 jours)</p>
+              <span className="text-[10px] font-bold bg-surface-2 px-2 py-1 rounded-lg text-text-main">p/h</span>
             </div>
             {(() => {
               if (!hasSessions7d) {
                 return (
-                  <p className="text-sm text-text-sub-light leading-relaxed">
+                  <p className="text-sm text-text-sub leading-relaxed">
                     Aucune session sur cette période
                   </p>
                 );
@@ -310,16 +330,16 @@ export function ProfileLayout({
               if (stats7d.speed.type === 'value') {
                 return (
                   <>
-                    <p className="text-3xl font-bold leading-none text-text-main-light">
+                    <p className="text-3xl font-bold leading-none text-text-main">
                       {stats7d.speed.formattedValue}
                     </p>
                     {stats7d.pace.type === 'value' && (
-                      <p className="text-xs text-text-sub-light">
+                    <p className="text-xs text-text-sub">
                         {stats7d.pace.formattedValue} {stats7d.pace.unit}
                       </p>
                     )}
                     {stats7d.speed.context && (
-                      <p className="text-[10px] text-text-sub-light/70 mt-1">
+                    <p className="text-[10px] text-text-muted mt-1">
                         {stats7d.speed.context}
                       </p>
                     )}
@@ -328,22 +348,22 @@ export function ProfileLayout({
               }
               
               return (
-                <p className="text-sm text-text-sub-light leading-relaxed">
+              <p className="text-sm text-text-sub leading-relaxed">
                   {stats7d.speed.message}
                 </p>
               );
             })()}
           </div>
 
-          <div className="flex flex-col gap-1 rounded-xl p-5 bg-card-light border border-gray-200 shadow-sm">
+        <div className="flex flex-col gap-1 rounded-xl p-5 bg-surface border border-border shadow-sm">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-xs font-bold uppercase tracking-wide text-text-sub-light">Meilleure session</p>
-              <span className="text-[10px] font-bold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">p/h</span>
+            <p className="text-xs font-bold uppercase tracking-wide text-text-sub">Meilleure session</p>
+            <span className="text-[10px] font-bold bg-surface-2 px-2 py-1 rounded-lg text-text-main">p/h</span>
             </div>
             {(() => {
               if (!hasAnySessions) {
                 return (
-                  <p className="text-sm text-text-sub-light leading-relaxed">
+                <p className="text-sm text-text-sub leading-relaxed">
                     Commence une session pour établir ton premier record
                   </p>
                 );
@@ -353,7 +373,7 @@ export function ProfileLayout({
               
               if (!hasValidPR) {
                 return (
-                  <p className="text-sm text-text-sub-light leading-relaxed">
+                <p className="text-sm text-text-sub leading-relaxed">
                     Pas encore de record personnel
                   </p>
                 );
@@ -361,18 +381,18 @@ export function ProfileLayout({
               
               return (
                 <>
-                  <p className="text-3xl font-bold leading-none text-text-main-light">
+                <p className="text-3xl font-bold leading-none text-text-main">
                     {readingSpeedPR != null ? formatStatValue(readingSpeedPR) : '—'}
                   </p>
-                  <p className="text-xs text-text-sub-light">
+                <p className="text-xs text-text-sub">
                     Meilleure vitesse sur une session
                   </p>
                   {bestSessionMinutes != null && bestSessionMinutes > 0 ? (
-                    <p className="text-[10px] text-text-sub-light/70 mt-0.5">
+                  <p className="text-[10px] text-text-muted mt-0.5">
                       Basé sur {Math.round(bestSessionMinutes)} min de lecture
                     </p>
                   ) : (
-                    <p className="text-[10px] text-text-sub-light/70 mt-0.5">
+                  <p className="text-[10px] text-text-muted mt-0.5">
                       Record sur une session
                     </p>
                   )}
@@ -384,22 +404,22 @@ export function ProfileLayout({
 
         {/* Activités section - moved BEFORE weekly activity */}
         {onShowMyActivities && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
+          <div className="bg-surface rounded-xl border border-border p-5 shadow-sm mb-4">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">
-                {mode === 'self' ? 'Mes activités' : 'Activités'}
+              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub">
+                {sectionLabel('Mes activités', 'Activités de')}
               </h2>
               <button
                 onClick={onShowMyActivities}
                 className="px-3 py-1 rounded-full bg-primary text-black font-semibold text-sm hover:brightness-95 transition-colors flex items-center gap-1.5"
               >
                 Voir tout
-                <ChevronRight className="w-3.5 h-3.5 text-black/80" />
+                <ChevronRight className="w-3.5 h-3.5 text-[#000]" />
               </button>
             </div>
             
             {loadingLastActivity ? (
-              <div className="text-center py-6 text-text-sub-light text-sm">Chargement...</div>
+              <div className="text-center py-6 text-text-sub text-sm">Chargement...</div>
             ) : lastActivity ? (
               <ActivityCard
                 activity={lastActivity}
@@ -409,7 +429,7 @@ export function ProfileLayout({
               />
             ) : (
               <div className="text-center py-6">
-                <p className="text-sm text-text-sub-light">
+                <p className="text-sm text-text-sub">
                   {mode === 'self' 
                     ? 'Aucune activité pour l\'instant. Commencez une session de lecture !'
                     : 'Aucune activité publique'}
@@ -421,15 +441,46 @@ export function ProfileLayout({
 
         <div className="mb-5">
           <div className="flex items-center justify-between mb-3 px-1">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-text-sub-light">
-              {t('profile.weeklyActivity')}
-            </h4>
-            <span className="text-xs font-semibold bg-gray-100 px-2 py-1 rounded-lg text-gray-700">
-              {weeklyActivity.reduce((a, b) => a + b, 0)} {t('library.pages')}
-            </span>
+            <div className="flex items-center gap-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-text-sub">
+                {t('profile.weeklyActivity')}
+              </h4>
+              {weeklyRangeLabel && (
+                <span className="text-[10px] font-semibold text-text-muted">
+                  {weeklyRangeLabel}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={onPrevWeek}
+                  className="p-1 rounded-md border border-border text-text-sub hover:bg-surface-2 transition-colors"
+                  aria-label="Semaine précédente"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onNextWeek}
+                  disabled={isCurrentWeek}
+                  className={`p-1 rounded-md border border-border text-text-sub hover:bg-surface-2 transition-colors ${isCurrentWeek ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  aria-label="Semaine suivante"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+              <span className="text-xs font-semibold bg-surface-2 px-2 py-1 rounded-lg text-text-main">
+                {weeklyActivity.reduce((a, b) => a + b, 0)} {t('library.pages')}
+              </span>
+            </div>
           </div>
 
-          <div className="bg-card-light px-4 py-4 rounded-2xl border border-gray-200 shadow-sm">
+          <div className="bg-surface px-4 py-4 rounded-2xl border border-border shadow-sm">
+            {weeklyLoading && (
+              <div className="text-center text-xs text-text-sub mb-2">Mise à jour…</div>
+            )}
             <div className="flex items-end justify-between gap-2">
               {(() => {
                 const maxPages = Math.max(...weeklyActivity, 10);
@@ -446,7 +497,7 @@ export function ProfileLayout({
 
                   return (
                     <div key={index} className="flex flex-col items-center gap-2 flex-1">
-                      <div className="w-full h-24 bg-gray-100 rounded-xl flex items-end overflow-hidden">
+                      <div className="w-full h-24 bg-surface-2 rounded-xl flex items-end overflow-hidden">
                         <div
                           className={`w-full transition-all duration-500 ${isToday ? 'bg-primary' : 'bg-primary/50'}`}
                           style={{
@@ -457,10 +508,10 @@ export function ProfileLayout({
                       </div>
 
                       <div className="flex flex-col items-center leading-none">
-                        <span className={`text-[10px] font-bold uppercase ${isToday ? 'text-text-main-light' : 'text-gray-400'}`}>
+                        <span className={`text-[10px] font-bold uppercase ${isToday ? 'text-text-main' : 'text-text-muted'}`}>
                           {dayShort[index]}
                         </span>
-                        <span className="text-[10px] text-gray-400 font-medium mt-1">
+                        <span className="text-[10px] text-text-muted font-medium mt-1">
                           {pages || ''}
                         </span>
                       </div>
@@ -473,21 +524,24 @@ export function ProfileLayout({
         </div>
 
         {currentlyReading.length > 0 && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
+          <div className="bg-surface rounded-xl border border-border p-5 shadow-sm mb-4">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">En cours de lecture</h2>
-              {currentlyReading.length > 5 && (
+              <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub">
+                {sectionLabel('Livres en cours', 'Livres en cours de')}
+              </h2>
+              {currentlyReading.length > 0 && onShowReadingLibrary && (
                 <button
-                  onClick={() => setShowAllCurrentlyReading(!showAllCurrentlyReading)}
-                  className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                  onClick={onShowReadingLibrary}
+                  className="px-3 py-1 rounded-full bg-primary text-black font-semibold text-xs hover:brightness-95 transition-colors flex items-center gap-1.5"
                 >
-                  {showAllCurrentlyReading ? 'Afficher moins' : 'Afficher plus'}
+                  Voir tout
+                  <ChevronRight className="w-3 h-3 text-[rgb(0,0,0)]" />
                 </button>
               )}
             </div>
             <div className="overflow-x-auto -mx-5 px-5 scrollbar-hide">
               <div className="flex flex-nowrap gap-3 snap-x snap-mandatory">
-                {(showAllCurrentlyReading ? currentlyReading : currentlyReading.slice(0, 5)).map((item: any) => {
+                {currentlyReading.slice(0, 5).map((item: any) => {
                   const book = item.book;
                   if (!book) {
                     console.warn('CurrentlyReading item without book data:', item);
@@ -499,17 +553,45 @@ export function ProfileLayout({
                   const isbn13 = rawIsbn.length === 13 ? rawIsbn : undefined;
                   const isbn10 = rawIsbn.length === 10 ? rawIsbn : undefined;
                   
+                  // ✅ Use canonical cover resolver with full fallbacks (custom / OL / Google)
+                  const coverUrl = resolveBookCover({
+                    // For carousel, prefer the stored cover (ignore any legacy custom gradient)
+                    customCoverUrl: null,
+                    coverUrl: book?.cover_url || null,
+                  });
+
                   return (
                     <button
                       key={book.id}
-                      onClick={() => setSelectedUserBook(item)}
+                      onClick={() => {
+                        const coverResolved = resolveBookCover({
+                          customCoverUrl: (item as any).custom_cover_url || null,
+                          coverUrl: book?.cover_url || null,
+                          openLibraryCoverId: book?.openlibrary_cover_id || null,
+                          openLibraryWorkKey: (book as any)?.openlibrary_work_key || null,
+                          googleBooksId: book?.google_books_id || null,
+                        });
+                        setSelectedReadingBook({
+                          id: book.id,
+                          title: book.title,
+                          author: book.author,
+                          cover_url: book?.cover_url || coverResolved,
+                          thumbnail: book?.cover_url || coverResolved,
+                          custom_cover_url: null,
+                          openlibrary_cover_id: book?.openlibrary_cover_id || null,
+                          openlibrary_work_key: (book as any)?.openlibrary_work_key || null,
+                          google_books_id: book?.google_books_id || null,
+                          isbn: book?.isbn || null,
+                          book_key: (book as any)?.book_key || null,
+                        });
+                      }}
                       className="flex flex-col items-center shrink-0 snap-start"
                       style={{ width: '64px' }}
                     >
                       <div className="relative w-16 h-24 mb-2 rounded-lg overflow-hidden shadow-md group cursor-pointer hover:shadow-xl transition-shadow">
                         <BookCover
                           custom_cover_url={(item as any).custom_cover_url || null}
-                          coverUrl={book.cover_url || null}
+                          coverUrl={coverUrl || null}
                           title={book.title}
                           author={book.author || 'Auteur inconnu'}
                           className="w-full h-full"
@@ -524,7 +606,7 @@ export function ProfileLayout({
                           <div className="text-white text-[9px] text-center line-clamp-2 font-medium">{book.title}</div>
                         </div>
                       </div>
-                      <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+                      <div className="w-full bg-surface-2 h-1.5 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-primary transition-all"
                           style={{ width: `${progress}%` }}
@@ -539,23 +621,26 @@ export function ProfileLayout({
           </div>
         )}
 
-        <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
+        <div className="bg-surface rounded-xl border border-border p-5 shadow-sm mb-4">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light">{t('profile.likedBooksTitle')}</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub">
+              {sectionLabel('Mes livres aimés', 'Livres aimés par')}
+            </h2>
             {likedBooks.length > 8 && (
               <button
                 onClick={onShowAllLikedBooks}
-                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                className="px-3 py-1 rounded-full bg-primary text-black font-semibold text-xs hover:brightness-95 transition-colors flex items-center gap-1.5"
               >
-                {t('common.viewMore')}
+                Voir tout
+                <ChevronRight className="w-3 h-3 text-[rgb(0,0,0)]" />
               </button>
             )}
           </div>
           
           {likedBooks.length === 0 ? (
             <div className="text-center py-8">
-              <BookOpen className="w-12 h-12 mx-auto mb-3 text-text-sub-light opacity-50" />
-              <p className="text-sm text-text-sub-light">{t('profile.noLikedBooksYet')}</p>
+              <BookOpen className="w-12 h-12 mx-auto mb-3 text-text-sub opacity-50" />
+              <p className="text-sm text-text-sub">{t('profile.noLikedBooksYet')}</p>
             </div>
           ) : (
             <div className="grid grid-cols-4 gap-3">
@@ -644,14 +729,14 @@ export function ProfileLayout({
         </div>
 
         {interests && interests.length > 0 && (
-          <div className="bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub-light mb-3">
-              {t('profile.interests')}
+          <div className="bg-surface rounded-xl border border-border p-5 shadow-sm mb-4">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-text-sub mb-3">
+              {sectionLabel('Mes préférences', 'Préférences de')}
             </h2>
 
             {(() => {
               const interestsList: string[] = Array.isArray(interests) ? interests : [];
-              const shown = interestsList.slice(0, 6);
+              const shown = interestsList.slice(0, 10);
               const extra = Math.max(0, interestsList.length - shown.length);
               const formatTag = formatInterestTag || ((tag: string) => ({ label: tag }));
 
@@ -667,8 +752,8 @@ export function ProfileLayout({
                         className={[
                           "px-3 py-1.5 rounded-full text-xs font-semibold border max-w-full truncate",
                           isAccent
-                            ? "bg-primary/20 border-primary/30 text-text-main-light"
-                            : "bg-gray-100 border-gray-200 text-text-main-light",
+                            ? "bg-primary/20 border-primary/30 text-text-main"
+                            : "bg-surface-2 border-border text-text-main",
                         ].join(' ')}
                         title={interest}
                       >
@@ -678,7 +763,7 @@ export function ProfileLayout({
                   })}
 
                   {extra > 0 && (
-                    <span className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-100 border-gray-200 text-text-main-light">
+                    <span className="px-3 py-1.5 rounded-full text-xs font-semibold border bg-surface-2 border-border text-text-main">
                       +{extra}
                     </span>
                   )}
@@ -691,21 +776,21 @@ export function ProfileLayout({
         {clubCount !== undefined && onShowClubs && (
           <button
             onClick={onShowClubs}
-            className="w-full bg-card-light rounded-xl border border-gray-200 p-5 shadow-sm hover:shadow-md transition-all hover:border-lime-300"
+            className="w-full bg-surface rounded-xl border border-border p-5 shadow-sm hover:shadow-md transition-all hover:border-lime-300"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-lime-100 rounded-full flex items-center justify-center">
-                  <Users className="w-6 h-6 text-lime-800" />
+                <div className="w-12 h-12 bg-primary/15 rounded-full flex items-center justify-center">
+                  <Users className="w-6 h-6 text-text-main" />
                 </div>
                 <div className="text-left">
-                  <h3 className="font-bold text-text-main-light mb-0.5">{t('profile.myClubs')}</h3>
-                  <p className="text-sm text-text-sub-light">
+                  <h3 className="font-bold text-text-main mb-0.5">{t('profile.myClubs')}</h3>
+                  <p className="text-sm text-text-sub">
                     {clubCount === 0 ? t('profile.joinReadingClubs') : `${clubCount} club${clubCount !== 1 ? 's' : ''}`}
                 </p>
                 </div>
               </div>
-              <svg className="w-5 h-5 text-text-sub-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-text-sub" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
             </div>
@@ -728,6 +813,21 @@ export function ProfileLayout({
         <BookDetailsModal
           book={selectedLikedBook}
           onClose={() => setSelectedLikedBook(null)}
+          showAddButton
+          onAddToLibrary={() => {
+            window.dispatchEvent(new CustomEvent('open-manual-add'));
+          }}
+        />
+      )}
+
+      {selectedReadingBook && (
+        <BookDetailsModal
+          book={selectedReadingBook}
+          onClose={() => setSelectedReadingBook(null)}
+          showAddButton
+          onAddToLibrary={() => {
+            window.dispatchEvent(new CustomEvent('open-manual-add'));
+          }}
         />
       )}
     </>

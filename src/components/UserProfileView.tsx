@@ -14,6 +14,8 @@ import { countRows } from '../lib/supabaseCounts';
 import { LevelProgressBar } from './LevelProgressBar';
 import { XpHistoryModal } from './XpHistoryModal';
 import { ActivityFocus } from '../lib/activityFocus';
+import { TABBAR_HEIGHT } from '../lib/layoutConstants';
+import { fetchWeeklyActivity, weeklyActivityToPagesArray, formatWeekRangeLabel } from '../lib/weeklyActivity';
 
 interface UserProfileViewProps {
   userId: string;
@@ -32,10 +34,14 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
   const [showFollowersModal, setShowFollowersModal] = useState(false);
   const [showFollowingModal, setShowFollowingModal] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryMode, setLibraryMode] = useState<'all' | 'reading'>('all');
   const [showLikedBooks, setShowLikedBooks] = useState(false);
   const [showUserActivities, setShowUserActivities] = useState(false);
   const [showXpHistory, setShowXpHistory] = useState(false);
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [weeklyWeekOffset, setWeeklyWeekOffset] = useState(0);
+  const [weeklyRangeLabel, setWeeklyRangeLabel] = useState<string>('');
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [readingSpeed7d, setReadingSpeed7d] = useState<number | null>(null);
   const [readingPace7d, setReadingPace7d] = useState<number | null>(null);
@@ -49,6 +55,12 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
   const [currentlyReading, setCurrentlyReading] = useState<any[]>([]);
   const [likedBooks, setLikedBooks] = useState<any[]>([]);
   const { user } = useAuth();
+  const isOwner = user?.id === userId;
+  const getAllowedVisibilities = (overrideIsFollowing?: boolean): ('public' | 'followers' | 'private')[] => {
+    const canSeeFollowers = overrideIsFollowing ?? isFollowing;
+    if (isOwner) return ['public', 'followers', 'private'];
+    return canSeeFollowers ? ['public', 'followers'] : ['public'];
+  };
 
   const handleUserClick = (clickedUserId: string) => {
     if (onUserClick) {
@@ -65,14 +77,16 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
       setLoading(true);
 
       try {
+        const following = await checkFollowing();
+        const visibilities = getAllowedVisibilities(following);
+
         await Promise.all([
           loadProfile(),
-          loadStats(),
-          loadWeeklyActivity(),
-          loadReadingStats(),
+          loadStats(visibilities),
+          loadWeeklyActivity(0, visibilities),
+          loadReadingStats(visibilities),
           loadLikedBooks(),
           loadCurrentlyReading(),
-          checkFollowing(),
         ]);
       } catch (error) {
         console.error('Error loading profile data:', error);
@@ -118,12 +132,15 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     }
   };
 
-  const loadStats = async () => {
+  const loadStats = async (visibilities = getAllowedVisibilities()) => {
     try {
       const [followers, following, activities, books, likes] = await Promise.all([
         countRows('follows', q => q.eq('following_id', userId)), // followers = ceux qui suivent cet user
         countRows('follows', q => q.eq('follower_id', userId)),  // following = ceux que cet user suit
-        countRows('activities', q => q.eq('user_id', userId).eq('visibility', 'public')),
+        countRows('activities', q => {
+          q = q.eq('user_id', userId);
+          return visibilities.length === 1 ? q.eq('visibility', visibilities[0]) : q.in('visibility', visibilities);
+        }),
         countRows('user_books', q => q.eq('user_id', userId)),
         countRows('book_likes', q => q.eq('user_id', userId).is('deleted_at', null)), // ✅ Seulement les likes actifs
       ]);
@@ -146,61 +163,59 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     }
   };
 
-  const loadWeeklyActivity = async () => {
+  const loadWeeklyActivity = async (weekOffset = weeklyWeekOffset, visibilities = getAllowedVisibilities()) => {
     try {
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      const day = startOfWeek.getDay();
-      const diffToMonday = (day + 6) % 7;
-      startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
-      startOfWeek.setHours(0, 0, 0, 0);
-
-      const startISO = startOfWeek.toISOString();
-
-      const { data: activities, error } = await supabase
-        .from('activities')
-        .select('pages_read, created_at, photos')
-        .eq('user_id', userId)
-        .eq('type', 'reading')
-        .eq('visibility', 'public')
-        .gte('created_at', startISO)
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        console.error('[loadWeeklyActivity] Error:', error);
-        setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
-        return;
-      }
-
-      const weekData = [0, 0, 0, 0, 0, 0, 0];
-
-      for (const a of activities ?? []) {
-        if (!a.created_at) continue;
-        const d = new Date(a.created_at);
-        const js = d.getDay();
-        const idx = (js + 6) % 7;
-        weekData[idx] += Number(a.pages_read) || 0;
-      }
-
+      setWeeklyLoading(true);
+      const result = await fetchWeeklyActivity(userId, { weekOffset, visibilities });
+      const weekData = weeklyActivityToPagesArray(result.days);
       setWeeklyActivity(weekData);
+      if (result.weekStart && result.weekEnd) {
+        setWeeklyRangeLabel(
+          formatWeekRangeLabel(new Date(result.weekStart), new Date(result.weekEnd))
+        );
+      }
     } catch (e) {
       console.error('[loadWeeklyActivity] Unexpected:', e);
-      setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
+      // garder les données affichées pour éviter le flash
+    } finally {
+      setWeeklyLoading(false);
     }
   };
 
-  const loadReadingStats = async () => {
+  const handlePrevWeek = () => {
+    setWeeklyWeekOffset((prev) => {
+      const next = prev + 1;
+      loadWeeklyActivity(next);
+      return next;
+    });
+  };
+
+  const handleNextWeek = () => {
+    setWeeklyWeekOffset((prev) => {
+      if (prev === 0) return prev;
+      const next = prev - 1;
+      loadWeeklyActivity(next);
+      return next;
+    });
+  };
+
+  const loadReadingStats = async (visibilities = getAllowedVisibilities()) => {
     const since = new Date();
     since.setDate(since.getDate() - 7);
     const sinceISO = since.toISOString();
 
-    const { data: allActivities, error: allErr } = await supabase
+    let query = supabase
       .from('activities')
       .select('pages_read, duration_minutes, reading_speed_pph, reading_pace_min_per_page, created_at, photos')
       .eq('user_id', userId)
-      .eq('type', 'reading')
-      .eq('visibility', 'public')
-      .order('created_at', { ascending: false });
+      .eq('type', 'reading');
+
+    query =
+      visibilities.length === 1
+        ? query.eq('visibility', visibilities[0])
+        : query.in('visibility', visibilities);
+
+    const { data: allActivities, error: allErr } = await query.order('created_at', { ascending: false });
 
     if (allErr) {
       console.error('[loadReadingStats] all activities error:', allErr);
@@ -258,13 +273,34 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
   };
 
   const loadLikedBooks = async () => {
+    if (!userId) return;
+
     try {
+      // ✅ Utiliser book_uuid (UUID) avec join direct sur books via FK (même logique que Profile)
+      // ✅ SOFT DELETE: Filtrer seulement les likes actifs (deleted_at IS NULL)
       const { data: likesData, error: likesError } = await supabase
         .from('book_likes')
-        .select('book_key, created_at')
+        .select(`
+          id,
+          created_at,
+          book_uuid,
+          book_key,
+          books:books!book_likes_book_uuid_fkey (
+            id,
+            title,
+            author,
+            cover_url,
+            isbn,
+            openlibrary_cover_id,
+            google_books_id,
+            openlibrary_work_key
+          )
+        `)
         .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-        .limit(50);
+        .is('deleted_at', null) // ✅ Seulement les likes actifs
+        .not('book_uuid', 'is', null) // ✅ Cache les likes legacy (sans book_uuid)
+        .order('created_at', { ascending: false })
+        .limit(60);
 
       if (likesError) {
         console.error('[loadLikedBooks] book_likes error:', likesError);
@@ -277,65 +313,80 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
         return;
       }
 
-      const normalizeKey = (key: string): string[] => {
-        if (!key) return [];
-        const k = key.trim();
-        const out = new Set<string>();
-        out.add(k);
-        if (k.startsWith('ol:/works/')) out.add(k.replace(/^ol:/, ''));
-        if (k.startsWith('ol:') && !k.startsWith('ol:/works/')) out.add(`/works/${k.replace(/^ol:/, '')}`);
-        if (k.startsWith('/works/')) out.add(k);
-        if (k.startsWith('isbn:')) out.add(k);
-        return Array.from(out);
-      };
+      // ✅ Charger les covers custom depuis book_covers OU user_books.custom_cover_url
+      const bookIds = (likesData ?? [])
+        .map(x => x.book_uuid)
+        .filter((id): id is string => !!id);
 
-      const rawKeys = likesData.map(l => l.book_key).filter(Boolean);
-      const candidateKeys = Array.from(new Set(rawKeys.flatMap(normalizeKey)));
+      // Essayer book_covers d'abord (table recommandée)
+      const { data: coversData, error: coversError } = await supabase
+        .from('book_covers')
+        .select('book_id, cover_url')
+        .eq('user_id', userId)
+        .in('book_id', bookIds);
 
-      if (candidateKeys.length === 0) {
-        setLikedBooks([]);
-        return;
-      }
+      // Si book_covers n'existe pas ou est vide, essayer user_books.custom_cover_url
+      let coverMap = new Map<string, string | null>();
+      if (!coversError && coversData && coversData.length > 0) {
+        coverMap = new Map((coversData ?? []).map((c: any) => [c.book_id, c.cover_url]));
+      } else {
+        // Fallback: charger depuis user_books.custom_cover_url
+        const { data: userBooksData } = await supabase
+          .from('user_books')
+          .select('book_id, custom_cover_url')
+          .eq('user_id', userId)
+          .in('book_id', bookIds);
 
-      const { data: booksData, error: booksError } = await supabase
-        .from('books_cache')
-        .select('book_key, title, author, cover_url, isbn')
-        .in('book_key', candidateKeys);
-
-      if (booksError) {
-        console.error('[loadLikedBooks] books_cache error:', booksError);
-        setLikedBooks([]);
-        return;
-      }
-
-      const booksMap = new Map((booksData ?? []).map(b => [b.book_key, b]));
-
-      const pickCached = (likeKey: string) => {
-        if (!likeKey) return null;
-        if (booksMap.has(likeKey)) return booksMap.get(likeKey);
-        const norms = normalizeKey(likeKey);
-        for (const nk of norms) {
-          if (booksMap.has(nk)) return booksMap.get(nk);
+        if (userBooksData) {
+          coverMap = new Map((userBooksData ?? []).map((ub: any) => [ub.book_id, ub.custom_cover_url]));
         }
-        return null;
-      };
+      }
 
-      const combined = likesData.map(like => {
-        const cached = pickCached(like.book_key);
-        return {
-          book_key: like.book_key,
-          created_at: like.created_at,
-          book: cached ?? {
-            book_key: like.book_key,
-            title: 'Titre inconnu',
-            author: 'Auteur inconnu',
-            cover_url: null,
-            isbn: null,
-          },
-        };
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      // ✅ Construire les items même si books join est null (fallback)
+      const cleaned = (likesData ?? []).map((x: any) => {
+        if (x.books && x.book_uuid) {
+          // Cas normal : join réussi
+          return {
+            liked_at: x.created_at,
+            book: x.books,
+            book_id: x.book_uuid,
+            book_key: x.book_key,
+            actor_custom_cover_url: coverMap.get(x.book_uuid) ?? null,
+          };
+        } else {
+          // Fallback : construire un book object minimal depuis book_key
+          const bookKey = x.book_key || '';
+          let title = 'Métadonnées en cours…';
+          let author = '—';
+          let isbn: string | null = null;
+          
+          if (bookKey.startsWith('isbn:')) {
+            isbn = bookKey.replace(/^isbn:/, '').replace(/[-\s]/g, '');
+          }
+          
+          return {
+            liked_at: x.created_at,
+            book: {
+              id: x.book_uuid || bookKey, // Use book_uuid if available, else book_key as id
+              title,
+              author,
+              cover_url: null,
+              isbn,
+              openlibrary_cover_id: null,
+              google_books_id: null,
+              openlibrary_work_key: bookKey.startsWith('ol:') || bookKey.startsWith('/works/') ? bookKey : null,
+            },
+            book_id: x.book_uuid || bookKey,
+            book_key: bookKey,
+            actor_custom_cover_url: x.book_uuid ? (coverMap.get(x.book_uuid) ?? null) : null,
+          };
+        }
+      });
 
-      setLikedBooks(combined);
+      setLikedBooks(cleaned);
+      
+      // ✅ Source de vérité unique : stats.likes = cleaned.length
+      setStats(prev => ({ ...prev, likes: cleaned.length }));
     } catch (error) {
       console.error('[loadLikedBooks] Unexpected error:', error);
       setLikedBooks([]);
@@ -375,9 +426,10 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     }
   };
 
-  const checkFollowing = async () => {
+  const checkFollowing = async (): Promise<boolean> => {
     if (!user || userId === user.id) {
-      return;
+      setIsFollowing(false);
+      return false;
     }
 
     const { data, error } = await supabase
@@ -390,10 +442,13 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     if (error) {
       console.error('checkFollowing error:', error);
       setIsFollowing(false);
-      return;
+      return false;
     }
 
-    setIsFollowing(!!data);
+    const following = !!data;
+    console.log('[UserProfileView] checkFollowing result:', { userId, isFollowing: following, data });
+    setIsFollowing(following);
+    return following;
   };
 
   const handleFollowToggle = async () => {
@@ -403,6 +458,7 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
     setFollowLoading(true);
 
     try {
+      const nextIsFollowing = !isFollowing;
       if (isFollowing) {
         const { error: deleteError } = await supabase
           .from('follows')
@@ -417,38 +473,45 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
 
         setIsFollowing(false);
       } else {
+        // Insert dans follows (trigger désactivé, on gère manuellement)
         const { error: followError } = await supabase
           .from('follows')
-          .upsert(
-            { follower_id: user.id, following_id: userId },
-            { onConflict: 'follower_id,following_id', ignoreDuplicates: true }
-          );
+          .insert({ follower_id: user.id, following_id: userId });
 
-        if (followError && (followError as any).code !== '23505') {
+        if (followError) {
           console.error('Erreur lors du follow:', followError);
-          return;
+          // Si c'est un doublon, on continue quand même
+          if (followError.code !== '23505') {
+            return;
+          }
         }
 
-        // Créer la notification avec upsert pour éviter les doublons
+        // Créer manuellement la notification (trigger désactivé)
         await supabase
           .from('notifications')
-          .upsert(
-            {
-              user_id: userId,   // celui qui reçoit la notif
-              actor_id: user.id,       // celui qui follow
-              type: 'follow',
-              read: false,
-              created_at: new Date().toISOString(), // remonte en haut à chaque re-follow
-            },
-            {
-              onConflict: 'user_id,actor_id,type',
+          .insert({
+            user_id: userId,
+            actor_id: user.id,
+            type: 'follow',
+            read: false,
+            created_at: new Date().toISOString(),
+          })
+          .then(({ error }) => {
+            if (error && error.code !== '23505') {
+              console.log('Info: notification non créée:', error.message);
             }
-          );
+          });
 
         setIsFollowing(true);
+        console.log('[UserProfileView] Follow créé avec succès !');
       }
 
-      await Promise.all([loadStats(), checkFollowing()]);
+      const visibilities = getAllowedVisibilities(nextIsFollowing);
+      await Promise.all([
+        loadStats(visibilities),
+        loadWeeklyActivity(weeklyWeekOffset, visibilities),
+        loadReadingStats(visibilities),
+      ]);
     } finally {
       setFollowLoading(false);
     }
@@ -464,13 +527,54 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
 
   const isOwnProfile = user?.id === userId;
 
+  // ✅ Format interest tags (même logique que Profile)
+  const formatInterestTag = (tag: string): { label: string; tone?: 'default' | 'accent' } => {
+    const raw = (tag || '').trim();
+    if (!raw) return { label: '' };
+
+    const cleanSpaces = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+    // goal:1_books_month  -> Objectif: 1 livre/mois
+    if (/^goal:/i.test(raw)) {
+      const v = raw.replace(/^goal:/i, '').trim(); // "1_books_month"
+      const m = v.match(/^(\d+)_books?_month$/i);
+      if (m) {
+        const n = Number(m[1]);
+        return { label: `Objectif: ${n} ${n === 1 ? 'livre' : 'livres'}/mois`, tone: 'accent' };
+      }
+      return { label: 'Objectif', tone: 'accent' };
+    }
+
+    // Niveau: restarting / level: beginner
+    if (/^(niveau|level)\s*:/i.test(raw)) {
+      const v = raw.replace(/^(niveau|level)\s*:/i, '').trim().toLowerCase();
+      const map: Record<string, string> = {
+        restarting: 'Débutant',
+        beginner: 'Débutant',
+        intermediate: 'Intermédiaire',
+        advanced: 'Avancé',
+      };
+      return { label: `Niveau: ${map[v] || v.charAt(0).toUpperCase() + v.slice(1)}`, tone: 'default' };
+    }
+
+    // generic cleanup
+    let label = raw.replace(/[_-]+/g, ' ');
+    label = cleanSpaces(label);
+    label = label.charAt(0).toUpperCase() + label.slice(1);
+
+    // truncate hard (avoid huge pills)
+    if (label.length > 22) label = label.slice(0, 21) + '…';
+
+    return { label, tone: 'default' };
+  };
+
   if (showLibrary) {
     return (
       <UserLibraryView
         userId={userId}
         userName={profile.display_name}
         onClose={() => setShowLibrary(false)}
-        mode="all"
+        mode={libraryMode === 'reading' ? 'reading' : 'all'}
       />
     );
   }
@@ -491,6 +595,7 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
       <MyActivities
         userId={userId}
         title={`Activités de ${profile.display_name}`}
+        viewerIsFollowing={isFollowing || isOwner}
         onClose={() => {
           setShowUserActivities(false);
           loadStats();
@@ -521,7 +626,7 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
       <div 
         className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
         style={{
-          paddingBottom: 'calc(12px + var(--sab))',
+          paddingBottom: `calc(24px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -560,6 +665,11 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
         profile={profile}
         stats={stats}
         weeklyActivity={weeklyActivity}
+        weeklyRangeLabel={weeklyRangeLabel}
+        onPrevWeek={handlePrevWeek}
+        onNextWeek={handleNextWeek}
+        isCurrentWeek={weeklyWeekOffset === 0}
+        weeklyLoading={weeklyLoading}
         totalMinutes={totalMinutes}
         readingSpeed7d={readingSpeed7d}
         readingPace7d={readingPace7d}
@@ -600,13 +710,21 @@ export function UserProfileView({ userId, onClose, onUserClick, activityFocus, o
             </button>
           ) : undefined
         }
-        onNavigateToLibrary={() => setShowLibrary(true)}
+        onNavigateToLibrary={() => {
+          setLibraryMode('all');
+          setShowLibrary(true);
+        }}
+        onShowReadingLibrary={() => {
+          setLibraryMode('reading');
+          setShowLibrary(true);
+        }}
         onShowAllLikedBooks={() => setShowLikedBooks(true)}
         onShowFollowers={() => setShowFollowersModal(true)}
         onShowFollowing={() => setShowFollowingModal(true)}
         onShowMyActivities={() => setShowUserActivities(true)}
         mode="user"
         viewedUserId={userId}
+        formatInterestTag={formatInterestTag}
         />
       </div>
 

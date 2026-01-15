@@ -44,7 +44,7 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
     return (
       <div
         onClick={onBookClick}
-        className="flex items-center gap-2.5 p-2.5 bg-white rounded-2xl shadow-sm hover:bg-gray-50 transition-colors cursor-pointer"
+        className="flex items-center gap-2.5 p-2.5 bg-neutral-900 rounded-2xl shadow-sm hover:bg-neutral-800 transition-colors cursor-pointer"
       >
         {/* Avatars stack */}
         <div className="flex -space-x-1.5 shrink-0">
@@ -112,6 +112,8 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
         {/* Book Cover - toujours afficher même sans cover_url (BookCover gère les fallbacks) */}
         <div className="w-10 h-14 shrink-0 rounded overflow-hidden">
           <BookCover
+            bookKey={event.book?.book_key || undefined}
+            book={event.book || undefined}
             coverUrl={event.book?.cover_url || null}
             custom_cover_url={event.book?.custom_cover_url ?? null}
             title={safeTitle(event.book || {}, 'Livre')}
@@ -127,7 +129,7 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
   return (
     <div
       onClick={onBookClick}
-      className="flex items-center gap-2.5 p-2.5 bg-white rounded-2xl shadow-sm hover:bg-gray-50 transition-colors cursor-pointer"
+      className="flex items-center gap-2.5 p-2.5 bg-neutral-900 rounded-2xl shadow-sm hover:bg-neutral-800 transition-colors cursor-pointer"
     >
       {/* Avatar */}
       <button
@@ -212,6 +214,8 @@ export function FeedRow({ event, onActorClick, onBookClick, formatTimeAgo }: Fee
       {/* Book Cover - toujours afficher même sans cover_url (BookCover gère les fallbacks) */}
       <div className="w-10 h-14 shrink-0 rounded overflow-hidden">
           <BookCover
+            bookKey={event.book?.book_key || undefined}
+            book={event.book || undefined}
             coverUrl={event.book?.cover_url || null}
             custom_cover_url={event.book?.custom_cover_url ?? null}
             title={safeTitle(event.book || {}, 'Livre')}

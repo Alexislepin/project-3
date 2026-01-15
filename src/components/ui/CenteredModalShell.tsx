@@ -61,7 +61,7 @@ export function CenteredModalShell({
     >
       <div
         data-modal-content
-        className={`bg-white rounded-3xl shadow-xl border border-gray-200 overflow-hidden flex flex-col ${className}`}
+        className={`bg-surface text-text-main-light rounded-3xl shadow-xl border border-border overflow-hidden flex flex-col ${className}`}
         style={{
           width: maxWidth,
           maxHeight: `calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px - 16px - ${tabbarSafeHeight}px)`,
@@ -70,7 +70,7 @@ export function CenteredModalShell({
       >
         {/* Header (optionnel) */}
         {(title || headerRight) && (
-          <div className="flex-shrink-0 bg-white border-b border-gray-200 px-6 pt-4 pb-3 flex items-center justify-between rounded-t-3xl">
+          <div className="flex-shrink-0 bg-surface border-b border-border px-6 pt-4 pb-3 flex items-center justify-between rounded-t-3xl">
             {title && (
               <h2 className="text-xl font-bold text-text-main-light">{title}</h2>
             )}
@@ -78,7 +78,7 @@ export function CenteredModalShell({
               {headerRight}
               <button
                 onClick={onClose}
-                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-2 transition-colors"
                 aria-label="Fermer"
               >
                 <X className="w-5 h-5 text-text-sub-light" />
@@ -100,7 +100,7 @@ export function CenteredModalShell({
 
         {/* Footer (optionnel) */}
         {footer && (
-          <div className="flex-shrink-0 bg-white border-t border-gray-200 rounded-b-3xl shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
+          <div className="flex-shrink-0 bg-surface border-t border-border rounded-b-3xl shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
             <div
               className="px-6 py-3"
               style={{

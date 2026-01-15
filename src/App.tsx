@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
@@ -15,6 +15,7 @@ import { Home } from './pages/Home';
 import { Profile } from './pages/Profile';
 import { Library } from './pages/Library';
 import { Insights } from './pages/Insights';
+import { InsightsDayPage } from './pages/InsightsDay';
 import { ActiveSession } from './pages/ActiveSession';
 import { LogActivity } from './pages/LogActivity';
 import { Search } from './pages/Search';
@@ -28,6 +29,7 @@ import { debugLog, debugError } from './utils/logger';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { getOneSignalInstance } from './utils/getOneSignal';
+import { GuidedTour, type GuidedStep } from './components/onboarding/GuidedTour';
 
 type AppView = 'home' | 'profile' | 'library' | 'insights' | 'search' | 'debug' | 'social';
 
@@ -91,6 +93,9 @@ function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [checkingOnboarding, setCheckingOnboarding] = useState(false); // FIX: Start false, set true only when needed
   const [refreshKey, setRefreshKey] = useState(0);
+  const [hasSeenGuidedTour, setHasSeenGuidedTour] = useState<boolean | null>(null);
+  const [showGuidedTour, setShowGuidedTour] = useState(false);
+  const [guidedTourKey, setGuidedTourKey] = useState(0);
 
   // Hook 7: Check intro status (first check, before everything)
   useEffect(() => {
@@ -113,6 +118,22 @@ function App() {
       }
     }
   }, []);
+
+  const guidedKeyFor = (uid?: string | null) =>
+    uid ? `lexu_guided_tour_done_${uid}` : 'lexu_guided_tour_done';
+
+  // Hook 8.5: Guided tour completion state (persist per user, backward compatible)
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      setHasSeenGuidedTour(true);
+      return;
+    }
+    const key = guidedKeyFor(user?.id);
+    const done =
+      localStorage.getItem(key) === '1' ||
+      localStorage.getItem('lexu_guided_tour_done') === '1';
+    setHasSeenGuidedTour(done);
+  }, [user?.id]);
 
   // Hook 9: Check onboarding status (NON-BLOQUANT)
   useEffect(() => {
@@ -152,6 +173,14 @@ function App() {
       setCheckingOnboarding(false);
     }
   }, [user, needsLanguageOnboarding, profile, profileLoading, isOnboardingComplete]);
+
+  // Hook 10.5: Lancer le tutoriel guidé après onboarding
+  useEffect(() => {
+    if (!user || !profileResolved || !isOnboardingComplete) return;
+    if (hasSeenGuidedTour === null) return;
+    if (hasSeenGuidedTour) return;
+    setShowGuidedTour(true);
+  }, [user, profileResolved, isOnboardingComplete, hasSeenGuidedTour]);
 
   // Hook 10: Routing basé sur l'URL (réactif à location.pathname)
   useEffect(() => {
@@ -215,6 +244,128 @@ function App() {
     setHasSeenIntro(true);
   };
 
+  const handleGuidedTourClose = () => {
+    if (typeof window !== 'undefined') {
+      const key = guidedKeyFor(user?.id);
+      localStorage.setItem(key, '1');
+      localStorage.setItem('lexu_guided_tour_done', '1'); // backward compat
+    }
+    setHasSeenGuidedTour(true);
+    setShowGuidedTour(false);
+  };
+
+  const handleGuidedTourRestart = () => {
+    if (typeof window !== 'undefined') {
+      const key = guidedKeyFor(user?.id);
+      localStorage.removeItem(key);
+      localStorage.removeItem('lexu_guided_tour_done'); // backward compat
+    }
+    setHasSeenGuidedTour(false);
+    setGuidedTourKey((k) => k + 1); // force remount pour reset l'étape active
+    setShowGuidedTour(true);
+  };
+
+  const delay = useCallback((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)), []);
+
+  const guidedSteps = useMemo<GuidedStep[]>(() => [
+    {
+      id: 'welcome',
+      title: 'Bienvenue sur Lexu',
+      description: 'On te guide pour prendre en main la bibliothèque, le scan, les sessions de lecture, les résumés IA et le social.',
+      placement: 'center',
+    },
+    {
+      id: 'library-nav',
+      title: 'Ta bibliothèque',
+      description: 'Accède à ta bibliothèque pour ajouter ou gérer tes livres.',
+      selector: '[data-tour-target="nav-library"]',
+      placement: 'top',
+      onEnter: async () => {
+        if (currentView !== 'library') handleNavigate('library');
+        await delay(200);
+        setShowScanner(false);
+      },
+    },
+    {
+      id: 'scanner',
+      title: 'Scanner un livre',
+      description: 'Utilise le scanner pour ajouter un livre en quelques secondes.',
+      selector: '[data-tour-target="library-scanner"]',
+      placement: 'bottom',
+      onEnter: async () => {
+        if (currentView !== 'library') handleNavigate('library');
+        setShowScanner(false);
+        await delay(200);
+      },
+    },
+    {
+      id: 'manual-add',
+      title: 'Ajout manuel / base',
+      description: 'Ajoute un livre manuellement ou via la base de données si tu préfères.',
+      selector: '[data-tour-target="library-add-manual"]',
+      placement: 'left',
+      onEnter: async () => {
+        if (currentView !== 'library') handleNavigate('library');
+        setShowScanner(false);
+        await delay(200);
+      },
+    },
+    {
+      id: 'session',
+      title: 'Sessions & résumés IA',
+      description: 'Lance une session de lecture pour suivre ton temps, tes pages et générer un résumé IA.',
+      selector: '[data-tour-target="fab-speed-dial"]',
+      placement: 'top',
+      onEnter: async () => {
+        await delay(100);
+      },
+    },
+    {
+      id: 'ia-recap',
+      title: 'Résumé IA',
+      description: 'Ouvre le résumé IA d’un livre pour retrouver tes insights.',
+      selector: '[data-tour-target="library-ia"]',
+      placement: 'top',
+      onEnter: async () => {
+        if (currentView !== 'library') handleNavigate('library');
+        await delay(200);
+      },
+    },
+    {
+      id: 'stats',
+      title: 'Stats globales',
+      description: 'Visualise tes tendances et KPIs dans l’onglet Stats.',
+      selector: '[data-tour-target="nav-insights"]',
+      placement: 'top',
+      onEnter: async () => {
+        if (currentView !== 'insights') handleNavigate('insights');
+        await delay(200);
+      },
+    },
+    {
+      id: 'friends',
+      title: 'Ajouter des amis',
+      description: 'Depuis ton profil, ajoute ou cherche des amis à suivre.',
+      selector: '[data-tour-target="profile-add-friend"]',
+      placement: 'bottom',
+      onEnter: async () => {
+        if (currentView !== 'profile') handleNavigate('profile');
+        await delay(200);
+      },
+    },
+    {
+      id: 'feed',
+      title: 'Accueil & fil',
+      description: 'Reviens à l’accueil pour voir les lectures et actus de tes amis.',
+      selector: '[data-tour-target="nav-home"]',
+      placement: 'top',
+      onEnter: async () => {
+        if (currentView !== 'home') handleNavigate('home');
+        await delay(200);
+      },
+    },
+  ], [currentView, handleNavigate, delay]);
+
   // ============================================
   // RENDER CONDITIONNEL (après tous les hooks)
   // ============================================
@@ -240,8 +391,8 @@ function App() {
   // Sinon, afficher l'UI même si checkingOnboarding est true (non-bloquant)
   if (loading && !user) {
     return (
-      <div className="min-h-screen bg-background-light flex items-center justify-center">
-        <div className="text-text-sub-light">Chargement...</div>
+      <div className="min-h-screen bg-[rgb(0,0,0)] flex items-center justify-center">
+        <div className="text-[rgb(255,255,255)]">Chargement...</div>
       </div>
     );
   }
@@ -249,8 +400,8 @@ function App() {
   // Show loader while profile is loading (but only if we have a user)
   if (user && profileLoading && !profile) {
     return (
-      <div className="min-h-screen bg-background-light flex items-center justify-center">
-        <div className="text-text-sub-light">Chargement du profil...</div>
+      <div className="min-h-screen bg-[rgb(0,0,0)] flex items-center justify-center">
+        <div className="text-[rgb(255,255,255)]">Chargement du profil...</div>
       </div>
     );
   }
@@ -331,6 +482,13 @@ function App() {
     return <ManageBook bookId={bookId} />;
   }
 
+  // Route dédiée pour la vue par jour des activités : /insights/day/:dateKey
+  const insightsDayMatch = path.match(/^\/insights\/day\/([^/]+)$/);
+  if (insightsDayMatch) {
+    const [, dateKey] = insightsDayMatch;
+    return <InsightsDayPage dateKey={decodeURIComponent(dateKey)} />;
+  }
+
   // Route dédiée pour les détails d'une activité : /activity/:id
   const activityMatch = path.match(/^\/activity\/([^/]+)$/);
   if (activityMatch) {
@@ -356,9 +514,20 @@ function App() {
             onNavigate={handleNavigate as (view: 'home' | 'search' | 'library' | 'profile' | 'insights' | 'social') => void}
             onStartSession={() => setShowActiveSession(true)}
             onOpenScanner={handleOpenScanner}
+            hideActiveSessionBanner={showActiveSession}
           >
             {currentView === 'home' && <Home key={`home-${refreshKey}`} />}
-            {currentView === 'profile' && <Profile key={`profile-${refreshKey}`} onNavigateToLibrary={() => handleNavigate('library')} />}
+            {currentView === 'profile' && (
+              <Profile
+                key={`profile-${refreshKey}`}
+                onNavigateToLibrary={() => handleNavigate('library')}
+                onRestartTour={() => {
+                  handleGuidedTourRestart();
+                  // Notifier le GuidedTour pour reset l'étape en cours
+                  window.dispatchEvent(new Event('lexu:restart-tour'));
+                }}
+              />
+            )}
             {currentView === 'library' && <Library key={`library-${refreshKey}`} onNavigateToSearch={() => handleNavigate('search')} showScanner={showScanner} onCloseScanner={() => setShowScanner(false)} onOpenScanner={() => setShowScanner(true)} />}
             {currentView === 'insights' && <Insights key={`insights-${refreshKey}`} />}
           </AppLayout>
@@ -386,6 +555,13 @@ function App() {
               }}
             />
           )}
+
+          <GuidedTour
+            key={guidedTourKey}
+            open={showGuidedTour}
+            steps={guidedSteps}
+            onClose={handleGuidedTourClose}
+          />
         </>
       </ProtectedRoute>
     </ErrorBoundary>

@@ -105,46 +105,10 @@ export async function pickImageBlob(): Promise<{ blob: Blob; contentType: string
 
       return { blob, contentType, ext };
     } else {
-      // Web: use file input
-      const file = await new Promise<File | null>((resolve) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.onchange = (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0];
-          resolve(file || null);
-        };
-        input.oncancel = () => resolve(null);
-        input.click();
-      });
-
-      if (!file) {
-        if (import.meta.env.DEV) {
-          console.log('[pickImageBlob] User cancelled file selection');
-        }
-        return null;
-      }
-
-      if (!file.type.startsWith('image/')) {
-        if (import.meta.env.DEV) {
-          console.warn('[pickImageBlob] Selected file is not an image:', file.type);
-        }
-        return null;
-      }
-
-      const contentType = file.type || 'image/jpeg';
-      const ext = getExtensionFromMime(contentType);
-
-      if (import.meta.env.DEV) {
-        console.log('[pickImageBlob] Web pick success', {
-          fileName: file.name,
-          contentType,
-          size: file.size,
-          ext,
-        });
-      }
-
-      return { blob: file, contentType, ext };
+      // Web: This function should NOT be used on web
+      // Use hidden <input type="file"> with ref + click() pattern instead
+      console.warn('[pickImageBlob] Web platform detected - use hidden input + ref pattern instead');
+      return null;
     }
   } catch (error: any) {
     // User cancelled - return null silently

@@ -8,6 +8,8 @@ import { uploadImageToSupabase } from '../lib/imageUpload';
 import { useImagePicker } from '../hooks/useImagePicker';
 import { searchBooks as searchGoogleBooks, Book as GoogleBook } from '../lib/googleBooks';
 import { searchBooks as searchOpenLibraryBooks } from '../services/openLibrary';
+import { upsertPooledCover } from '../lib/pooledCovers';
+import { canonicalBookKey } from '../lib/bookSocial';
 
 // Protection contre double submit (React StrictMode)
 const isSubmittingRef = { current: false };
@@ -394,13 +396,14 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
 
       // Upload cover if blob selected
       let coverUrlValue: string | null = null;
+      let coverStoragePath: string | null = null;
 
       if (coverBlob) {
         console.log('[AddManualBookModal] 🔵 Uploading cover...');
         setUploadingCover(true);
         try {
           const ext = coverExt === 'jpg' ? 'jpg' : coverExt;
-          const { publicUrl } = await uploadImageToSupabase(supabase, {
+          const { path: storagePath, publicUrl } = await uploadImageToSupabase(supabase, {
             bucket: 'book-covers',
             userId: userId,
             kind: 'cover',
@@ -408,8 +411,9 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
             ext: ext,
             bookId: bookId,
           });
-          // Store the public URL
+          // Store the public URL and storage path
           coverUrlValue = publicUrl;
+          coverStoragePath = storagePath;
           console.log('[AddManualBookModal] ✅ Cover uploaded:', publicUrl);
           setUploadingCover(false);
         } catch (uploadError: any) {
@@ -440,6 +444,48 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
         if (booksUpdateError) {
           // Log error but don't fail the upload (non-critical)
           console.warn('[AddManualBookModal] Failed to update books.cover_url:', booksUpdateError);
+        }
+
+        // Upsert into public.book_covers pool (non-blocking, non-critical)
+        // This allows other users to reuse this cover for the same book_key
+        if (coverStoragePath && user) {
+          try {
+            // Get book_key from the created book
+            // Fetch book data to get full metadata for canonicalBookKey
+            const { data: bookDataForPool } = await supabase
+              .from('books')
+              .select('id, isbn, isbn13, isbn10, google_books_id, openlibrary_work_key, openlibrary_edition_key')
+              .eq('id', bookId)
+              .maybeSingle();
+
+            if (bookDataForPool) {
+              // Get book_key using canonicalBookKey (handles ISBN, UUID, etc.)
+              const bookKey = canonicalBookKey(bookDataForPool);
+
+              if (bookKey && bookKey !== 'unknown') {
+                // Upsert into pool (non-blocking)
+                const { success, error: upsertError } = await upsertPooledCover({
+                  bookKey,
+                  storagePath: coverStoragePath,
+                  width: null, // Optional: can be obtained later if needed
+                  height: null, // Optional: can be obtained later if needed
+                  createdBy: user.id,
+                });
+
+                if (!success && upsertError) {
+                  // Log error but don't fail (non-critical)
+                  console.warn('[AddManualBookModal] Failed to upsert pooled cover:', upsertError);
+                } else if (success) {
+                  console.debug('[AddManualBookModal] Successfully added cover to pool:', bookKey);
+                }
+              } else {
+                console.debug('[AddManualBookModal] Cannot add to pool: book_key is unknown', bookDataForPool);
+              }
+            }
+          } catch (poolError: any) {
+            // Non-critical error, log but don't fail
+            console.warn('[AddManualBookModal] Error upserting pooled cover (non-critical):', poolError);
+          }
         }
       }
 
@@ -521,10 +567,24 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
     e.stopPropagation();
   };
 
+  // Set modalOpen flag on body to block tabbar clicks
+  useEffect(() => {
+    document.body.dataset.modalOpen = '1';
+    return () => {
+      document.body.dataset.modalOpen = '';
+    };
+  }, []);
+
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       onPointerDown={handleBackdropPointerDown}
+      onClickCapture={(e) => {
+        // Prevent clicks from propagating to tabbar/navigation
+        if (e.target === e.currentTarget) {
+          e.stopPropagation();
+        }
+      }}
     >
       {/* Backdrop - absolute pour bloquer les touches derrière */}
       <div 
@@ -539,7 +599,10 @@ export function AddManualBookModal({ onClose, onAdded }: AddManualBookModalProps
       {/* Contenu modal - pointer-events-auto pour être cliquable */}
       <div 
         className="relative bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto pointer-events-auto"
-        onClick={handleModalContentClick}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
       >
         <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between rounded-t-2xl z-10">
           <div className="flex items-center gap-3 flex-1 min-w-0">

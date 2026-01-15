@@ -25,12 +25,18 @@ export function BottomNav({
   const fabRef = useRef<HTMLButtonElement>(null);
   const [fabPosition, setFabPosition] = useState({ bottom: 0, left: 0 });
   const [modalOpen, setModalOpen] = useState(false);
+  const [activeSessionOpen, setActiveSessionOpen] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
-  // ✅ Lire document.body.dataset.modalOpen pour désactiver la tabbar quand un modal est ouvert
+  // ✅ Lire document.body.dataset.modalOpen et data-activeSession pour désactiver/masquer la tabbar
   useEffect(() => {
     const checkModalOpen = () => {
-      const isOpen = document.body.dataset.modalOpen === '1';
-      setModalOpen(isOpen);
+      const isModalOpen = document.body.dataset.modalOpen === '1';
+      const isActiveSession = document.body.dataset.activeSession === '1';
+      const isScanner = document.body.dataset.scannerOpen === '1';
+      setModalOpen(isModalOpen);
+      setActiveSessionOpen(isActiveSession);
+      setScannerOpen(isScanner);
     };
 
     // Check initial
@@ -40,7 +46,7 @@ export function BottomNav({
     const observer = new MutationObserver(checkModalOpen);
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ['data-modal-open'],
+      attributeFilter: ['data-modal-open', 'data-active-session', 'data-scanner-open'],
     });
 
     return () => observer.disconnect();
@@ -58,6 +64,11 @@ export function BottomNav({
       });
     }
   }, [isFabOpen]);
+
+  // Si session active : ne rien rendre (cacher tabbar + FAB)
+  if (activeSessionOpen || scannerOpen) {
+    return null;
+  }
 
   const handleFabClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -99,7 +110,8 @@ export function BottomNav({
         onClick={handleFabClick}
         aria-expanded={isFabOpen}
         aria-label={isFabOpen ? "Fermer" : "Ouvrir le menu"}
-        className={`fixed rounded-full bg-primary border-4 border-white flex items-center justify-center active:scale-95 transition-all z-[1200] ${
+        data-tour-target="fab-speed-dial"
+        className={`fixed rounded-full bg-primary border-4 border-white flex items-center justify-center active:scale-95 transition-all ${
           isFabOpen ? "animate-pulse-glow" : ""
         }`}
         style={{
@@ -110,12 +122,19 @@ export function BottomNav({
           transform: "translateX(-50%)",
           boxShadow: "0 6px 28px rgba(249, 245, 6, 0.5)",
           pointerEvents: modalOpen ? 'none' : 'auto',
+          zIndex: isFabOpen ? 2147483647 : 1200,
         }}
       >
         {isFabOpen ? (
-          <X className="w-7 h-7 text-black transition-transform duration-300" />
+          <X
+            className="w-7 h-7 transition-transform duration-300"
+            style={{ color: '#000' }}
+          />
         ) : (
-          <div className="w-7 h-7 rounded-full bg-black" />
+          <div
+            className="w-7 h-7 rounded-full"
+            style={{ backgroundColor: "rgba(53, 57, 29, 1)" }}
+          />
         )}
       </button>
 
@@ -133,6 +152,7 @@ export function BottomNav({
           {/* Home */}
           <button
             onClick={() => onNavigate("home")}
+            data-tour-target="nav-home"
             className={`flex flex-col items-center gap-1 text-xs ${
               currentView === "home" ? "text-black font-semibold" : "text-black/50"
             }`}
@@ -144,6 +164,7 @@ export function BottomNav({
           {/* Stats/Insights */}
           <button
             onClick={() => onNavigate("insights")}
+            data-tour-target="nav-insights"
             className={`flex flex-col items-center gap-1 text-xs ${
               currentView === "insights" ? "text-black font-semibold" : "text-black/50"
             }`}
@@ -158,6 +179,7 @@ export function BottomNav({
           {/* Library */}
           <button
             onClick={() => onNavigate("library")}
+            data-tour-target="nav-library"
             className={`flex flex-col items-center gap-1 text-xs ${
               currentView === "library" ? "text-black font-semibold" : "text-black/50"
             }`}
@@ -169,6 +191,7 @@ export function BottomNav({
           {/* Profile */}
           <button
             onClick={() => onNavigate("profile")}
+            data-tour-target="nav-profile"
             className={`flex flex-col items-center gap-1 text-xs ${
               currentView === "profile" ? "text-black font-semibold" : "text-black/50"
             }`}

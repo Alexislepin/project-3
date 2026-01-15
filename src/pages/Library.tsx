@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef, useCallback, useLayoutEffect } from 'react';
+import { useEffect, useState, useRef, useCallback, useLayoutEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus, Sparkles, RefreshCw, Heart, X } from 'lucide-react';
+import { Book, Search as SearchIcon, TrendingUp, Scan, MoreVertical, Plus, Sparkles, RefreshCw, Heart, MessageCircle, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { BookDetailsWithManagement } from '../components/BookDetailsWithManagement';
 import { BookDetailsModal } from '../components/BookDetailsModal';
@@ -19,6 +19,7 @@ import { fetchByIsbn as fetchOpenLibraryByIsbn, searchBooks as searchOpenLibrary
 import { ensureBookInDB } from '../lib/booksUpsert';
 import { getTranslatedDescription } from '../lib/translate';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../contexts/ThemeContext';
 import { useSwipeTabs } from '../lib/useSwipeTabs';
 import { AppHeader } from '../components/AppHeader';
 import { getBookSocialCounts, normalizeBookKey, canonicalBookKey, candidateBookKeysFromBook, type BookSocialCounts } from '../lib/bookSocial';
@@ -49,10 +50,34 @@ interface LibraryProps {
   onOpenScanner?: () => void;
 }
 
+// Helper to detect duplicate like constraint errors returned by Supabase
+const isDuplicateLikeError = (err: any) => {
+  const code = err?.code?.toString?.();
+  const message = err?.message || '';
+  const details = err?.details || '';
+
+  return (
+    code === '23505' ||
+    (code === '409' && details.includes('duplicate key value')) ||
+    message.includes('duplicate key value') ||
+    details.includes('duplicate key value') ||
+    details.includes('book_likes_user_book_uuid_unq')
+  );
+};
+
 export function Library({ onNavigateToSearch, showScanner: externalShowScanner, onCloseScanner, onOpenScanner }: LibraryProps) {
   const { t } = useTranslation();
+  const { resolved } = useTheme();
   const [userBooks, setUserBooks] = useState<any[]>([]);
   const [filter, setFilter] = useState<FilterType>('reading');
+  const isDarkMode = useMemo(() => {
+    if (resolved === 'dark') return true;
+    if (typeof document !== 'undefined') {
+      // Fallback in case the ThemeContext resolved value is out of sync with the DOM
+      return document.documentElement.classList.contains('theme-dark') || document.body.classList.contains('theme-dark');
+    }
+    return false;
+  }, [resolved]);
   const [loading, setLoading] = useState(true);
   const [detailsBookId, setDetailsBookId] = useState<string | null>(null);
   const { user } = useAuth();
@@ -66,8 +91,13 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
   const [enrichDisabled, setEnrichDisabled] = useState(false); // Circuit breaker pour éviter le spam d'enrichissement
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<GoogleBook[]>([]);
+  const [searchSocialCounts, setSearchSocialCounts] = useState<BookSocialCounts>({});
+  const [searchPage, setSearchPage] = useState(0); // page index for explore pagination
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [loadingMoreSearch, setLoadingMoreSearch] = useState(false);
   const [searching, setSearching] = useState(false);
   const [booksInLibrary, setBooksInLibrary] = useState<Set<string>>(new Set()); // Track books already in library (by book_id or isbn)
+  const [userCustomCovers, setUserCustomCovers] = useState<Record<string, string>>({});
   const [addingBookId, setAddingBookId] = useState<string | null>(null);
   const [internalShowScanner, setInternalShowScanner] = useState(false);
   const showScanner = externalShowScanner !== undefined ? externalShowScanner : internalShowScanner;
@@ -130,15 +160,30 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
   // ✅ États pour BookRecapModal
   const [recapUI, setRecapUI] = useState<RecapUIState>(DEFAULT_RECAP_UI);
   const [recapTabTouched, setRecapTabTouched] = useState(false);
-  const recapReqRef = useRef<string | null>(null);
+  const recapReqIdRef = useRef(0);
   const [addCoverBookId, setAddCoverBookId] = useState<string | null>(null);
   const [addCoverBookTitle, setAddCoverBookTitle] = useState<string>('');
   const searchBarRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [searchBarHeight, setSearchBarHeight] = useState(0);
   const [headerH, setHeaderH] = useState(56);
   const searchTimeoutRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const searchLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const SEARCH_PAGE_SIZE = 20;
+
+  const getFilterButtonClasses = (tab: FilterType) => {
+    const base = 'flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0';
+    if (filter === tab) {
+      return `${base} bg-primary ${isDarkMode ? 'text-white' : 'text-black'} shadow-sm`;
+    }
+    return isDarkMode
+      ? `${base} bg-[#161618] text-white hover:bg-[#1f1f24]`
+      : `${base} bg-gray-100 text-text-main-light hover:bg-gray-200`;
+  };
+
+  const filterButtonStyle = isDarkMode ? { color: '#fff' } : undefined;
 
   // ✅ Calculer si un modal est ouvert (pour désactiver la tabbar)
   const anyModalOpen = Boolean(
@@ -169,6 +214,85 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       document.body.dataset.modalOpen = '0';
     };
   }, [anyModalOpen]);
+
+  // ✅ Masquer complètement tabbar/FAB pendant le scanner (comportement écran plein)
+  useEffect(() => {
+    if (showScanner) {
+      document.body.dataset.scannerOpen = '1';
+    } else {
+      document.body.dataset.scannerOpen = '0';
+    }
+    return () => {
+      document.body.dataset.scannerOpen = '0';
+    };
+  }, [showScanner]);
+
+  // Utility function to build multiple candidate keys for matching custom covers
+  const buildCoverKeysForDbBook = useCallback((b: any): string[] => {
+    const keys = new Set<string>();
+
+    const bk = canonicalBookKey(b) || (b.book_key ? normalizeBookKey(b.book_key) : null) || b.book_key;
+    if (bk) keys.add(bk);
+
+    if (b.isbn) {
+      const clean = String(b.isbn).replace(/[-\s]/g, '');
+      if (clean) {
+        keys.add(`isbn:${clean}`);
+        keys.add(clean);
+      }
+    }
+
+    if (b.google_books_id) {
+      keys.add(`google:${b.google_books_id}`);
+      keys.add(b.google_books_id);
+    }
+
+    // Optionnel: si tu as openlibrary keys
+    if (b.openlibrary_work_key) keys.add(normalizeBookKey(b.openlibrary_work_key));
+    if (b.openlibrary_edition_key) keys.add(normalizeBookKey(b.openlibrary_edition_key));
+
+    return Array.from(keys).filter(Boolean) as string[];
+  }, []);
+
+  // Load user custom covers from user_books table
+  const loadUserCustomCovers = useCallback(async () => {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from('user_books')
+      .select(`
+        custom_cover_url,
+        book:books(
+          id,
+          book_key,
+          isbn,
+          google_books_id,
+          openlibrary_work_key,
+          openlibrary_edition_key
+        )
+      `)
+      .eq('user_id', user.id)
+      .not('custom_cover_url', 'is', null);
+
+    if (error) {
+      console.warn('[Library] loadUserCustomCovers error', error);
+      return;
+    }
+
+    const map: Record<string, string> = {};
+    (data || []).forEach((row: any) => {
+      if (!row?.custom_cover_url || !row?.book) return;
+      const url = row.custom_cover_url as string;
+
+      const keys = buildCoverKeysForDbBook(row.book);
+      keys.forEach((k) => {
+        map[k] = url;
+      });
+    });
+
+    setUserCustomCovers(map);
+    console.log('[Library] custom covers loaded', Object.keys(map).length);
+  }, [user?.id, buildCoverKeysForDbBook]);
 
   // Swipe horizontal entre tabs
   const tabs = ['all', 'reading', 'want_to_read', 'completed', 'explore'] as FilterType[];
@@ -239,6 +363,13 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       }
     }
   }, [filter, user, explorerSearch.query]);
+
+  // Clear search query/results when switching tabs
+  useEffect(() => {
+    setSearchQuery('');
+    explorerSearch.clear();
+    setSearchResults([]);
+  }, [filter]);
 
   // Load books in library when component mounts or user changes (for explore tab)
   useEffect(() => {
@@ -627,6 +758,14 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
     setLoading(false);
   };
 
+  // Load user custom covers when switching to Explorer tab
+  useEffect(() => {
+    if (!user) return;
+    if (filter === 'explore') {
+      loadUserCustomCovers();
+    }
+  }, [filter, user?.id, loadUserCustomCovers]);
+
   // Handle search query changes in Explorer tab
   useEffect(() => {
     if (filter !== 'explore') return;
@@ -879,16 +1018,20 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       return;
     }
 
-    // For "explore" tab: search via APIs (Google Books + OpenLibrary)
+    // For "explore" tab: search via APIs (Google Books + OpenLibrary) with pagination
     if (filter === 'explore') {
       if (query.trim().length < 3) {
         setSearchResults([]);
+        setSearchPage(0);
+        setSearchHasMore(false);
         setSearching(false);
         setRateLimitError(false);
         // If query is empty, reload community feed
         if (query.trim().length === 0) {
           // Reset search results and reload community feed
           setSearchResults([]);
+          setSearchPage(0);
+          setSearchHasMore(false);
           if (communityFeed.books.length === 0 && !communityFeed.loading) {
             communityFeed.refresh();
           }
@@ -897,6 +1040,9 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       }
 
       setSearching(true);
+      setSearchPage(0);
+      setSearchHasMore(false);
+      setLoadingMoreSearch(false);
       
       // Debounce API calls
       searchTimeoutRef.current = window.setTimeout(async () => {
@@ -946,10 +1092,34 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
           }
 
           setSearchResults(results);
+      // Preload social counts for results that have a canonical key
+      try {
+        if (filter === 'explore' && results.length > 0 && user?.id) {
+          const keys = results
+            .map((b) => canonicalBookKey(b) || normalizeBookKey((b as any).book_key) || null)
+            .filter((k): k is string => !!k && k !== 'unknown');
+          const uniqueKeys = Array.from(new Set(keys));
+          if (uniqueKeys.length > 0) {
+            const counts = await getBookSocialCounts(uniqueKeys, user.id);
+            setSearchSocialCounts(counts);
+          } else {
+            setSearchSocialCounts({});
+          }
+        } else {
+          setSearchSocialCounts({});
+        }
+      } catch (e) {
+        console.warn('[Explore Search] preload social counts failed', e);
+      }
+          setSearchPage(1);
+          setSearchHasMore(results.length === SEARCH_PAGE_SIZE);
           setSearching(false);
         } catch (error) {
           fatalError('Unexpected error in Explorer search:', error);
           setSearchResults([]);
+      setSearchSocialCounts({});
+          setSearchPage(0);
+          setSearchHasMore(false);
           setSearching(false);
         }
       }, 300); // 300ms debounce
@@ -1246,6 +1416,53 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
         // Don't fail the whole operation if event creation fails
       }
 
+      // ✅ Create progress_import activity if current_page > 0 (for recap context)
+      // This activity is used by book_recap_v2 to know the user has progress, even without notes
+      if (normalizedState.current_page && normalizedState.current_page > 0) {
+        try {
+          // Check if progress_import activity already exists (avoid duplicates)
+          const { data: existingProgress } = await supabase
+            .from('activities')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('book_id', bookId)
+            .eq('type', 'progress_import')
+            .maybeSingle();
+
+          if (!existingProgress) {
+            // Create synthetic activity to materialize progress import
+            const progressActivityId = crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+            const { error: activityError } = await supabase
+              .from('activities')
+              .insert({
+                id: progressActivityId,
+                user_id: userId,
+                book_id: bookId,
+                type: 'progress_import',
+                title: `Import de progression (page ${normalizedState.current_page})`,
+                pages_read: normalizedState.current_page,
+                notes: null,
+                duration_minutes: 0,
+                visibility: 'private', // Private to avoid polluting social feed
+              });
+
+            if (activityError) {
+              console.warn('[handleAddBookToLibrary] Error creating progress_import activity (non-blocking):', activityError);
+            } else {
+              console.log('[handleAddBookToLibrary] Created progress_import activity', {
+                bookId,
+                current_page: normalizedState.current_page,
+              });
+            }
+          } else {
+            console.log('[handleAddBookToLibrary] progress_import activity already exists, skipping');
+          }
+        } catch (progressError) {
+          console.warn('[handleAddBookToLibrary] Error creating progress_import activity (non-blocking):', progressError);
+          // Don't fail the whole operation if activity creation fails
+        }
+      }
+
       // Si on est dans l'onglet Explorer, ne pas faire de reload complet
       if (filter === 'explore') {
         setBookToAdd(null);
@@ -1343,23 +1560,37 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       return;
     }
     
-    // ✅ NE JAMAIS recharger si on est en train de soumettre ou si le défi a été validé
-    if (recapUI.challengeSubmitting || recapUI.hasSubmittedChallenge) {
+    // ✅ Bloquer si une soumission est en cours. Autoriser la régénération forcée même après validation du défi.
+    if (recapUI.challengeSubmitting) {
       console.log('[Library] loadRecap blocked', { 
         challengeSubmitting: recapUI.challengeSubmitting,
         hasSubmittedChallenge: recapUI.hasSubmittedChallenge
       });
       return;
     }
+    if (!force && recapUI.hasSubmittedChallenge) {
+      console.log('[Library] loadRecap blocked (challenge already submitted)');
+      return;
+    }
     
-    // ✅ Guard pour empêcher les doubles loads (StrictMode)
-    // Use safe fallback for iOS WebView compatibility
-    const reqId = `${Date.now()}-${Math.random()}`;
-    recapReqRef.current = reqId;
+    // ✅ Anti-race "stale response" propre avec compteur
+    const reqId = ++recapReqIdRef.current;
     
     console.log('[Library] loadRecap called', { force, bookId: recapBook.book.id, uptoPage: recapBook.uptoPage });
     
-    setRecapUI(s => ({ ...s, recapLoading: true, recapError: null, recapData: null }));
+    setRecapUI(s => ({ 
+      ...s, 
+      recapLoading: true, 
+      recapError: null, 
+      recapData: null,
+      // Reset challenge state when on force to permettre une nouvelle tentative
+      hasSubmittedChallenge: force ? false : s.hasSubmittedChallenge,
+      challengeResult: force ? null : s.challengeResult,
+      userAnswerDraft: force ? '' : s.userAnswerDraft,
+      submittedAnswer: force ? '' : s.submittedAnswer,
+      frozenQuestion: force ? null : s.frozenQuestion,
+      challengeSubmitting: false,
+    }));
     
     try {
       const payload: any = {
@@ -1384,9 +1615,47 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
         body: payload,
       });
       
+      // ✅ Log la réponse brute pour debug
+      console.log('[Recap] invoke result', { reqId, latest: recapReqIdRef.current, error, data });
+      
       // ✅ Ignorer les réponses obsolètes
-      if (recapReqRef.current !== reqId) {
-        console.log('[Library] loadRecap: ignoring stale response', { reqId, current: recapReqRef.current });
+      if (reqId !== recapReqIdRef.current) {
+        console.log('[Recap] ignoring stale response', { reqId, latest: recapReqIdRef.current });
+        return;
+      }
+      
+      // ✅ Fallback front-end si jamais on reçoit encore status:"no_data"
+      if (data?.status === 'no_data') {
+        console.warn('[Recap] no_data received -> converting to fallback recap', data);
+        
+        const fallback = {
+          ultra_20s: "Rappel prêt, même sans notes.",
+          summary:
+            "Je n'ai pas encore de notes/sessions enregistrées. Voici un aperçu général. Ajoute une note ou termine une session pour enrichir le rappel.",
+          key_takeaways: [
+            "Aperçu général (sans spoiler)",
+            "Thèmes majeurs",
+            "Contexte",
+            "Ce qu'il faut suivre en lisant",
+            "Ajoute une note pour personnaliser",
+          ],
+          characters: [],
+          detailed:
+            "Conseil : ajoute une note rapide ou enregistre une session (même 1 minute) pour générer un rappel personnalisé.",
+          challenge: {
+            question: "Comment rendre ce rappel plus pertinent ?",
+            answer: "Ajouter une note ou une session de lecture.",
+            explanation: "Cela donne du contexte réel à l'IA.",
+          },
+          meta: data?.meta,
+        };
+        
+        setRecapUI(s => ({
+          ...s,
+          recapLoading: false,
+          recapData: fallback,
+          recapError: null,
+        }));
         return;
       }
       
@@ -1403,31 +1672,12 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       
       if (data && data.ok === false) {
         const requestId = data.requestId || data.meta?.requestId || 'unknown';
-        if (data.status === 'no_data') {
-          setRecapUI(s => ({
-            ...s,
-            recapLoading: false,
-            recapData: null,
-            recapError: null,
-          }));
-          return;
-        }
         const errorMessage = data.error || 'Impossible de charger le rappel';
         const details = data.meta?.details ? ` (${data.meta.details})` : '';
         setRecapUI(s => ({
           ...s,
           recapLoading: false,
           recapError: { message: `${errorMessage}${details}`, requestId },
-        }));
-        return;
-      }
-      
-      if (data && data.status === 'no_data') {
-        setRecapUI(s => ({
-          ...s,
-          recapLoading: false,
-          recapData: null,
-          recapError: null,
         }));
         return;
       }
@@ -1468,7 +1718,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
         }));
       }
     } catch (err) {
-      if (recapReqRef.current !== reqId) return;
+        if (reqId !== recapReqIdRef.current) return;
       const errorMessage = err instanceof Error ? err.message : 'Erreur inattendue';
       setRecapUI(s => ({
         ...s,
@@ -1830,6 +2080,221 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
     });
   }, [searchBarHeight]);
 
+  // CTA: send user to Explore tab + focus search bar
+  const focusExploreSearch = () => {
+    setFilter('explore');
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchPage(0);
+    setSearchHasMore(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 50);
+  };
+
+  const loadMoreSearchResults = useCallback(async () => {
+    if (filter !== 'explore') return;
+    if (!searchQuery || searchQuery.trim().length < 3) return;
+    if (loadingMoreSearch || searching || !searchHasMore) return;
+
+    setLoadingMoreSearch(true);
+    try {
+      let results: GoogleBook[] = [];
+
+      // Try Google Books with pagination
+      try {
+        const start = searchPage * SEARCH_PAGE_SIZE;
+        const googleMore = await searchGoogleBooks(searchQuery.trim(), undefined, start, SEARCH_PAGE_SIZE);
+        if (googleMore && googleMore.length > 0) {
+          results = googleMore;
+          debugLog(`[Library Explorer Load More] Google returned ${googleMore.length} items (page ${searchPage})`);
+        }
+      } catch (googleError: any) {
+        debugLog('[Library Explorer Load More] Google error, trying OpenLibrary:', googleError);
+      }
+
+      // Fallback to OpenLibrary pagination if Google empty
+      if (results.length === 0) {
+        try {
+          const olPage = searchPage + 1; // OpenLibrary pages are 1-based
+          const olResults = await searchOpenLibraryBooks(searchQuery.trim(), olPage);
+          if (olResults && olResults.length > 0) {
+            results = olResults.map((olBook) => ({
+              id: olBook.openLibraryKey || olBook.isbn || `ol-${olBook.title}-${olPage}`,
+              title: olBook.title,
+              authors: olBook.author,
+              category: undefined,
+              pageCount: undefined,
+              publisher: undefined,
+              isbn: olBook.isbn || undefined,
+              isbn13: olBook.isbn13 || undefined,
+              isbn10: olBook.isbn10 || undefined,
+              description: undefined,
+              thumbnail: olBook.coverUrl || undefined,
+              cover_i: olBook.cover_i,
+            }));
+            debugLog(`[Library Explorer Load More] OpenLibrary returned ${olResults.length} items (page ${olPage})`);
+          }
+        } catch (olError) {
+          debugLog('[Library Explorer Load More] OpenLibrary error:', olError);
+        }
+      }
+
+      if (results.length > 0) {
+        setSearchResults((prev) => {
+          const next = [...prev, ...results];
+          // Preload social counts for new results
+          if (filter === 'explore' && user?.id) {
+            const keys = next
+              .map((b) => canonicalBookKey(b) || normalizeBookKey((b as any).book_key) || null)
+              .filter((k): k is string => !!k && k !== 'unknown');
+            const uniqueKeys = Array.from(new Set(keys));
+            if (uniqueKeys.length > 0) {
+              getBookSocialCounts(uniqueKeys, user.id)
+                .then((counts) => setSearchSocialCounts(counts))
+                .catch((e) => console.warn('[Explore LoadMore] preload social counts failed', e));
+            }
+          }
+          return next;
+        });
+        setSearchPage((prev) => prev + 1);
+        setSearchHasMore(results.length === SEARCH_PAGE_SIZE);
+      } else {
+        setSearchHasMore(false);
+      }
+    } catch (error) {
+      fatalError('Unexpected error loading more search results:', error);
+      setSearchHasMore(false);
+    } finally {
+      setLoadingMoreSearch(false);
+    }
+  }, [SEARCH_PAGE_SIZE, filter, loadingMoreSearch, searchHasMore, searchPage, searchQuery, searching]);
+
+  const toggleSearchLike = useCallback(
+    async (
+      bookKey: string,
+      title: string,
+      currentLikes: number,
+      currentComments: number,
+      currentlyLiked: boolean,
+    ) => {
+      if (!user?.id) {
+        setToast({ message: 'Connecte-toi pour liker', type: 'info' });
+        return;
+      }
+      if (!bookKey || bookKey === 'unknown') return;
+      if (likeInFlightRef.current.has(bookKey)) return;
+
+      likeInFlightRef.current.add(bookKey);
+      setLikingBookKeys((prev) => new Set(prev).add(bookKey));
+
+      const prevCounts = searchSocialCounts[bookKey] || { likes: currentLikes, comments: currentComments, isLiked: currentlyLiked };
+      const optimisticLiked = !prevCounts.isLiked;
+      const optimisticLikes = Math.max(0, (prevCounts.likes ?? 0) + (optimisticLiked ? 1 : -1));
+
+      setSearchSocialCounts((prev) => ({
+        ...prev,
+        [bookKey]: {
+          likes: optimisticLikes,
+          comments: prevCounts.comments ?? 0,
+          isLiked: optimisticLiked,
+        },
+      }));
+
+      try {
+        const { data, error } = await supabase.rpc('toggle_book_like', { p_book_key: bookKey });
+        if (error) {
+          if (isDuplicateLikeError(error)) {
+            console.warn('[toggleSearchLike] duplicate like detected, forcing liked=true');
+            setSearchSocialCounts((prev) => ({
+              ...prev,
+              [bookKey]: {
+                likes: optimisticLikes,
+                comments: prevCounts.comments ?? 0,
+                isLiked: true,
+              },
+            }));
+            setLibrarySocialCounts((prev) => ({
+              ...prev,
+              [bookKey]: {
+                likes: optimisticLikes,
+                comments: prevCounts.comments ?? 0,
+                isLiked: true,
+              },
+            }));
+            return;
+          }
+          throw error;
+        }
+
+        const row = Array.isArray(data) ? data[0] : data;
+        if (row && typeof row.liked === 'boolean') {
+          const likesFromServer = typeof row.likes === 'number' ? Math.max(0, row.likes) : optimisticLikes;
+          setSearchSocialCounts((prev) => ({
+            ...prev,
+            [bookKey]: {
+              likes: likesFromServer,
+              comments: prevCounts.comments ?? 0,
+              isLiked: row.liked,
+            },
+          }));
+          // Keep library social counts in sync
+          setLibrarySocialCounts((prev) => ({
+            ...prev,
+            [bookKey]: {
+              likes: likesFromServer,
+              comments: prevCounts.comments ?? 0,
+              isLiked: row.liked,
+            },
+          }));
+        }
+      } catch (err) {
+        console.error('[toggleSearchLike] error', err);
+        // Rollback
+        setSearchSocialCounts((prev) => ({
+          ...prev,
+          [bookKey]: prevCounts,
+        }));
+        setToast({ message: `Erreur lors du like de "${title}"`, type: 'error' });
+      } finally {
+        likeInFlightRef.current.delete(bookKey);
+        setLikingBookKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(bookKey);
+          return next;
+        });
+      }
+    },
+    [user?.id, searchSocialCounts]
+  );
+
+  // Infinite scroll sentinel for explore search results
+  useEffect(() => {
+    if (filter !== 'explore') return;
+    if (!searchQuery || searchQuery.trim().length < 3) return;
+    const target = searchLoadMoreRef.current;
+    if (!target) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            loadMoreSearchResults();
+          }
+        });
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '200px',
+        threshold: 0.1,
+      }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filter, loadMoreSearchResults, searchQuery]);
+
   return (
     <div className="h-screen max-w-2xl mx-auto font-sans text-neutral-900 overflow-hidden" style={{ isolation: 'isolate', position: 'relative' }}>
       {/* Fixed Header - wrapper mesurable */}
@@ -1849,6 +2314,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                 // Toggle scanner: ouvrir si fermé, fermer si ouvert
                 setShowScanner(!showScanner);
               }}
+              data-tour-target="library-scanner"
               className="p-2.5 bg-primary text-black rounded-xl hover:brightness-95 transition-all shadow-sm active:scale-[0.99]"
               title={showScanner ? "Fermer le scanner" : "Scanner un code-barres"}
             >
@@ -1867,7 +2333,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
       <div 
         ref={searchBarRef}
         data-search-bar
-        className="fixed left-0 right-0 bg-white border-b border-gray-100"
+        className="fixed left-0 right-0 bg-white"
         style={{
           top: `${headerH}px`, // Positionné juste en dessous du header mesuré
           zIndex: 40, // Au-dessous du header (zIndex 60)
@@ -1876,7 +2342,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
           position: 'fixed', // Explicitly ensure fixed positioning
         }}
       >
-        <div className="max-w-2xl mx-auto px-4 py-3">
+          <div className="max-w-2xl mx-auto px-4 py-3">
           <div className="mb-3 relative">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-text-sub-light" />
             <input
@@ -1884,6 +2350,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
               placeholder="Rechercher un livre (titre, auteur...)"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
+              ref={searchInputRef}
               className={`w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white ${
                 filter === 'explore' ? 'pr-12' : ''
               }`}
@@ -1905,55 +2372,46 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
           <div className="flex gap-2 overflow-x-auto no-scrollbar">
             <button
               onClick={() => setFilter('all')}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-                filter === 'all'
-                  ? 'bg-primary text-black shadow-sm'
-                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-              }`}
+              className={getFilterButtonClasses('all')}
+              style={filterButtonStyle}
             >
               Tous
             </button>
             <button
               onClick={() => setFilter('reading')}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-                filter === 'reading'
-                  ? 'bg-primary text-black shadow-sm'
-                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-              }`}
+              className={getFilterButtonClasses('reading')}
+              style={filterButtonStyle}
             >
               En cours
             </button>
             <button
               onClick={() => setFilter('want_to_read')}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-                filter === 'want_to_read'
-                  ? 'bg-primary text-black shadow-sm'
-                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-              }`}
+              className={getFilterButtonClasses('want_to_read')}
+              style={filterButtonStyle}
             >
               À lire
             </button>
             <button
               onClick={() => setFilter('completed')}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-                filter === 'completed'
-                  ? 'bg-primary text-black shadow-sm'
-                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-              }`}
+              className={getFilterButtonClasses('completed')}
+              style={filterButtonStyle}
             >
               Terminé
             </button>
             <button
               onClick={() => setFilter('explore')}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${
-                filter === 'explore'
-                  ? 'bg-primary text-black shadow-sm'
-                  : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
-              }`}
+              className={getFilterButtonClasses('explore')}
+              style={filterButtonStyle}
             >
               Explorer
             </button>
           </div>
+
+          {filter === 'explore' && !searchQuery && (
+            <div className="mt-2 text-xs text-text-sub-light">
+              Cherche par titre, auteur ou code-barres (ISBN).
+            </div>
+          )}
         </div>
       </div>
 
@@ -1970,9 +2428,9 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
         }}
       >
         <div 
-          className="px-4 pb-4 no-scrollbar"
+          className="px-4 pb-4 no-scrollbar library-content"
           style={{
-            paddingTop: '0px', // No extra spacing after filters
+            paddingTop: '10px',
             paddingBottom: `calc(32px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`,
           }}
         >
@@ -1992,7 +2450,11 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                 <p className="font-medium">Recherche temporairement indisponible. Réessayez dans quelques secondes.</p>
               </div>
             )}
-            {searching ? (
+            {searchQuery.trim().length < 3 ? (
+              <div className="text-center py-8 text-text-sub-light">
+                Tape au moins 3 caractères pour lancer la recherche
+              </div>
+            ) : searching ? (
               <div className="text-center py-8 text-text-sub-light">Recherche en cours...</div>
             ) : searchResults.length === 0 && !rateLimitError ? (
               <div className="text-center py-8 text-text-sub-light">
@@ -2000,19 +2462,51 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
               </div>
             ) : (
               <div>
-                <h2 className="text-xl font-semibold tracking-tight mb-3">
-                  Résultats ({searchResults.length})
-                </h2>
+                <h2 className="text-xl font-semibold tracking-tight mb-3">Résultats ({searchResults.length})</h2>
                 <div className="grid grid-cols-2 gap-3">
                   {searchResults.map((book, index) => {
                     const alreadyAdded = filter === 'explore' && isBookInLibrary(book);
                     // Generate stable key: id || isbn || title-index
                     const stableKey = book.id || book.isbn13 || book.isbn10 || book.isbn || `${book.title}-${index}`;
                     
+                    // Derive bookKey from ISBN for pooled cover lookup
+                    const cleanIsbn = (book.isbn13 || book.isbn10 || book.isbn)?.replace(/[-\s]/g, '');
+                    const bookKey = cleanIsbn && cleanIsbn.length >= 10 ? `isbn:${cleanIsbn}` : null;
+
+                    // Normalize thumbnail: drop "image not available" placeholders
+                    const coverUrl =
+                      book.thumbnail &&
+                      !book.thumbnail.toLowerCase().includes('image_not_available') &&
+                      !book.thumbnail.toLowerCase().includes('no_cover')
+                        ? book.thumbnail
+                        : undefined;
+                    
+                    const hasOpenLibraryCover = Boolean((book as any).cover_i || (book as any).openlibrary_cover_id);
+                    if (!coverUrl && !hasOpenLibraryCover) {
+                      // Skip cards with no usable cover and no OpenLibrary cover fallback
+                      return null;
+                    }
+
+                    const pageCount =
+                      (book as any).pageCount ??
+                      (book as any).total_pages ??
+                      (book as any).page_count ??
+                      null;
+                    const likesCount = (book as any).likes_count ?? (book as any).likes ?? null;
+                    const commentsCount = (book as any).comments_count ?? (book as any).comments ?? null;
+                    const canonicalKey =
+                      (book as any).book_key
+                        ? canonicalBookKey({ book_key: (book as any).book_key })
+                        : canonicalBookKey(book);
+                    const social = canonicalKey ? searchSocialCounts[canonicalKey] : undefined;
+                    const likesDisplay = social?.likes ?? likesCount ?? 0;
+                    const commentsDisplay = social?.comments ?? commentsCount ?? 0;
+                    const isLiked = social?.isLiked ?? false;
+
                     return (
                       <div
                         key={stableKey}
-                        className="flex flex-col rounded-2xl bg-white border border-black/5 p-2 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden"
+                        className="flex flex-col rounded-2xl bg-white border border-black/5 p-2 shadow-[0_1px_10px_rgba(0,0,0,0.04)] overflow-hidden h-full"
                       >
                         <div className="rounded-2xl overflow-hidden bg-neutral-100 shadow-[0_10px_25px_rgba(0,0,0,0.10)]">
                           <div
@@ -2028,7 +2522,9 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                             }}
                           >
                             <BookCover
-                              coverUrl={book.thumbnail}
+                              bookKey={bookKey || undefined}
+                              book={book}
+                              coverUrl={coverUrl}
                               title={book.title}
                               author={book.authors || 'Auteur inconnu'}
                               isbn13={book.isbn13 || null}
@@ -2043,18 +2539,68 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                         <div className="flex flex-col flex-1 mt-2">
                           <button
                             type="button"
-                            className="text-[13px] font-semibold leading-snug line-clamp-2 text-left"
+                            className="text-base font-bold leading-tight line-clamp-2 text-left text-text-main-light"
                             onClick={() => filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book)}
                           >
                             {book.title}
                           </button>
-                          <p className="text-[11px] text-black/50 line-clamp-1">{book.authors}</p>
+                          <p className="text-sm text-text-sub-light line-clamp-1">{book.authors}</p>
+                          {pageCount && (
+                            <div className="flex items-center gap-2 mt-2">
+                              <span className="text-xs text-[rgba(147,147,154,1)] px-2 py-1 rounded-full mb-[10px] dark:bg-[rgba(23,23,24,1)]">
+                                {pageCount} pages
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-center gap-4 pt-2 border-t border-gray-100 mt-auto flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (canonicalKey) {
+                                  await toggleSearchLike(canonicalKey, book.title || 'Titre inconnu', likesDisplay, commentsDisplay, isLiked);
+                                } else {
+                                  filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book);
+                                }
+                              }}
+                              className={`flex items-center justify-center w-9 h-9 rounded-full transition-all active:scale-90 flex-shrink-0 mb-[10px] ${
+                                isLiked ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                              title={canonicalKey ? (isLiked ? 'Ne plus aimer' : 'Aimer') : 'Voir le détail'}
+                            >
+                              <Heart className={`w-5 h-5 ${isLiked ? 'fill-current' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book);
+                                if (canonicalKey) {
+                                  setLikedByBookKey(canonicalKey);
+                                  setLikedByTitle(book.title || 'Titre inconnu');
+                                }
+                              }}
+                              className="flex items-center gap-1.5 px-3 h-9 rounded-xl transition-all active:scale-95 flex-shrink-0 bg-gray-100 text-gray-700 hover:bg-gray-200 mb-[10px]"
+                              title="Voir les likes"
+                            >
+                              <span className="text-sm font-semibold">{likesDisplay}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                filter === 'explore' ? openExplorerDetails(book) : setSelectedBookDetails(book);
+                              }}
+                              className="flex items-center gap-1.5 px-3 h-9 rounded-xl transition-all active:scale-95 flex-shrink-0 bg-gray-100 text-gray-700 hover:bg-gray-200 mb-[10px]"
+                              title="Voir les commentaires"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              <span className="text-sm font-semibold">{commentsDisplay}</span>
+                            </button>
+                          </div>
 
                           {filter === 'explore' ? (
                             alreadyAdded ? (
                               <button
                                 disabled
-                                className="mt-2 w-full rounded-xl bg-gray-200 text-gray-600 py-2 text-[12px] font-medium disabled:opacity-60"
+                                className="mt-auto w-full rounded-xl bg-gray-200 text-gray-600 py-2 text-[12px] font-medium disabled:opacity-60"
                               >
                                 Déjà ajouté
                               </button>
@@ -2062,7 +2608,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                               <button
                                 onClick={() => setBookToAdd(book)}
                                 disabled={addingBookId === book.id}
-                                className="mt-2 w-full rounded-xl bg-black text-white py-2 text-[12px] font-medium active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="mt-auto w-full rounded-xl bg-black text-white py-2 text-[12px] font-medium active:scale-[0.99] transition disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {addingBookId === book.id ? 'Ajout en cours...' : 'Ajouter'}
                               </button>
@@ -2073,7 +2619,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                 // For search results (non-explore tabs), open BookDetailsModal with full book object
                                 setSelectedBookDetails(book);
                               }}
-                              className="mt-2 w-full rounded-xl bg-gray-100 text-text-main-light py-2 text-[12px] font-medium hover:bg-gray-200 transition"
+                              className="mt-auto w-full rounded-xl bg-gray-100 text-text-main-light py-2 text-[12px] font-medium hover:bg-gray-200 transition"
                             >
                               {t('book.details')}
                             </button>
@@ -2083,6 +2629,17 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                     );
                   })}
                 </div>
+                {filter === 'explore' && searchResults.length > 0 && (
+                  <div ref={searchLoadMoreRef} className="h-12 flex items-center justify-center">
+                    {loadingMoreSearch ? (
+                      <span className="text-xs text-text-sub-light">Chargement...</span>
+                    ) : searchHasMore ? (
+                      <span className="text-xs text-text-sub-light">Faites défiler pour charger plus</span>
+                    ) : (
+                      <span className="text-xs text-text-sub-light">Tous les résultats sont affichés</span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2091,6 +2648,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
         {!searchQuery && loading && filter !== 'explore' ? (
           <div className="text-center py-12 text-text-sub-light">Chargement...</div>
         ) : filter === 'explore' ? (
+          searchQuery && searchQuery.trim().length >= 3 ? null : (
           <div className="bg-neutral-50 min-h-screen">
             <div className="max-w-4xl mx-auto px-4 pb-20">
               {/* Explorer: Community Feed OR Search Results (mutually exclusive) */}
@@ -2104,7 +2662,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                   return (
                     <>
                       {/* Search header */}
-                      <div className="flex items-center justify-between mb-6 pt-4">
+                      <div className="flex items-center justify-between mb-2 pt-4">
                         <h2 className="text-lg font-bold text-text-main-light">
                           Recherche: "{explorerSearch.query}"
                         </h2>
@@ -2119,6 +2677,9 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                           <X className="w-5 h-5 text-black/60" />
                         </button>
                       </div>
+                      <p className="text-xs text-text-sub-light mb-4">
+                        Titre, auteur, ISBN. Appuie sur une carte pour voir le détail.
+                      </p>
 
                       {/* Search results */}
                       {explorerSearch.searching ? (
@@ -2137,6 +2698,18 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                           {explorerSearch.results.map((book) => {
                             const bookKey = canonicalBookKey(book) || book.id;
+                            const cleanIsbn = (book.isbn13 || book.isbn10 || book.isbn)?.replace(/[-\s]/g, '');
+                            const customCoverOverride =
+                              userCustomCovers[bookKey] ||
+                              (cleanIsbn ? userCustomCovers[`isbn:${cleanIsbn}`] : undefined) ||
+                              (book.id ? userCustomCovers[`google:${book.id}`] : undefined);
+                            const coverUrl =
+                              customCoverOverride ||
+                              (book.thumbnail &&
+                                !book.thumbnail.toLowerCase().includes('image_not_available') &&
+                                !book.thumbnail.toLowerCase().includes('no_cover')
+                                ? book.thumbnail
+                                : undefined);
                             const isInLibrary = isBookInLibrary(book);
                             
                             return (
@@ -2144,6 +2717,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                 key={bookKey}
                                 book={book}
                                 isInLibrary={isInLibrary}
+                                  customCoverUrlOverride={coverUrl || null}
                                 onOpenDetails={async (book) => {
                                   await openExplorerDetails(book);
                                 }}
@@ -2172,18 +2746,10 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                 return (
                   <>
                     {/* Community header */}
-                    <div className="flex items-center justify-between mb-6 pt-4">
+                    <div className="flex items-center mb-6 pt-6">
                       <h2 className="text-lg font-bold text-text-main-light">
                         Livres aimés par la communauté
                       </h2>
-                      <button
-                        onClick={communityFeed.refresh}
-                        disabled={communityFeed.loading}
-                        className="p-2 rounded-xl bg-white border border-black/10 hover:bg-gray-50 transition-all disabled:opacity-50"
-                        title="Actualiser"
-                      >
-                        <RefreshCw className={`w-5 h-5 text-black/60 ${communityFeed.loading ? 'animate-spin' : ''}`} />
-                      </button>
                     </div>
 
                     {/* Community feed */}
@@ -2204,6 +2770,13 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                           {communityFeed.books.map((book) => {
                             const bookKey = canonicalBookKey({ book_key: book.book_key }) || book.book_key;
+                            
+                            // Get custom cover override (try multiple key formats for robust matching)
+                            const customCoverOverride =
+                              userCustomCovers[bookKey] ||
+                              (book.isbn ? userCustomCovers[`isbn:${String(book.isbn).replace(/[-\s]/g, '')}`] : undefined) ||
+                              (book.google_books_id ? userCustomCovers[`google:${book.google_books_id}`] : undefined);
+                            
                             const socialCounts = {
                               likes: communityFeed.socialCounts[bookKey]?.likes ?? book.likes_count,
                               comments: communityFeed.socialCounts[bookKey]?.comments ?? book.comments_count,
@@ -2211,18 +2784,24 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                             };
                             
                             // Check if book is in library
-                            const googleBookLike: GoogleBook & { openLibraryKey?: string } = {
+                            // IMPORTANT: Pass openlibrary_cover_id and avoid creating googleCoverUrl if book.cover_url exists
+                            const hasValidCoverUrl = book.cover_url && !book.cover_url.includes('placeholder') && !book.cover_url.includes('image_not_available');
+                            const googleBookLike: GoogleBook & { openLibraryKey?: string; openlibrary_cover_id?: number | null } = {
                               id: book.google_books_id || book.book_key,
                               title: book.title || '',
                               authors: book.author || '',
-                              thumbnail: book.cover_url || undefined,
+                              thumbnail: customCoverOverride || (hasValidCoverUrl ? book.cover_url : undefined),
                               isbn: book.isbn || undefined,
                               isbn13: book.isbn || undefined,
                               isbn10: book.isbn || undefined,
                               pageCount: book.total_pages || undefined,
                               description: book.description || undefined,
                               openLibraryKey: book.openlibrary_work_key || book.openlibrary_edition_key || undefined,
-                              googleCoverUrl: book.google_books_id ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : undefined,
+                              openlibrary_cover_id: book.openlibrary_cover_id || undefined,
+                              // IMPORTANT: si on a custom override, on ne veut PAS de googleCoverUrl
+                              googleCoverUrl: (!customCoverOverride && !hasValidCoverUrl && !book.openlibrary_cover_id && book.google_books_id)
+                                ? `https://books.google.com/books/content?id=${book.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api`
+                                : undefined,
                             };
                             const isInLibrary = isBookInLibrary(googleBookLike);
                             
@@ -2232,6 +2811,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                 book={book}
                                 socialCounts={socialCounts}
                                 isInLibrary={isInLibrary}
+                                customCoverUrlOverride={customCoverOverride || null}
                                 onOpenDetails={async () => {
                                   await openExplorerDetails(googleBookLike);
                                 }}
@@ -2271,10 +2851,13 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                   const prevLiked = socialCounts.isLiked;
                                   const prevLikes = socialCounts.likes;
                                   const optimistic = !prevLiked;
+                                  const optimisticLikes = optimistic
+                                    ? Math.max(0, prevLikes + 1)
+                                    : Math.max(0, prevLikes - 1);
                                   
                                   // Optimistic update
                                   communityFeed.updateSocialCounts(stableKey, {
-                                    likes: optimistic ? Math.max(0, prevLikes + 1) : Math.max(0, prevLikes - 1),
+                                    likes: optimisticLikes,
                                     comments: socialCounts.comments,
                                     isLiked: optimistic,
                                   });
@@ -2284,6 +2867,15 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                     const { data, error } = await supabase.rpc('toggle_book_like', { p_book_key: stableKey });
                                     
                                     if (error) {
+                                      if (isDuplicateLikeError(error)) {
+                                        console.warn('[Library] toggle_book_like duplicate detected (community), forcing liked=true');
+                                        communityFeed.updateSocialCounts(stableKey, {
+                                          likes: Math.max(0, optimisticLikes),
+                                          comments: socialCounts.comments,
+                                          isLiked: true,
+                                        });
+                                        return;
+                                      }
                                       console.error('toggle_book_like error', error.code, error.message, error.details);
                                       throw error;
                                     }
@@ -2371,6 +2963,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
               })()}
             </div>
           </div>
+          )
         ) : !searchQuery && userBooks.length === 0 ? (
           <div className="text-center py-12">
             <Book className="w-16 h-16 mx-auto mb-4 text-text-sub-light" />
@@ -2380,14 +2973,15 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
               {filter === 'completed' && t('library.noBooks')}
             </p>
             <p className="text-sm text-text-sub-light mb-4">
-              Envie de découvrir de nouveaux livres?
+              Envie de trouver ton livre ? Lance une recherche.
             </p>
             <button
-              onClick={() => setFilter('explore')}
+              type="button"
+              onClick={focusExploreSearch}
               className="px-6 py-3 bg-primary text-black rounded-xl font-bold hover:brightness-95 transition-all inline-flex items-center gap-2"
             >
               <TrendingUp className="w-5 h-5" />
-              {t('library.explore')}
+              Trouver mon livre
             </button>
           </div>
         ) : !searchQuery && userBooks.length > 0 ? (
@@ -2412,7 +3006,6 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
               const displayTitle = (userBook as any).custom_title ?? book.title;
               const displayAuthor = (userBook as any).custom_author ?? book.author;
               const displayPages = (userBook as any).custom_total_pages ?? book.total_pages ?? null;
-              const displayCover: string | null = (userBook as any).custom_cover_url ?? book.cover_url ?? null;
               
               // Use displayPages for progress calculation (custom_total_pages if present)
               const progress = getProgress(userBook.current_page, displayPages ?? null);
@@ -2426,16 +3019,18 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                 return (
                   <div
                     key={userBook.id}
-                    className="flex gap-4 p-4 bg-card-light rounded-xl shadow-sm border border-gray-200 overflow-hidden"
+                    className="flex gap-4 p-4 bg-card-light rounded-xl shadow-sm overflow-hidden"
                   >
                   <div
                     onClick={() => setDetailsBookId(book.id)}
                     className="cursor-pointer hover:scale-105 transition-transform"
                   >
                     <BookCover
+                      bookKey={stableBookKey || undefined}
+                      book={book}
                       custom_cover_url={(userBook as any).custom_cover_url || null}
-                      cacheKey={userBook.updated_at}
-                      coverUrl={displayCover}
+                      cacheKey={`${userBook.updated_at || ''}|${(userBook as any).custom_cover_url || ''}|${book.cover_url || ''}`}
+                      coverUrl={book.cover_url || null}
                       title={displayTitle}
                       author={displayAuthor || 'Auteur inconnu'}
                       isbn={(book as any).isbn || null}
@@ -2451,18 +3046,11 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                         setAddCoverBookId(book.id);
                         setAddCoverBookTitle(displayTitle);
                       }}
-                      onCoverLoaded={async (url) => {
-                        // Sauvegarder la cover dans Supabase si elle n'existe pas déjà
-                        if (book.id && !book.cover_url && url && !url.includes('placeholder')) {
-                          try {
-                            await supabase
-                              .from('books')
-                              .update({ cover_url: url })
-                              .eq('id', book.id);
-                            console.log(`[Library] Cached cover for book ${book.id}: ${url}`);
-                          } catch (error) {
-                            console.warn('[Library] Failed to cache cover:', error);
-                          }
+                      onCoverLoaded={async (url, source) => {
+                        // ⚠️ DISABLED: Don't writeback pooled covers or placeholders to DB
+                        // Only log for debugging (don't update books.cover_url)
+                        if (import.meta.env.DEV && url && !url.includes('placeholder')) {
+                          console.debug(`[Library] Cover loaded: book ${book.id}, url: ${url}, source: ${source}`);
                         }
                       }}
                     />
@@ -2485,10 +3073,10 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                           e.stopPropagation();
                           setBookToManage({ ...userBook, book });
                         }}
-                        className="shrink-0 p-2 bg-gray-100 hover:bg-gray-200 rounded-xl"
+                        className="shrink-0 p-2 rounded-xl text-text-main-light hover:bg-gray-100 dark:bg-[#161618] dark:hover:bg-[#1f1f22] dark:text-white"
                         title="Options"
                       >
-                        <MoreVertical className="w-5 h-5 text-gray-600" />
+                        <MoreVertical className="w-5 h-5 text-current" />
                       </button>
                     </div>
 
@@ -2516,11 +3104,11 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                         </span>
                       )}
                       {displayPages ? (
-                        <span className="inline-block text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full font-medium">
+                        <span className="inline-block text-xs px-2 py-1 rounded-full font-medium bg-white text-text-main-light border-0 w-[90px]">
                           {displayPages} pages
                         </span>
                       ) : (
-                        <span className="inline-block text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-medium">
+                        <span className="inline-block text-xs px-2 py-1 rounded-full font-medium bg-white text-text-main-light border-0">
                           Pages inconnues
                         </span>
                       )}
@@ -2548,6 +3136,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
 
                               const prevLiked = isLiked;
                               const optimistic = !prevLiked;
+                              const optimisticLikes = Math.max(0, likesCount + (optimistic ? 1 : -1));
 
                               // optimistic UI
                               setUserBooks(prevState =>
@@ -2563,6 +3152,25 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                 const { data, error } = await supabase.rpc('toggle_book_like', { p_book_key: stableBookKey });
                                 
                                 if (error) {
+                                  if (isDuplicateLikeError(error)) {
+                                    console.warn('[Library] toggle_book_like duplicate detected (library list), forcing liked=true');
+                                    setLibrarySocialCounts(prev => ({
+                                      ...prev,
+                                      [stableBookKey]: {
+                                        likes: optimisticLikes,
+                                        comments: prev[stableBookKey]?.comments ?? 0,
+                                        isLiked: true,
+                                      }
+                                    }));
+                                    setUserBooks(prevState =>
+                                      prevState.map(ub =>
+                                        ub.book?.id === book.id
+                                          ? { ...ub, book: { ...ub.book, is_liked: true } }
+                                          : ub
+                                      )
+                                    );
+                                    return;
+                                  }
                                   console.error('toggle_book_like error', error.code, error.message, error.details);
                                   throw error;
                                 }
@@ -2642,15 +3250,15 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                                 setToast({ message: 'Erreur lors du like', type: 'error' });
                               }
                             }}
-                            className={`h-9 px-3 rounded-xl flex items-center gap-1 text-sm font-medium ${
-                              isLiked
-                                ? 'bg-red-50 text-red-600'
-                                : 'bg-gray-100 text-gray-600'
-                            }`}
+                            className="h-9 px-3 rounded-xl flex items-center gap-1 text-sm font-medium bg-white"
                             title={isLiked ? 'Ne plus aimer' : 'Aimer'}
                           >
-                            <Heart className={`w-4 h-4 ${isLiked ? 'fill-current' : ''}`} />
-                            <span>{likesCount}</span>
+                            <Heart
+                              className={`w-4 h-4 ${isLiked ? 'text-red-500 fill-current' : 'text-neutral-400'}`}
+                            />
+                            <span className={isLiked ? 'text-red-500' : 'text-neutral-400'}>
+                              {likesCount}
+                            </span>
                           </button>
                         );
                       })()}
@@ -2664,7 +3272,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                               id: book.id,
                               title: displayTitle,
                               author: displayAuthor,
-                              cover_url: displayCover,
+                              cover_url: (userBook as any).custom_cover_url ?? book.cover_url ?? null,
                               total_pages: displayPages,
                               isbn: (book as any).isbn || null,
                               book_key: (book as any).book_key || (book as any).openlibrary_work_key || null,
@@ -2675,6 +3283,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
                           });
                           setRecapOpen(true);
                         }}
+                        data-tour-target="library-ia"
                         className="h-9 px-3 rounded-xl bg-black text-white text-sm font-medium flex items-center gap-1"
                         title="Résumé IA"
                       >
@@ -2962,6 +3571,7 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
           onClick={() => {
             setShowManualAdd(true);
           }}
+          data-tour-target="library-add-manual"
           className="fixed right-6 z-50 w-14 h-14 rounded-full bg-primary text-black shadow-lg flex items-center justify-center hover:brightness-95 transition-all"
           style={{ bottom: 'calc(64px + 16px + env(safe-area-inset-bottom))' }}
           title="Ajouter un livre manuellement"
@@ -3015,11 +3625,29 @@ export function Library({ onNavigateToSearch, showScanner: externalShowScanner, 
             // newPath is now always a public URL (not a path)
             // Optimistic update: update UI instantly without navigation
             if (addCoverBookId) {
-              setUserBooks(prev => prev.map(ub => 
-                ub.book?.id === addCoverBookId 
-                  ? { ...ub, custom_cover_url: newPath, updated_at: new Date().toISOString() }
-                  : ub
-              ));
+              // Update userBooks and use the updated data to update cache
+              setUserBooks(prev => {
+                const updated = prev.map(ub => 
+                  ub.book?.id === addCoverBookId 
+                    ? { ...ub, custom_cover_url: newPath, updated_at: new Date().toISOString() }
+                    : ub
+                );
+                
+                // Update custom covers cache for Explorer instant update using updated data
+                const ub = updated.find(x => x.book?.id === addCoverBookId);
+                const b = ub?.book;
+                if (b) {
+                  setUserCustomCovers(prevCovers => {
+                    const next = { ...prevCovers };
+                    buildCoverKeysForDbBook(b).forEach(k => { 
+                      next[k] = newPath; 
+                    });
+                    return next;
+                  });
+                }
+                
+                return updated;
+              });
             }
             // Don't call loadUserBooks - it might change the tab/filter
             // Don't close modal automatically - let user decide

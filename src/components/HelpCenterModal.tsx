@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AppHeader } from './AppHeader';
 import { HelpCircle, Mail, Shield, Bug, ArrowRight, ChevronDown } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface HelpCenterModalProps {
   open: boolean;
@@ -60,6 +61,7 @@ export function HelpCenterModal({
 }: HelpCenterModalProps) {
   const [view, setView] = useState<View>(initialView);
   const [openFAQIndex, setOpenFAQIndex] = useState<number | null>(null);
+  const { resolved } = useTheme();
 
   // Reset view when modal opens/closes or initialView changes
   useEffect(() => {
@@ -78,7 +80,9 @@ export function HelpCenterModal({
     <div className="px-4 py-6 space-y-4">
       <div
         onClick={() => setView('faq')}
-        className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        className={`flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer transition-colors ${
+          resolved === 'light' ? 'hover:bg-gray-50' : ''
+        }`}
       >
         <div className="flex items-center gap-3">
           <div className="p-2 bg-blue-50 rounded-lg">
@@ -94,7 +98,9 @@ export function HelpCenterModal({
 
       <div
         onClick={() => setView('privacy')}
-        className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        className={`flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer transition-colors ${
+          resolved === 'light' ? 'hover:bg-gray-50' : ''
+        }`}
       >
         <div className="flex items-center gap-3">
           <div className="p-2 bg-green-50 rounded-lg">
@@ -110,7 +116,9 @@ export function HelpCenterModal({
 
       <div
         onClick={() => setView('bug')}
-        className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+        className={`flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer transition-colors ${
+          resolved === 'light' ? 'hover:bg-gray-50' : ''
+        }`}
       >
         <div className="flex items-center gap-3">
           <div className="p-2 bg-red-50 rounded-lg">
@@ -137,7 +145,9 @@ export function HelpCenterModal({
           >
             <button
               onClick={() => toggleFAQ(index)}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-50 transition-colors"
+              className={`w-full p-4 flex items-center justify-between text-left transition-colors ${
+                resolved === 'light' ? 'hover:bg-gray-50' : ''
+              }`}
             >
               <h3 className="font-semibold text-text-main-light pr-4 flex-1">{item.question}</h3>
               <ChevronDown

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { supabase } from '../../lib/supabase';
 import { Check, Bell, BellOff, Settings } from 'lucide-react';
 import { BrandLogo } from '../BrandLogo';
@@ -50,6 +51,8 @@ const READING_LEVELS = [
   { id: 'regular', label: 'Lecteur régulier', description: 'Je lis déjà régulièrement' },
   { id: 'avid', label: 'Gros lecteur', description: 'Je lis beaucoup et souvent' },
 ];
+const PRIMARY_BUTTON_CLASSES =
+  'py-3 rounded-lg font-medium transition-colors disabled:opacity-50 bg-stone-900 text-white hover:bg-stone-800 dark:bg-[rgba(229,255,0,1)] dark:text-black dark:hover:brightness-95';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -58,12 +61,55 @@ interface OnboardingProps {
 export function Onboarding({ onComplete }: OnboardingProps) {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const { resolved: themeResolved, setMode: setThemeMode } = useTheme();
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      document.documentElement.classList.contains('theme-dark') ||
+      document.body.classList.contains('theme-dark') ||
+      window.matchMedia('(prefers-color-scheme: dark)').matches
+    );
+  });
+  const [themeChoice, setThemeChoice] = useState<'light' | 'dark'>(themeResolved || 'light');
+
+  useEffect(() => {
+    if (themeResolved) {
+      setThemeChoice(themeResolved);
+    }
+  }, [themeResolved]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => {
+      setIsDark(
+        document.documentElement.classList.contains('theme-dark') ||
+        document.body.classList.contains('theme-dark') ||
+        media.matches
+      );
+      setThemeChoice((prev) => prev || (media.matches ? 'dark' : 'light'));
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    media.addEventListener('change', update);
+    update();
+    return () => {
+      observer.disconnect();
+      media.removeEventListener('change', update);
+    };
+  }, []);
+
+  const primaryButtonStyle = isDark
+    ? { backgroundColor: 'rgba(229,255,0,1)', color: '#000' }
+    : undefined;
   
   // Goals state
   const [timeGoal, setTimeGoal] = useState<number | null>(null);
   const [booksPerMonth, setBooksPerMonth] = useState<number | null>(null);
   const [readingTime, setReadingTime] = useState<string | null>(null);
-  const [genre, setGenre] = useState<string | null>(null);
+  const [genres, setGenres] = useState<string[]>([]);
+  const [otherGenre, setOtherGenre] = useState('');
   const [readingLevel, setReadingLevel] = useState<string | null>(null);
   
   // Notifications state
@@ -103,7 +149,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   };
 
   const handleSkipNotifications = () => {
-    // Skip notifications: go directly to final step without requesting permission
+    // Skip notifications: go directly to theme step without requesting permission
     setStep(7);
   };
 
@@ -115,7 +161,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     try {
       // Build interests array from genre and other preferences
       const interests: string[] = [];
-      if (genre) {
+      if (genres && genres.length > 0) {
         // Map genre IDs to readable names
         const genreMap: Record<string, string> = {
           'fiction': 'Fiction',
@@ -124,7 +170,10 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           'self-dev': 'Développement personnel',
           'other': 'Autre',
         };
-        interests.push(genreMap[genre] || genre);
+        genres.forEach((g) => interests.push(genreMap[g] || g));
+      }
+      if (otherGenre.trim().length > 0) {
+        interests.push(otherGenre.trim());
       }
       
       // Add reading level as interest tag
@@ -193,14 +242,18 @@ export function Onboarding({ onComplete }: OnboardingProps) {
       case 1: return timeGoal !== null;
       case 2: return booksPerMonth !== null;
       case 3: return readingTime !== null;
-      case 4: return genre !== null;
+      case 4: return (genres && genres.length > 0) || otherGenre.trim().length > 0;
       case 5: return readingLevel !== null;
+      case 7: return themeChoice !== null;
       default: return true;
     }
   };
 
   return (
-    <div className="h-screen bg-stone-50 flex flex-col overflow-hidden">
+    <div
+      className="h-screen flex flex-col overflow-hidden"
+      style={{ backgroundColor: 'rgb(var(--color-bg))' }}
+    >
       {/* Scrollable content container */}
       <div 
         className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain"
@@ -209,24 +262,51 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
           paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)',
+          backgroundColor: 'rgb(var(--color-bg))',
+          background: 'unset',
         }}
       >
-        <div className="flex items-center justify-center min-h-full p-4 safe-area-top">
+        <div
+          className="flex items-center justify-center min-h-full p-4 safe-area-top"
+          style={{ backgroundColor: 'rgb(var(--color-bg))' }}
+        >
           <div className="w-full max-w-2xl">
             <div className="text-center mb-8">
-              <div className="mb-2">
-                <BrandLogo size={40} color="#111" />
+              <div
+                className="mb-2"
+                style={{ fontSize: 20, lineHeight: '60px' }}
+              >
+                <BrandLogo size={40} />
               </div>
-              <p className="text-stone-600">Bienvenue dans votre parcours de lecture</p>
+              <p
+                className="text-stone-600"
+                style={{ color: 'rgb(var(--color-text))' }}
+              >
+                Bienvenue dans votre parcours de lecture
+              </p>
             </div>
 
-            <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 relative">
+            <div
+              className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 relative"
+              style={
+                {
+                  backgroundColor: 'rgb(var(--color-surface))',
+                  borderColor: 'rgb(var(--color-border))',
+                  background: 'unset',
+                }
+              }
+            >
           {/* Step 1: Objectif temps par jour */}
           {step === 1 && (
             <>
               <div className="mb-6">
                 <h2 className="text-2xl font-semibold mb-2">Combien de temps par jour ?</h2>
-                <p className="text-stone-600">Choisissez votre objectif quotidien de lecture</p>
+                <p
+                  className="text-stone-600"
+                  style={{ color: 'rgb(var(--color-text))' }}
+                >
+                  Choisissez votre objectif quotidien de lecture
+                </p>
               </div>
 
               <div className="space-y-3 mb-8">
@@ -256,7 +336,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
               <button
                 onClick={() => setStep(2)}
                 disabled={!canProceed()}
-                className="w-full bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                className={`w-full ${PRIMARY_BUTTON_CLASSES}`}
+                style={primaryButtonStyle}
               >
                 Continuer
               </button>
@@ -305,7 +386,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   onClick={() => setStep(3)}
                   disabled={!canProceed()}
-                  className="flex-1 bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
                 >
                   Continuer
                 </button>
@@ -355,7 +437,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   onClick={() => setStep(4)}
                   disabled={!canProceed()}
-                  className="flex-1 bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
                 >
                   Continuer
                 </button>
@@ -363,21 +446,27 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             </>
           )}
 
-          {/* Step 4: Genre principal */}
+          {/* Step 4: Genres préférés (multi-sélection) */}
           {step === 4 && (
             <>
               <div className="mb-6">
-                <h2 className="text-2xl font-semibold mb-2">Quel genre préférez-vous ?</h2>
-                <p className="text-stone-600">Sélectionnez votre genre de lecture principal</p>
+                <h2 className="text-2xl font-semibold mb-2">Quels genres préférez-vous ?</h2>
+                <p className="text-stone-600">Sélectionnez un ou plusieurs genres (optionnel)</p>
               </div>
 
-              <div className="space-y-3 mb-8">
+              <div className="space-y-3 mb-6">
                 {GENRES.map((g) => (
                   <button
                     key={g.id}
-                    onClick={() => setGenre(g.id)}
+                    onClick={() => {
+                      setGenres((prev) =>
+                        prev.includes(g.id)
+                          ? prev.filter((id) => id !== g.id)
+                          : [...prev, g.id]
+                      );
+                    }}
                     className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
-                      genre === g.id
+                      genres.includes(g.id)
                         ? 'border-primary bg-primary/5'
                         : 'border-stone-200 hover:border-stone-300'
                     }`}
@@ -387,12 +476,24 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                         <div className="font-medium mb-1">{g.label}</div>
                         <div className="text-sm text-stone-600">{g.description}</div>
                       </div>
-                      {genre === g.id && (
+                      {genres.includes(g.id) && (
                         <Check className="w-5 h-5 text-primary flex-shrink-0 mt-1" />
                       )}
                     </div>
                   </button>
                 ))}
+              </div>
+
+              <div className="space-y-2 mb-6">
+                <label className="text-sm font-medium text-stone-700">Autre genre</label>
+                <input
+                  type="text"
+                  value={otherGenre}
+                  onChange={(e) => setOtherGenre(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white text-text-main-light"
+                  placeholder="Polar nordique, romantasy..."
+                />
+                <p className="text-xs text-stone-500">Laisse vide si non applicable.</p>
               </div>
 
               <div className="flex gap-3">
@@ -405,7 +506,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   onClick={() => setStep(5)}
                   disabled={!canProceed()}
-                  className="flex-1 bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
                 >
                   Continuer
                 </button>
@@ -455,7 +557,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   onClick={() => setStep(6)}
                   disabled={!canProceed()}
-                  className="flex-1 bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
                 >
                   Continuer
                 </button>
@@ -524,7 +627,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 )}
                 <button
                   type="button"
-                  onClick={handleSkipNotifications}
+                  onClick={() => setStep(7)}
                   className="w-full border-2 border-stone-300 text-stone-700 py-3 rounded-lg font-medium hover:bg-stone-50 transition-colors relative z-10"
                 >
                   {notificationPermission === 'granted' ? 'Continuer' : 'Peut-être plus tard'}
@@ -540,8 +643,85 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             </>
           )}
 
-          {/* Step 7: Final */}
+          {/* Step 7: Choix du thème */}
           {step === 7 && (
+            <>
+              <div className="mb-6">
+                <h2 className="text-2xl font-semibold mb-2">Choisissez votre thème</h2>
+                <p className="text-stone-600" style={{ color: 'rgb(var(--color-text))' }}>
+                  Clair ou sombre — vous pourrez changer plus tard dans les paramètres.
+                </p>
+              </div>
+
+              <div className="space-y-3 mb-8">
+                <button
+                  onClick={() => {
+                    setThemeChoice('light');
+                    setThemeMode('light'); // switch immediately
+                  }}
+                  className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
+                    themeChoice === 'light'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-stone-200 hover:border-stone-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium mb-1">Mode clair</div>
+                      <div className="text-sm text-stone-600">Fond clair, texte foncé</div>
+                    </div>
+                    {themeChoice === 'light' && (
+                      <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                    )}
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setThemeChoice('dark');
+                    setThemeMode('dark'); // switch immediately
+                  }}
+                  className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
+                    themeChoice === 'dark'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-stone-200 hover:border-stone-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium mb-1">Mode sombre</div>
+                      <div className="text-sm text-stone-600">Fond sombre, texte clair</div>
+                    </div>
+                    {themeChoice === 'dark' && (
+                      <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                    )}
+                  </div>
+                </button>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setStep(6)}
+                  className="flex-1 border-2 border-stone-300 text-stone-700 py-3 rounded-lg font-medium hover:bg-stone-50 transition-colors"
+                >
+                  Retour
+                </button>
+                <button
+                  onClick={() => {
+                    setStep(8);
+                  }}
+                  disabled={!canProceed()}
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
+                >
+                  Continuer
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Step 8: Final */}
+          {step === 8 && (
             <>
               <div className="mb-8 text-center">
                 <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -555,7 +735,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
 
               <div className="flex gap-3">
                 <button
-                  onClick={() => setStep(6)}
+                  onClick={() => setStep(7)}
                   className="flex-1 border-2 border-stone-300 text-stone-700 py-3 rounded-lg font-medium hover:bg-stone-50 transition-colors"
                 >
                   Retour
@@ -563,7 +743,8 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 <button
                   onClick={handleComplete}
                   disabled={loading}
-                  className="flex-1 bg-stone-900 text-white py-3 rounded-lg font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                  className={`flex-1 ${PRIMARY_BUTTON_CLASSES}`}
+                  style={primaryButtonStyle}
                 >
                   {loading ? 'Configuration...' : 'Commencer'}
                 </button>

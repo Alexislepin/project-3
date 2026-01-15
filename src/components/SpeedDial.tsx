@@ -82,7 +82,7 @@ export function SpeedDial({ open, onClose, onScan, onStartSession, fabPosition }
     <>
       <button
         aria-label="Fermer le menu"
-        className="fixed inset-0 bg-transparent transition-opacity duration-300"
+        className="fixed inset-0 transition-opacity duration-300 bg-black/40 backdrop-blur-[2px]"
         onClick={handleOverlayClick}
         style={{
           opacity: open ? 1 : 0,
@@ -91,39 +91,59 @@ export function SpeedDial({ open, onClose, onScan, onStartSession, fabPosition }
         }}
       />
 
-      <button
-        onClick={handleScanClick}
-        className="fixed rounded-full bg-primary border-2 border-white shadow-[0_3px_16px_rgba(249,245,6,0.25)] flex items-center justify-center active:scale-95 transition-all pointer-events-auto"
+      {/* Bouton Scanner + label */}
+      <div
+        className="fixed flex flex-col items-center gap-1"
         style={{
-          width: `${BUTTON_SIZE}px`,
-          height: `${BUTTON_SIZE}px`,
           bottom: bottomCss,
           left: `${leftButtonX}px`,
           transform: "translateX(-50%)",
-          animation: open ? "fadeInScaleUp 0.18s ease-out" : "none",
           zIndex: Z,
+          animation: open ? "fadeInScaleUp 0.18s ease-out" : "none",
         }}
-        aria-label="Scanner un livre"
       >
-        <Scan className="w-5 h-5 text-black" />
-      </button>
+        <button
+          onClick={handleScanClick}
+          className="rounded-full bg-primary border-2 border-white shadow-[0_3px_16px_rgba(249,245,6,0.25)] flex items-center justify-center active:scale-95 transition-all pointer-events-auto"
+          style={{
+            width: `${BUTTON_SIZE}px`,
+            height: `${BUTTON_SIZE}px`,
+          }}
+          aria-label="Scanner un livre"
+        >
+          <Scan className="w-5 h-5" style={{ color: '#000' }} />
+        </button>
+        <div className="px-3 py-1 rounded-full bg-black/80 text-white text-[11px] font-semibold shadow-sm">
+          Scanner
+        </div>
+      </div>
 
-      <button
-        onClick={handleStartSessionClick}
-        className="fixed rounded-full bg-primary border-2 border-white shadow-[0_3px_16px_rgba(249,245,6,0.25)] flex items-center justify-center active:scale-95 transition-all pointer-events-auto"
+      {/* Bouton Activité + label */}
+      <div
+        className="fixed flex flex-col items-center gap-1"
         style={{
-          width: `${BUTTON_SIZE}px`,
-          height: `${BUTTON_SIZE}px`,
           bottom: bottomCss,
           left: `${rightButtonX}px`,
           transform: "translateX(-50%)",
-          animation: open ? "fadeInScaleUp 0.18s ease-out" : "none",
           zIndex: Z,
+          animation: open ? "fadeInScaleUp 0.18s ease-out" : "none",
         }}
-        aria-label="Commencer une activité"
       >
-        <Play className="w-5 h-5 text-black" />
-      </button>
+        <button
+          onClick={handleStartSessionClick}
+          className="rounded-full bg-primary border-2 border-white shadow-[0_3px_16px_rgba(249,245,6,0.25)] flex items-center justify-center active:scale-95 transition-all pointer-events-auto"
+          style={{
+            width: `${BUTTON_SIZE}px`,
+            height: `${BUTTON_SIZE}px`,
+          }}
+          aria-label="Commencer une activité"
+        >
+          <Play className="w-5 h-5" style={{ color: '#000' }} />
+        </button>
+        <div className="px-3 py-1 rounded-full bg-black/80 text-white text-[11px] font-semibold shadow-sm">
+          Activité
+        </div>
+      </div>
 
       <style>{`
         @keyframes fadeInScaleUp {

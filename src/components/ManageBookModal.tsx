@@ -1,4 +1,5 @@
 import { Trash2, ArrowRight, X, Edit } from 'lucide-react';
+import { ModalSheet } from './ModalSheet';
 
 interface ManageBookModalProps {
   onClose: () => void;
@@ -41,31 +42,34 @@ export function ManageBookModal({
     return colors[status];
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full shadow-xl">
-        <div className="p-6">
-          <div className="flex items-start justify-between mb-6">
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-gray-900 mb-1">
-                Gérer le livre
-              </h3>
-              <p className="text-sm text-gray-600">
-                {bookTitle}
-              </p>
-              <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium bg-${getStatusColor(currentStatus)}-100 text-${getStatusColor(currentStatus)}-700`}>
-                {statusLabels[currentStatus]}
-              </span>
-            </div>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+  const header = (
+    <div className="px-6 pt-4 pb-3">
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">
+            Gérer le livre
+          </h3>
+          <p className="text-sm text-gray-600">
+            {bookTitle}
+          </p>
+          <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium bg-${getStatusColor(currentStatus)}-100 text-${getStatusColor(currentStatus)}-700`}>
+            {statusLabels[currentStatus]}
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+    </div>
+  );
 
-          <div className="space-y-3">
+  return (
+    <ModalSheet onClose={onClose} header={header} maxWidth="min(448px, 92vw)">
+      <div className="p-6">
+        <div className="space-y-3">
             {/* Bouton Modifier */}
             {onEdit && (
               <button
@@ -135,16 +139,15 @@ export function ManageBookModal({
                 <Trash2 className="w-5 h-5 text-red-600" />
               </button>
             </div>
-          </div>
-
-          <button
-            onClick={onClose}
-            className="w-full mt-4 py-3 text-gray-600 hover:text-gray-900 font-medium transition-colors"
-          >
-            Annuler
-          </button>
         </div>
+
+        <button
+          onClick={onClose}
+          className="w-full mt-4 py-3 text-gray-600 hover:text-gray-900 font-medium transition-colors"
+        >
+          Annuler
+        </button>
       </div>
-    </div>
+    </ModalSheet>
   );
 }

@@ -1,0 +1,141 @@
+/* ====================================
+   NOTIFICATIONS MODAL - MODE SOMBRE
+   ==================================== */
+
+/* Header */
+.theme-dark .notif-header,
+.dark .notif-header,
+.notif-theme-dark .notif-header {
+  background-color: #0f0f0f;
+  border-bottom: 1px solid #262626;
+}
+
+.theme-dark .notif-title,
+.dark .notif-title {
+  color: #fff;
+}
+
+.theme-dark .notif-dot,
+.dark .notif-dot {
+  color: #d4d4d4;
+}
+
+.theme-dark .notif-count,
+.dark .notif-count {
+  color: #fff;
+}
+
+.theme-dark .notif-icon-btn,
+.dark .notif-icon-btn {
+  color: #fff;
+  transition: background-color 0.2s;
+}
+
+.theme-dark .notif-icon-btn:hover,
+.dark .notif-icon-btn:hover {
+  background-color: #262626;
+}
+
+/* Onglets */
+.theme-dark .notif-tabs,
+.dark .notif-tabs,
+.notif-theme-dark .notif-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #262626;
+  background-color: #0f0f0f;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.theme-dark .notif-tabs::-webkit-scrollbar,
+.dark .notif-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.theme-dark .notif-tab,
+.dark .notif-tab,
+.notif-theme-dark .notif-tab {
+  flex: 1;
+  min-width: fit-content;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e5e7eb;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.theme-dark .notif-tab:hover,
+.dark .notif-tab:hover,
+.notif-theme-dark .notif-tab:hover {
+  color: #fff;
+  background-color: #151515;
+}
+
+.theme-dark .notif-tab-active,
+.dark .notif-tab-active,
+.notif-theme-dark .notif-tab-active {
+  color: #fff;
+  border-bottom-color: #f9f506;
+}
+
+.theme-dark .notif-tab-badge,
+.dark .notif-tab-badge,
+.notif-theme-dark .notif-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background-color: #1f1f1f;
+  color: #e5e7eb;
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.theme-dark .notif-tab-active .notif-tab-badge,
+.dark .notif-tab-active .notif-tab-badge,
+.notif-theme-dark .notif-tab-active .notif-tab-badge {
+  background-color: #f9f506;
+  color: #000;
+}
+
+/* Messages d'état vide */
+.theme-dark .notif-empty,
+.dark .notif-empty {
+  text-align: center;
+  padding: 48px 16px;
+}
+
+.theme-dark .notif-empty-icon,
+.dark .notif-empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.theme-dark .notif-empty-title,
+.dark .notif-empty-title {
+  font-size: 18px;
+  font-weight: 500;
+  color: white;
+  margin-bottom: 8px;
+}
+
+.theme-dark .notif-empty-desc,
+.dark .notif-empty-desc {
+  font-size: 14px;
+  color: #a3a3a3;
+}
+

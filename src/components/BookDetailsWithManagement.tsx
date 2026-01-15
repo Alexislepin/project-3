@@ -330,7 +330,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
         <div
           className="bg-background-light rounded-3xl w-full max-w-lg flex flex-col overflow-hidden shadow-2xl"
           onClick={(e) => e.stopPropagation()}
-          style={{ maxHeight: '85vh' }}
+          style={{ maxHeight: 'calc(100vh - 240px)' }}
         >
           <div className="sticky top-0 bg-background-light z-10 px-6 pt-4 pb-3 border-b border-gray-200">
             <div className="flex items-center justify-between">
@@ -349,7 +349,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
             className="flex-1 overflow-y-auto min-h-0 px-6 py-6" 
             style={{ 
               WebkitOverflowScrolling: 'touch',
-              paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+              paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)'
             }}
           >
             <div className="flex gap-4 mb-6">
@@ -417,7 +417,7 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
             </div>
 
             {(book.publisher || book.isbn) && (
-              <div className="mb-6 px-4 py-3 bg-gray-50 rounded-xl">
+              <div className="mb-6 px-4 py-3 rounded-xl dark:bg-[#141414]">
                 <div className="space-y-1">
                   {book.publisher && (
                     <div className="flex items-start gap-2">
@@ -480,15 +480,15 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
           {(userBookId || onOpenRecap) && (
             <div className="sticky bottom-0 bg-background-light border-t border-gray-200 rounded-b-3xl flex-shrink-0 shadow-[0_-2px_8px_rgba(0,0,0,0.05)] z-10">
               <div 
-                className="px-6 py-3 flex gap-3"
+                className="px-6 pt-4 flex gap-3"
                 style={{ 
-                  paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)'
+                  paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)'
                 }}
               >
                 {userBookId && onEditRequested && (
                   <button
                     onClick={onEditRequested}
-                    className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-semibold hover:brightness-95 transition-colors"
+                    className="flex-1 py-3 px-4 bg-primary text-black rounded-xl font-bold hover:brightness-95 transition-all"
                   >
                     Modifier
                   </button>
@@ -496,10 +496,10 @@ export function BookDetailsWithManagement({ bookId, userBookId, currentPage, onC
                 {onOpenRecap && (
                   <button
                     onClick={onOpenRecap}
-                    className="flex-1 py-3 px-4 bg-stone-900 text-white rounded-xl font-semibold hover:brightness-95 transition-all"
+                    className="flex-1 py-3 px-4 bg-primary text-black dark:bg-black dark:text-white rounded-xl font-semibold hover:brightness-95 transition-all flex items-center justify-center gap-2"
                   >
                     <Sparkles className="w-4 h-4" />
-                    IA
+                    <span>Rappel IA</span>
                   </button>
                 )}
               </div>

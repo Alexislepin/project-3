@@ -15,16 +15,13 @@ export async function checkNotificationPermission(): Promise<NotificationPermiss
     return 'denied';
   }
 
-  // iOS/Android: utiliser Capacitor LocalNotifications
+  // iOS/Android: utiliser PushNotifications (affiche le vrai prompt iOS)
   try {
-    const status = await LocalNotifications.checkPermissions();
-    if (status.display === 'granted') {
-      return 'granted';
-    }
-    if (status.display === 'denied') {
-      return 'denied';
-    }
-    return 'not-determined';
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    const status = await PushNotifications.checkPermissions();
+    if (status.receive === 'granted') return 'granted';
+    if (status.receive === 'denied') return 'denied';
+    return 'not-determined'; // 'prompt' or unknown
   } catch (error) {
     console.error('Error checking notification permission:', error);
     return 'denied';
@@ -47,10 +44,17 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
     }
   }
 
-  // iOS/Android: utiliser Capacitor LocalNotifications
+  // iOS/Android: utiliser PushNotifications (déclenche le prompt système)
   try {
-    const result = await LocalNotifications.requestPermissions();
-    if (result.display === 'granted') {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    const result = await PushNotifications.requestPermissions();
+    if (result.receive === 'granted') {
+      // Optionnel mais recommandé: enregistrer pour push (sinon pas de token)
+      try {
+        await PushNotifications.register();
+      } catch (regError) {
+        console.warn('Push register error (ignored):', regError);
+      }
       return 'granted';
     }
     return 'denied';

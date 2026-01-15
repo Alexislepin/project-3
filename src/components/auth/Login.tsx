@@ -30,11 +30,16 @@ export function Login({ onSwitchToSignup }: LoginProps) {
   return (
     <div className="min-h-screen bg-background-light flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="mb-2">
-            <BrandLogo size={48} color="#111" />
+        <div className="text-center mb-8 pt-6">
+          <div className="mb-1">
+            <BrandLogo size={62} />
           </div>
-          <p className="text-text-sub-light">Suivez votre progression, construisez votre élan</p>
+          <p
+            className="text-text-sub-light text-[11px]"
+            style={{ verticalAlign: 'middle' }}
+          >
+            Suivez votre progression, construisez votre élan
+          </p>
         </div>
 
         <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-8">

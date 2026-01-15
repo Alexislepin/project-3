@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Image as ImageIcon, Loader2, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { pickImageBlob } from '../lib/pickImage';
 import { UploadOverlay } from './UploadOverlay';
 import { useImagePicker } from '../hooks/useImagePicker';
 import { uploadImageToSupabase } from '../lib/imageUpload';
+import { upsertPooledCover } from '../lib/pooledCovers';
+import { canonicalBookKey } from '../lib/bookSocial';
+import { ModalPortal } from './ModalPortal';
 
 interface AddCoverModalProps {
   open: boolean;
@@ -30,6 +32,8 @@ export function AddCoverModal({
   const [coverBlob, setCoverBlob] = useState<Blob | null>(null);
   const [coverExt, setCoverExt] = useState<string>('jpg');
   const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Reset state when modal closes
   const handleClose = () => {
@@ -59,12 +63,21 @@ export function AddCoverModal({
     };
   }, [previewUrl]);
 
-  const handleSelectCover = async (e?: React.MouseEvent) => {
+  const handleSelectCover = (e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    if (uploading || shouldBlockClose()) return;
+    
+    console.log('[AddCoverModal] choose image click');
+    
+    if (uploading || shouldBlockClose()) {
+      console.log('[AddCoverModal] blocked: uploading or shouldBlockClose', {
+        uploading,
+        shouldBlockClose: shouldBlockClose(),
+      });
+      return;
+    }
 
     // Release previous blob URL if exists
     if (previewUrl && previewUrl.startsWith('blob:')) {
@@ -74,43 +87,62 @@ export function AddCoverModal({
     // Set global picking state (prevents modal closure)
     setIsPicking(true);
 
-    if (import.meta.env.DEV) {
-      console.log('[AddCoverModal] Opening image picker');
-    }
-
-    try {
-      const result = await pickImageBlob();
+    console.log('[AddCoverModal] opening file picker', {
+      inputRef: fileInputRef.current,
+    });
     
-    if (!result) {
-        if (import.meta.env.DEV) {
-          console.log('[AddCoverModal] User cancelled image selection');
-        }
-      return; // User cancelled
+    // SYNCHRONE: pas d'await avant click()
+    fileInputRef.current?.click();
+    
+    // Reset picking state after delay (iOS needs time to settle)
+    setTimeout(() => {
+      setIsPicking(false);
+    }, 500);
+  };
+
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    
+    console.log('[AddCoverModal] file selected', {
+      file: file ? { type: file.type, size: file.size, name: file.name } : null,
+    });
+    
+    if (!file) {
+      console.log('[AddCoverModal] canceled/no file');
+      setIsPicking(false);
+      return;
     }
 
-      const { blob, contentType, ext } = result;
-    setCoverBlob(blob);
+    // Reset input value so picking the same file works again
+    e.target.value = '';
+
+    if (!file.type.startsWith('image/')) {
+      setUploadToast({ type: 'error', msg: 'Le fichier sélectionné n\'est pas une image' });
+      setIsPicking(false);
+      return;
+    }
+
+    // Release previous blob URL if exists
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+
+    // Get extension from file type
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    setCoverBlob(file);
     setCoverExt(ext);
     
     // Create preview URL from blob
-    const preview = URL.createObjectURL(blob);
+    const preview = URL.createObjectURL(file);
     setPreviewUrl(preview);
 
-      if (import.meta.env.DEV) {
-        console.log('[AddCoverModal] Image selected', {
-          contentType,
-          size: blob.size,
-          ext,
-        });
-      }
-
-      // Don't auto-upload - user must click "Enregistrer"
-    } finally {
-      // Reset picking state after a delay (iOS needs time to settle)
-      setTimeout(() => {
-        setIsPicking(false);
-      }, 500);
-    }
+    console.log('[AddCoverModal] Image selected', {
+      contentType: file.type,
+      size: file.size,
+      ext,
+    });
+    
+    setIsPicking(false);
   };
 
   // Upload image to Supabase Storage
@@ -121,7 +153,7 @@ export function AddCoverModal({
 
     try {
       // Use unified upload helper
-      const { publicUrl } = await uploadImageToSupabase(supabase, {
+      const { path: storagePath, publicUrl } = await uploadImageToSupabase(supabase, {
         bucket: 'book-covers',
         userId: user.id,
         kind: 'cover',
@@ -160,6 +192,51 @@ export function AddCoverModal({
       if (booksUpdateError) {
         // Log error but don't fail the upload (non-critical)
         console.warn('[AddCoverModal] Failed to update books.cover_url:', booksUpdateError);
+      }
+
+      // Upsert into public.book_covers pool (non-blocking, non-critical)
+      // This allows other users to reuse this cover for the same book_key
+      try {
+        // Load book to get book_key
+        const { data: bookData } = await supabase
+          .from('books')
+          .select('id, isbn, isbn13, isbn10, google_books_id, openlibrary_work_key, openlibrary_edition_key')
+          .eq('id', bookId)
+          .maybeSingle();
+
+        if (bookData) {
+          // Get book_key using canonicalBookKey (handles ISBN, UUID, etc.)
+          const bookKey = canonicalBookKey(bookData);
+
+          if (bookKey && bookKey !== 'unknown') {
+            // Upsert into pool (non-blocking, dimensions are optional)
+            // Note: width/height can be added later if needed (null for now)
+            const { success, error: upsertError } = await upsertPooledCover({
+              bookKey,
+              storagePath,
+              width: null, // Optional: can be obtained from image later if needed
+              height: null, // Optional: can be obtained from image later if needed
+              createdBy: user.id,
+            });
+
+            if (!success && upsertError) {
+              // Log error but don't fail the upload (non-critical)
+              console.warn('[AddCoverModal] Failed to upsert pooled cover:', upsertError);
+              // Show toast only for unexpected RLS errors (not "first upload wins" case)
+              // Note: "first upload wins" case returns success: true, so this won't trigger
+              if (upsertError.includes('RLS') || upsertError.includes('row-level security')) {
+                onShowToast?.('⚠️ Couverture enregistrée mais partage non disponible', 'info');
+              }
+            } else if (success) {
+              console.debug('[AddCoverModal] Successfully added/updated cover in pool:', bookKey);
+            }
+          } else {
+            console.debug('[AddCoverModal] Cannot add to pool: book_key is unknown', bookData);
+          }
+        }
+      } catch (poolError: any) {
+        // Non-critical error, log but don't fail upload
+        console.warn('[AddCoverModal] Error upserting pooled cover (non-critical):', poolError);
       }
 
       if (import.meta.env.DEV) {
@@ -216,15 +293,20 @@ export function AddCoverModal({
     e.stopPropagation();
   };
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log('[Modal] mounted AddCoverModal');
+    }
+  }, []);
+
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onPointerDown={handleBackdropPointerDown}
+    <ModalPortal
+      onBackdropClick={handleClose}
+      onContentClick={(e) => {
+        e.stopPropagation();
+      }}
     >
-      <div 
-        className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
-        onClick={handleModalContentClick}
-      >
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-stone-200">
           <h2 className="text-xl font-semibold text-stone-900">Ajouter une couverture</h2>
@@ -304,6 +386,15 @@ export function AddCoverModal({
           <p className="text-xs text-stone-500 text-center">
             Format recommandé : JPEG. L'image sera compressée automatiquement.
           </p>
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileSelected}
+            className="hidden"
+          />
         </div>
       </div>
 
@@ -313,7 +404,7 @@ export function AddCoverModal({
       {/* Toast for upload result */}
       {uploadToast && (
         <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[400] px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom-5"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in slide-in-from-bottom-5"
           style={{
             backgroundColor: uploadToast.type === 'success' ? '#10b981' : '#ef4444',
             color: 'white',
@@ -323,7 +414,7 @@ export function AddCoverModal({
           <span className="text-sm font-medium">{uploadToast.msg}</span>
         </div>
       )}
-    </div>
+    </ModalPortal>
   );
 }
 

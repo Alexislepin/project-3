@@ -1,5 +1,6 @@
 import { Heart, MessageCircle } from 'lucide-react';
 import { BookOpen, Dumbbell, Brain, Target } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface FeedRowActivityProps {
   event: {
@@ -48,6 +49,9 @@ const activityLabels = {
 };
 
 export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTimeAgo }: FeedRowActivityProps) {
+  const { resolved } = useTheme();
+  const isDark = resolved === 'dark';
+
   const actorName = event.actor?.display_name || event.actor?.username || 'Utilisateur';
   const ownerName = event.owner?.display_name || event.owner?.username || 'Utilisateur';
   const ActivityIcon = activityIcons[event.activity.type] || BookOpen;
@@ -67,7 +71,11 @@ export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTi
   const cleanTitle = event.activity.title?.replace(/^Read\s+/i, '') || '';
 
   return (
-    <div className="flex items-center gap-2.5 p-2.5 bg-white rounded-2xl shadow-sm">
+    <div
+      className={`flex items-center gap-2.5 p-2.5 rounded-2xl ${
+        isDark ? 'bg-[rgba(255,255,255,0.06)] border border-[rgba(255,255,255,0.12)]' : 'bg-white shadow-sm'
+      }`}
+    >
       {/* Avatar */}
       <button
         type="button"
@@ -99,21 +107,30 @@ export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTi
             <MessageCircle className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-stone-900 line-clamp-2">
+            <p
+              className={`text-sm line-clamp-2 ${isDark ? 'text-white' : 'text-stone-900'}`}
+              style={isDark ? { color: '#ffffff' } : undefined}
+            >
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onActorClick(event.actor.id);
                 }}
-                className="font-semibold hover:underline cursor-pointer"
+                className={`font-semibold hover:underline cursor-pointer ${isDark ? 'text-white' : ''}`}
+                style={isDark ? { color: '#ffffff' } : undefined}
               >
                 {actorName}
               </button>
               {' '}
               {event.event_type === 'activity_like' ? 'a aimé' : 'a commenté'}{' '}
               l'activité de{' '}
-              <span className="text-stone-600">{ownerName}</span>
+              <span
+                className={isDark ? 'text-white font-semibold' : 'text-stone-600'}
+                style={isDark ? { color: '#ffffff' } : undefined}
+              >
+                {ownerName}
+              </span>
             </p>
             
             {/* Activity Chip */}
@@ -123,25 +140,30 @@ export function FeedRowActivity({ event, onActorClick, onActivityClick, formatTi
                 e.stopPropagation();
                 onActivityClick(event.activity.id);
               }}
-              className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-stone-200 bg-white hover:bg-stone-50 transition-colors cursor-pointer text-xs text-stone-700"
+              className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full transition-colors cursor-pointer text-xs bg-white text-stone-900 border border-transparent hover:bg-white"
+              style={{ backgroundColor: 'rgba(255, 255, 255, 1)', color: '#0f0f10', borderColor: 'transparent' }}
             >
-              <ActivityIcon className="w-3 h-3 text-stone-500" />
+              <ActivityIcon className="w-3 h-3 text-stone-900" />
               <span className="font-medium">{chipText}</span>
               {cleanTitle && (
                 <>
-                  <span className="text-stone-400">·</span>
-                  <span className="text-stone-600 truncate max-w-[120px]">{cleanTitle}</span>
+                  <span className={isDark ? 'text-stone-500' : 'text-stone-400'}>·</span>
+                  <span className={isDark ? 'text-stone-900 truncate max-w-[120px]' : 'text-stone-600 truncate max-w-[120px]'}>
+                    {cleanTitle}
+                  </span>
                 </>
               )}
             </button>
           </div>
         </div>
         {event.event_type === 'activity_comment' && event.comment_content && (
-          <p className="text-xs text-stone-600 line-clamp-1 ml-5 mt-1">
+          <p className={`text-xs line-clamp-1 ml-5 mt-1 ${isDark ? 'text-stone-300' : 'text-stone-600'}`}>
             "{event.comment_content}"
           </p>
         )}
-        <p className="text-[10px] text-stone-400 mt-1 ml-5">{formatTimeAgo(event.created_at)}</p>
+        <p className={`text-[10px] mt-1 ml-5 ${isDark ? 'text-stone-400' : 'text-stone-400'}`}>
+          {formatTimeAgo(event.created_at)}
+        </p>
       </div>
     </div>
   );

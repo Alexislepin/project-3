@@ -97,6 +97,15 @@ export function getReadingUI(activity: {
   const bookTitle = activity.book?.title || 'un livre';
   const bookAuthor = activity.book?.author || 'Auteur inconnu';
 
+  const formatDuration = (minutes: number) => {
+    const totalSeconds = Math.max(0, Math.round(minutes * 60));
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    if (m > 0 && s > 0) return `${m}m ${s.toString().padStart(2, '0')}s`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
+  };
+
   // Action label: "a lu" or "Session de lecture" (SANS le titre pour éviter duplication)
   const actionLabel = pages === 0 ? 'Session de lecture' : 'a lu';
 
@@ -113,10 +122,9 @@ export function getReadingUI(activity: {
 
   // Duration chip (if available)
   if (duration > 0) {
-    const minutes = Math.max(1, Math.round(duration));
     statsChips.push({
-      label: 'min',
-      value: `${minutes}`,
+      label: 'durée',
+      value: formatDuration(duration),
     });
   }
 
@@ -132,9 +140,25 @@ export function getReadingUI(activity: {
 
     if (speed && speed > 0) {
       statsChips.push({
-        label: 'p/h',
-        value: speed.toFixed(1),
+        label: 'pages/h',
+        value: Math.round(speed).toString(),
       });
+
+      const pace = duration > 0 ? duration / pages : null; // minutes per page
+      if (pace && pace > 0) {
+        if (pace < 1) {
+          const secondsPerPage = Math.round(pace * 60);
+          statsChips.push({
+            label: 's/page',
+            value: `${secondsPerPage}`,
+          });
+        } else {
+          statsChips.push({
+            label: 'min/page',
+            value: Math.round(pace).toString(),
+          });
+        }
+      }
     }
   }
 

@@ -4,6 +4,8 @@ import { signInWithGoogle } from '../lib/oauth';
 import { BrandLogo } from '../components/BrandLogo';
 import { supabase } from '../lib/supabase';
 import { Capacitor } from '@capacitor/core';
+import { Sun, Moon } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -16,6 +18,11 @@ export function LoginPage() {
   const [resetPasswordLoading, setResetPasswordLoading] = useState(false);
   const [resetPasswordSuccess, setResetPasswordSuccess] = useState(false);
   const { signIn } = useAuth();
+  const { mode, setMode, resolved } = useTheme();
+
+  const toggleTheme = () => {
+    setMode(mode === 'light' ? 'dark' : 'light');
+  };
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
@@ -89,15 +96,42 @@ export function LoginPage() {
       >
         <div className="flex items-center justify-center min-h-full p-4">
           <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="mb-2">
-            <BrandLogo size={48} color="#111" />
+        <div className="text-center mb-8 pt-6">
+          <div className="mb-1">
+            <BrandLogo size={62} />
           </div>
-          <p className="text-text-sub-light">Suivez votre progression, construisez votre élan</p>
+          <p
+            className="text-text-sub-light text-[11px]"
+            style={{ verticalAlign: 'middle' }}
+          >
+            Suivez votre progression, construisez votre élan
+          </p>
         </div>
 
-        <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-8">
-          <h2 className="text-2xl font-semibold mb-6 text-text-main-light">Connexion</h2>
+          <div className="bg-card-light rounded-xl shadow-sm border border-gray-200 p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-semibold text-text-main-light">Connexion</h2>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="flex items-center gap-2 px-2 py-1 rounded-full bg-black/5 text-text-main-light hover:bg-black/10 transition-colors"
+                title={resolved === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
+              >
+                <Sun className={`w-4 h-4 ${resolved === 'dark' ? 'opacity-40' : 'opacity-100'}`} />
+                <div
+                  className={`w-10 h-5 rounded-full relative transition-colors ${
+                    resolved === 'dark' ? 'bg-gray-700' : 'bg-gray-300'
+                  }`}
+                >
+                  <div
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                      resolved === 'dark' ? 'translate-x-5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </div>
+                <Moon className={`w-4 h-4 ${resolved === 'dark' ? 'opacity-100' : 'opacity-40'}`} />
+              </button>
+            </div>
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">

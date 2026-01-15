@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { debugError } from '../utils/logger';
-import { LogOut, Edit, Bell, UserPlus, HelpCircle, BookOpen, Shield, Bug, ArrowRight } from 'lucide-react';
+import { LogOut, Edit, Bell, UserPlus, HelpCircle, BookOpen, Shield, Bug, ArrowRight, Sun, Moon, Sparkles } from 'lucide-react';
 import { Clubs } from './Clubs';
 import { EditProfileModal } from '../components/EditProfileModal';
 import { NotificationsModal } from '../components/NotificationsModal';
@@ -26,15 +26,17 @@ import { MyActivities } from './MyActivities';
 import { countRows } from '../lib/supabaseCounts';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 import { XpHistoryModal } from '../components/XpHistoryModal';
-import { fetchWeeklyActivity, weeklyActivityToPagesArray } from '../lib/weeklyActivity';
+import { fetchWeeklyActivity, weeklyActivityToPagesArray, formatWeekRangeLabel } from '../lib/weeklyActivity';
 import { resolveBookCover } from '../lib/bookCover';
 import { canonicalBookKey } from '../lib/bookSocial';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface ProfileProps {
   onNavigateToLibrary: () => void;
+  onRestartTour: () => void;
 }
 
-export function Profile({ onNavigateToLibrary }: ProfileProps) {
+export function Profile({ onNavigateToLibrary, onRestartTour }: ProfileProps) {
   const { t } = useTranslation();
   const { profile: contextProfile, refreshProfile, profileLoading: contextProfileLoading } = useAuth();
   const [profile, setProfile] = useState<any>(contextProfile);
@@ -46,6 +48,9 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [clubCount, setClubCount] = useState(0);
   const [showMyActivities, setShowMyActivities] = useState(false);
   const [weeklyActivity, setWeeklyActivity] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [weeklyWeekOffset, setWeeklyWeekOffset] = useState(0);
+  const [weeklyRangeLabel, setWeeklyRangeLabel] = useState<string>('');
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearchUsers, setShowSearchUsers] = useState(false);
   const [currentlyReading, setCurrentlyReading] = useState<any[]>([]);
@@ -74,6 +79,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   const [totalPagesAllTime, setTotalPagesAllTime] = useState(0);
   const [streakDays, setStreakDays] = useState(0);
   const { user, signOut } = useAuth();
+  const { mode: themeMode, resolved: resolvedTheme, setMode: setThemeMode } = useTheme();
 
   // Request guards to prevent stale requests from overwriting state
   const statsReqRef = useRef(0);
@@ -106,7 +112,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
 
     loadStats();
     loadClubCount();
-    loadWeeklyActivity();
+    loadWeeklyActivity(0);
     loadCurrentlyReading();
     loadLikedBooks();
     loadUnreadNotificationsCount();
@@ -420,25 +426,50 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
     setUnreadNotificationsCount(data?.length || 0);
   };
 
-  const loadWeeklyActivity = async () => {
+  const loadWeeklyActivity = async (weekOffset = weeklyWeekOffset) => {
     if (!user?.id) return;
     const profileId = user.id;
 
     const reqId = ++weeklyReqRef.current;
+    setWeeklyLoading(true);
 
     try {
       // Use the centralized helper function
-      const result = await fetchWeeklyActivity(profileId);
+      const result = await fetchWeeklyActivity(profileId, { weekOffset });
 
       if (reqId !== weeklyReqRef.current) return; // ✅ ignore stale
 
       // Convert to pages array for backward compatibility
       const weekData = weeklyActivityToPagesArray(result.days);
       setWeeklyActivity(weekData);
+      if (result.weekStart && result.weekEnd) {
+        setWeeklyRangeLabel(
+          formatWeekRangeLabel(new Date(result.weekStart), new Date(result.weekEnd))
+        );
+      }
     } catch (e) {
       console.error('[loadWeeklyActivity] Unexpected:', e);
-      setWeeklyActivity([0, 0, 0, 0, 0, 0, 0]);
+      // Ne pas écraser les données actuelles pour éviter un flash
+    } finally {
+      setWeeklyLoading(false);
     }
+  };
+
+  const handlePrevWeek = () => {
+    setWeeklyWeekOffset((prev) => {
+      const next = prev + 1;
+      loadWeeklyActivity(next);
+      return next;
+    });
+  };
+
+  const handleNextWeek = () => {
+    setWeeklyWeekOffset((prev) => {
+      if (prev === 0) return prev;
+      const next = prev - 1;
+      loadWeeklyActivity(next);
+      return next;
+    });
   };
 
   const loadStreak = async () => {
@@ -741,7 +772,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
   }
 
   return (
-    <div className="h-screen max-w-2xl mx-auto overflow-hidden">
+    <div className="h-screen max-w-2xl mx-auto overflow-hidden mb-5">
       {/* Fixed Header - now truly fixed via AppHeader component */}
         <AppHeader
           title={t('profile.title')}
@@ -749,6 +780,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             <>
               <button
                 onClick={() => setShowSearchUsers(true)}
+                data-tour-target="profile-add-friend"
                 className="p-2 hover:bg-black/5 rounded-full transition-colors"
                 title={t('profile.followers')}
               >
@@ -764,6 +796,17 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
                   <span className="absolute -top-1 -right-1 bg-primary text-black text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
                     {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
                   </span>
+                )}
+              </button>
+              <button
+                onClick={() => setThemeMode(themeMode === 'light' ? 'dark' : 'light')}
+                className="p-2 hover:bg-black/5 rounded-full transition-colors"
+                title={`Thème : ${themeMode}`}
+              >
+                {resolvedTheme === 'dark' ? (
+                  <Moon className="w-5 h-5 text-text-sub-light" />
+                ) : (
+                  <Sun className="w-5 h-5 text-text-sub-light" />
                 )}
               </button>
               <button
@@ -832,6 +875,11 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         profile={profile}
         stats={stats}
         weeklyActivity={weeklyActivity}
+        weeklyRangeLabel={weeklyRangeLabel}
+        onPrevWeek={handlePrevWeek}
+        onNextWeek={handleNextWeek}
+        isCurrentWeek={weeklyWeekOffset === 0}
+        weeklyLoading={weeklyLoading}
         totalMinutes={totalMinutes}
         readingSpeed7d={readingSpeed7d}
         readingPace7d={readingPace7d}
@@ -852,14 +900,14 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setIsEditModalOpen(true)}
-              className="flex items-center gap-2 px-6 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
+              className="flex items-center gap-2 px-6 py-2.5 bg-primary text-on-accent rounded-xl hover:brightness-95 transition-colors font-medium"
             >
               <Edit className="w-4 h-4" />
               {t('profile.edit')}
             </button>
             <button
               onClick={() => setShowHelpCenter(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-card-light border-2 border-gray-200 text-text-main-light rounded-xl hover:bg-gray-50 transition-colors font-medium"
+              className="flex items-center gap-2 px-4 py-2.5 bg-surface border-2 border-border text-text-main rounded-xl hover:bg-surface-2 transition-colors font-medium"
               title="Centre d'aide"
             >
               <HelpCircle className="w-4 h-4" />
@@ -889,7 +937,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             setHelpCenterView('faq');
             setShowHelpCenter(true);
           }}
-          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-surface-2 transition-colors"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-50 rounded-lg">
@@ -904,11 +952,28 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
         </div>
 
         <div
+          onClick={onRestartTour}
+          data-tour-target="profile-restart-tour"
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-surface-2 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-50 rounded-lg">
+              <Sparkles className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-text-main-light">Relancer le tutoriel</h3>
+              <p className="text-sm text-text-sub-light">Revoir le guide pas à pas</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-text-sub-light" />
+        </div>
+
+        <div
           onClick={() => {
             setHelpCenterView('privacy');
             setShowHelpCenter(true);
           }}
-          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-surface-2 transition-colors"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-green-50 rounded-lg">
@@ -927,7 +992,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
             setHelpCenterView('bug');
             setShowHelpCenter(true);
           }}
-          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors"
+          className="flex items-center justify-between p-4 bg-card-light rounded-xl border border-gray-200 cursor-pointer hover:bg-surface-2 transition-colors"
         >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-red-50 rounded-lg">
@@ -1035,7 +1100,7 @@ export function Profile({ onNavigateToLibrary }: ProfileProps) {
               showBack
               onBack={() => setShowAllLikedBooks(false)}
             />
-            <div className="p-4">
+            <div className="p-4 mb-5">
               {likedBooks.length === 0 ? (
                 <div className="text-center py-12">
                   <BookOpen className="w-16 h-16 mx-auto mb-4 text-text-sub-light opacity-50" />

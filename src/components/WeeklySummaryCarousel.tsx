@@ -33,6 +33,7 @@ interface SummaryCardProps {
   avatar?: string | null;
   iconColor?: string;
   onClick?: () => void;
+  bgStyle?: React.CSSProperties;
 }
 
 // Helper for pluralization
@@ -46,10 +47,9 @@ const SummaryCard = ({
   value,
   subtitle,
   bgColor,
-  accentColor,
   avatar,
   onClick,
-  iconColor,
+  bgStyle,
   isFirstPlace = false,
 }: SummaryCardProps & { iconColor?: string; isFirstPlace?: boolean }) => {
   // Bubble shape: border-radius must be > half the height (66px / 2 = 33px)
@@ -81,19 +81,21 @@ const SummaryCard = ({
           </div>
           
           {/* Label avec espace depuis l'icône */}
-          <div className={`text-[9px] font-normal text-stone-700 leading-tight uppercase tracking-wider ${
-            label.includes('POSITION') ? 'tracking-[0.05em]' : ''
-          }`}>
+          <div
+            className={`text-[9px] font-normal text-muted-2 leading-tight uppercase tracking-wider ${
+              label.includes('POSITION') ? 'tracking-[0.05em]' : ''
+            }`}
+          >
             {label}
           </div>
         </div>
 
         {/* SECTION BASSE: Valeur principale + Unité avec espace depuis le bord */}
         <div className="flex flex-col items-start">
-          <div className="text-[28px] font-semibold leading-none text-stone-950 tracking-tight">
+          <div className="text-[28px] font-semibold leading-none text-text-main-light tracking-tight">
             {value}
           </div>
-          <div className="text-[11px] font-normal text-stone-600 leading-tight mt-1">
+          <div className="text-[11px] font-normal text-muted leading-tight mt-1">
             {subtitle}
           </div>
         </div>
@@ -121,7 +123,7 @@ const SummaryCard = ({
         onClick={onClick}
         className={baseClasses}
         type="button"
-        style={glowStyle}
+        style={{ ...glowStyle, ...bgStyle }}
         onTouchStart={() => {
           // Optional haptic feedback on iOS
           if (typeof window !== 'undefined' && 'Haptics' in window) {
@@ -139,7 +141,7 @@ const SummaryCard = ({
     );
   }
 
-  return <div className={baseClasses} style={glowStyle}>{content}</div>;
+  return <div className={baseClasses} style={{ ...glowStyle, ...bgStyle }}>{content}</div>;
 };
 
 export function WeeklySummaryCarousel({
@@ -155,7 +157,12 @@ export function WeeklySummaryCarousel({
   if (loading || !summary) {
     return (
       <div className="px-4 mb-4">
-        <h2 className="text-sm font-semibold text-stone-600 mb-3">Votre résumé hebdomadaire</h2>
+        <h2
+          className="text-sm font-semibold text-black mb-3"
+          style={{ color: 'rgb(var(--color-text))' }}
+        >
+          Votre résumé hebdomadaire
+        </h2>
         <div className="flex gap-2 overflow-x-auto snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
           {[1, 2, 3, 4].map((i) => (
             <div
@@ -183,33 +190,81 @@ export function WeeklySummaryCarousel({
 
   return (
     <div className="px-4 mb-4">
-      <h2 className="text-sm font-semibold text-stone-600 mb-2.5">Votre résumé hebdomadaire</h2>
+      <h2
+        className="text-sm font-semibold text-black mb-2.5"
+        style={{ color: 'rgb(var(--color-text))' }}
+      >
+        Votre résumé hebdomadaire
+      </h2>
       <div className="flex gap-2.5 overflow-x-auto snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
         <SummaryCard
-          icon={<Activity className="w-3.5 h-3.5 text-blue-600" />}
+          icon={
+            <Activity
+              className="w-3.5 h-3.5"
+              style={{ color: 'rgba(0, 64, 255, 1)' }}
+            />
+          }
           label="Activités"
           value={summary.sessionsCount}
           subtitle="sessions"
           bgColor="bg-blue-50"
           iconColor="bg-blue-100"
+          bgStyle={{
+            background:
+              'linear-gradient(90deg, rgba(51, 93, 219, 0.1) 0%, rgba(111, 188, 235, 0.2) 100%)',
+            backgroundColor: 'rgba(1, 64, 255, 0.1)',
+            backgroundImage: 'none',
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: 'rgba(1, 64, 255, 1)',
+            borderImage: 'none',
+          }}
           onClick={onOpenActivities}
         />
         <SummaryCard
-          icon={<Clock className="w-3.5 h-3.5 text-violet-600" />}
+          icon={
+            <Clock
+              className="w-3.5 h-3.5"
+              style={{ color: 'rgba(109, 9, 129, 1)' }}
+            />
+          }
           label="Temps"
           value={summary.totalMinutes}
           subtitle="minutes"
           bgColor="bg-violet-50"
           iconColor="bg-violet-100"
+          bgStyle={{
+            background: 'none',
+            backgroundColor: 'rgba(187, 7, 223, 0.1)',
+            backgroundImage: 'none',
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: 'rgba(173, 15, 204, 1)',
+            borderImage: 'none',
+          }}
           onClick={onOpenTime}
         />
         <SummaryCard
-          icon={<BookOpen className="w-3.5 h-3.5 text-emerald-600" />}
+          icon={
+            <BookOpen
+              className="w-3.5 h-3.5"
+              style={{ color: 'rgba(6, 142, 8, 1)' }}
+            />
+          }
           label="Pages"
           value={summary.totalPages}
           subtitle="pages lues"
           bgColor="bg-emerald-50"
           iconColor="bg-emerald-100"
+          bgStyle={{
+            background: 'none',
+            backgroundColor: 'rgba(11, 239, 15, 0.1)',
+            backgroundImage: 'none',
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: 'rgba(15, 142, 17, 1)',
+            borderImage: 'none',
+          }}
           onClick={onOpenPages}
         />
         {showRanking && (
@@ -220,6 +275,15 @@ export function WeeklySummaryCarousel({
             subtitle={rankingSubtitle}
             bgColor="bg-amber-50"
             iconColor="bg-amber-100"
+          bgStyle={{
+            background: 'none',
+            backgroundColor: 'rgba(255, 132, 0, 0.1)',
+            backgroundImage: 'none',
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: 'rgba(217, 119, 15, 1)',
+            borderImage: 'none',
+          }}
             avatar={userAvatar}
             isFirstPlace={isFirstPlace}
             onClick={onOpenLeaderboard}
@@ -231,4 +295,3 @@ export function WeeklySummaryCarousel({
     </div>
   );
 }
-
