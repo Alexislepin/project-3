@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '../contexts/AuthContext';
 import { resolveAvatarUrl, addCacheBuster } from '../lib/resolveImageUrl';
 import { LevelBadge } from '../components/LevelProgressBar';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -71,7 +70,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
 
   return (
     <div 
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]" 
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]" 
       data-modal-overlay
       onClick={onClose}
       onTouchMove={(e) => {
@@ -84,10 +83,13 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
     >
       <div
         data-modal-content
-        className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden mx-4"
+        className="bg-background-light rounded-3xl max-w-xl w-full flex flex-col overflow-hidden mx-4 shadow-2xl border border-gray-100 mb-6"
         onClick={(e) => e.stopPropagation()}
+        style={{
+          maxHeight: 'calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 180px)',
+        }}
       >
-        <div className="flex-shrink-0 bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
+        <div className="flex-shrink-0 bg-background-light border-b border-stone-200 px-6 py-4 flex items-center justify-between rounded-t-3xl">
           <h2 className="text-xl font-bold">Abonnés</h2>
           <button
             onClick={onClose}
@@ -98,10 +100,10 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
         </div>
 
         <div 
-          className="flex-1 overflow-y-auto min-h-0 p-4"
+          className="flex-1 overflow-y-auto min-h-0 px-6 py-6"
           style={{
             WebkitOverflowScrolling: 'touch',
-            paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
+            paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 128px)',
           }}
         >
           {loading ? (
@@ -120,7 +122,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
                     onUserClick(profile.id);
                     onClose();
                   }}
-                  className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-stone-50 transition-colors text-left"
+                  className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-surface-2 transition-colors text-left"
                 >
                   <div className="w-12 h-12 bg-stone-200 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
                     {(() => {
@@ -143,7 +145,7 @@ export function FollowersModal({ userId, onClose, onUserClick }: FollowersModalP
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-stone-900">{profile.display_name}</h3>
+                      <h3 className="font-bold text-text-main-light">{profile.display_name}</h3>
                       {profile.xp_total !== undefined && (
                         <LevelBadge xpTotal={profile.xp_total || 0} />
                       )}

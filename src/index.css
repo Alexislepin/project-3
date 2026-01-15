@@ -16,6 +16,33 @@
     --header-height: 56px;
     /* Hauteur de la tabbar (avec labels) */
     --tabbar-h: 72px;
+    /* Thème clair (par défaut) - valeurs RGB (space-separated) */
+    --color-accent: 230 255 0; /* Jaune brand - NE PAS CHANGER */
+    --color-on-accent: 0 0 0;
+    --color-bg: 245 245 245;
+    --color-surface: 255 255 255;
+    --color-surface-2: 249 249 249;
+    --color-border: 229 231 235;
+    --color-text: 5 5 5;
+    --color-muted: 64 64 64;
+    --color-muted-2: 113 113 122;
+    --color-overlay: 0 0 0;
+    --library-content-pt: 0px;
+  }
+  
+  .theme-dark {
+    --color-accent: 230 255 0; /* on garde EXACTEMENT le même jaune */
+    --color-on-accent: 0 0 0;
+    --color-bg: 15 15 16;          /* #0F0F10 */
+    --color-surface: 22 22 24;     /* #161618 */
+    --color-surface-2: 28 28 31;   /* #1C1C1F */
+    --color-border: 38 38 42;      /* #26262A */
+    --color-text: 245 245 247;     /* #F5F5F7 */
+    --color-muted: 161 161 170;    /* #A1A1AA */
+    --color-muted-2: 113 113 122;  /* #71717A */
+    --color-overlay: 0 0 0;
+    --library-content-pt: 10px;
+    color-scheme: dark;
   }
   
   html {
@@ -65,6 +92,14 @@
     padding-left: var(--sal);
     padding-right: var(--sar);
   }
+}
+
+/* Theme-specific tweaks */
+.theme-dark .leaderboard-btn {
+  color: rgba(0, 0, 0, 1);
+}
+.theme-dark .leaderboard-btn svg {
+  color: rgba(0, 0, 0, 1);
 }
 
 @keyframes slideUp {
@@ -166,9 +201,17 @@
     position: sticky;
     top: 0;
     z-index: 50;
-    background-color: rgba(250, 250, 249, 0.95);
+    background-color: rgba(var(--color-surface), 0.95);
     backdrop-filter: blur(8px);
-    border-bottom: 1px solid rgb(229, 231, 235);
+    border-bottom: 1px solid rgb(var(--color-border));
+  }
+
+  /* Texte par défaut sur le jaune accent */
+  .bg-primary, .bg-primary\/100 {
+    color: rgb(var(--color-on-accent)) !important;
+  }
+  .text-on-accent {
+    color: rgb(var(--color-on-accent));
   }
 }
 

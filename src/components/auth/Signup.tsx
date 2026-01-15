@@ -48,7 +48,7 @@ export function Signup({ onSwitchToLogin, onComplete }: SignupProps) {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="mb-2">
-            <BrandLogo size={40} color="#111" />
+            <BrandLogo size={40} />
           </div>
           <p className="text-stone-600">Commencez à construire votre élan</p>
         </div>

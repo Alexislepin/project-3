@@ -11,7 +11,15 @@ export type DayStat = {
 export interface WeeklyActivityResult {
   totalPages: number;
   days: DayStat[];
+  weekStart: string; // ISO date
+  weekEnd: string;   // ISO date
 }
+
+export type WeeklyActivityOptions = {
+  weekOffset?: number; // 0 = semaine en cours, 1 = semaine précédente, etc.
+  visibility?: 'all' | 'public';
+  visibilities?: ('public' | 'followers' | 'private')[];
+};
 
 /**
  * Fetch and aggregate weekly reading activity (Monday-Sunday of current week)
@@ -22,10 +30,16 @@ export interface WeeklyActivityResult {
  * This is EXPECTED BEHAVIOR - the graph resets at the start of each new week.
  * Activities from previous weeks are NOT included in this calculation.
  */
-export async function fetchWeeklyActivity(userId: string): Promise<WeeklyActivityResult> {
+export async function fetchWeeklyActivity(
+  userId: string,
+  options: WeeklyActivityOptions = {}
+): Promise<WeeklyActivityResult> {
+  const { weekOffset = 0, visibility = 'all', visibilities } = options;
+
   // Calculate week boundaries in local timezone (Monday 00:00:00 to Sunday 23:59:59)
-  // Only activities within this week will be counted
   const weekStart = startOfLocalWeek();
+  // Décaler de n semaines en arrière si weekOffset > 0
+  weekStart.setDate(weekStart.getDate() - weekOffset * 7);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekStart.getDate() + 6);
   weekEnd.setHours(23, 59, 59, 999);
@@ -36,17 +50,25 @@ export async function fetchWeeklyActivity(userId: string): Promise<WeeklyActivit
   const weekEndISO = weekEnd.toISOString();
 
   // Fetch activities from the current week (Monday-Sunday)
-  const { data: activities, error } = await supabase
+  let query = supabase
     .from('activities')
-    .select('created_at, pages_read, duration_minutes')
+    .select('created_at, pages_read, duration_minutes, visibility')
     .eq('user_id', userId)
     .eq('type', 'reading')
     .gte('created_at', weekStartISO)
     .lte('created_at', weekEndISO);
 
+  if (visibilities && visibilities.length > 0) {
+    query = visibilities.length === 1 ? query.eq('visibility', visibilities[0]) : query.in('visibility', visibilities);
+  } else if (visibility === 'public') {
+    query = query.eq('visibility', 'public');
+  }
+
+  const { data: activities, error } = await query;
+
   if (error) {
     console.error('[fetchWeeklyActivity] Error:', error);
-    return { totalPages: 0, days: getEmptyWeekDays() };
+    return { totalPages: 0, days: getEmptyWeekDays(), weekStart: weekStartISO, weekEnd: weekEndISO };
   }
 
   // Initialize 7 days (Monday=0, Sunday=6)
@@ -82,7 +104,7 @@ export async function fetchWeeklyActivity(userId: string): Promise<WeeklyActivit
     }
   }
 
-  return { totalPages, days };
+  return { totalPages, days, weekStart: weekStartISO, weekEnd: weekEndISO };
 }
 
 /**
@@ -103,5 +125,12 @@ function getEmptyWeekDays(): DayStat[] {
  */
 export function weeklyActivityToPagesArray(days: DayStat[]): number[] {
   return days.map(d => d.pages);
+}
+
+export function formatWeekRangeLabel(start: Date, end: Date): string {
+  const locale = typeof navigator !== 'undefined' ? navigator.language : 'fr-FR';
+  const startLabel = start.toLocaleDateString(locale, { day: '2-digit', month: 'short' });
+  const endLabel = end.toLocaleDateString(locale, { day: '2-digit', month: 'short' });
+  return `${startLabel} – ${endLabel}`;
 }
 

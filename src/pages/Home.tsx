@@ -16,24 +16,13 @@ import { LevelProgressBar } from '../components/LevelProgressBar';
 import { LevelDetailsModal } from '../components/LevelDetailsModal';
 import { ActivityFocus } from '../lib/activityFocus';
 import { LeaderboardModal } from '../components/LeaderboardModal';
-import { Bell, UserPlus, Heart, RefreshCw } from 'lucide-react';
+import { Bell, UserPlus, Heart, RefreshCw, Sun, Moon } from 'lucide-react';
 import { fetchStreakInfo } from '../lib/streakService';
 import { AppHeader } from '../components/AppHeader';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 import { last7DaysRangeISO } from '../utils/dateUtils';
-
-// Note: Bottom spacing is now handled by getScrollBottomPadding() in layoutConstants
-
-// Monday-start week helper
-function startOfLocalWeek(date = new Date()) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  const day = d.getDay(); // 0=Sun ... 6=Sat
-  const diffToMonday = (day + 6) % 7; // Mon=0, Tue=1 ... Sun=6
-  d.setDate(d.getDate() - diffToMonday);
-  return d;
-}
+import { useTheme } from '../contexts/ThemeContext';
 
 export function Home() {
   const [activities, setActivities] = useState<any[]>([]);
@@ -82,6 +71,7 @@ export function Home() {
   const hapticFiredRef = useRef(false);
   
   const REFRESH_THRESHOLD = 80; // Increased threshold for less sensitivity
+  const { resolved: themeResolved, setMode: setThemeMode } = useTheme();
   
   const { user, profile: contextProfile } = useAuth();
 
@@ -144,23 +134,20 @@ export function Home() {
     if (!user) return;
 
     try {
-      // Get user's xp_total
+      // Get user's xp_total (default to 0)
       const { data: userProfile } = await supabase
         .from('user_profiles')
         .select('xp_total')
         .eq('id', user.id)
         .maybeSingle();
 
-      if (!userProfile?.xp_total) {
-        setRanking(null);
-        return;
-      }
+      const xpTotal = Number(userProfile?.xp_total ?? 0);
 
       // Count users with higher XP
       const { data: higherRankUsers } = await supabase
         .from('user_profiles')
         .select('id')
-        .gt('xp_total', userProfile.xp_total);
+        .gt('xp_total', xpTotal);
 
       // Count total users in the system (all users with profiles)
       const { count: total } = await supabase
@@ -295,14 +282,13 @@ export function Home() {
         .order('created_at', { ascending: false })
         .limit(30);
 
-      // Include: activities ONLY from people I follow (public or followers-only), EXCLUDE my own and private
+      // Include: activities ONLY from people I follow (public or followers visibility), EXCLUDE my own and private
       if (followingIds.length > 0) {
-        // Only show activities from people I follow (visibility = public OR followers)
+        // Only show activities from people I follow with public OR followers visibility
         // Exclude private activities and my own activities
         query.in('user_id', followingIds);
         query.neq('user_id', user.id); // Exclude my activities
-        query.or('visibility.eq.public,visibility.eq.followers'); // Only public or followers visibility
-        query.neq('visibility', 'private'); // Explicitly exclude private
+        query.in('visibility', ['public', 'followers']); // Allow public and followers visibility
       } else {
         // If no following, show empty feed (will show CTA to find readers)
         query.eq('user_id', '00000000-0000-0000-0000-000000000000'); // Impossible UUID to return empty
@@ -310,8 +296,7 @@ export function Home() {
 
       const { data } = await query;
       
-      // Fetch custom_cover_url for activities that have book_id
-      // We need to join user_books for each activity's user_id and book_id
+      // Fetch custom covers and current_page for activities that have book_id
       if (data && data.length > 0) {
         const bookIds = data.map(a => a.book_id).filter(Boolean) as string[];
         const userIds = [...new Set(data.map(a => a.user_id))] as string[];
@@ -319,7 +304,7 @@ export function Home() {
         if (bookIds.length > 0 && userIds.length > 0) {
           const { data: userBooksData, error: userBooksError } = await supabase
             .from('user_books')
-            .select('book_id, user_id, custom_cover_url')
+            .select('book_id, user_id, custom_cover_url, custom_total_pages, current_page')
             .in('book_id', bookIds)
             .in('user_id', userIds);
           
@@ -327,30 +312,37 @@ export function Home() {
             console.error('[Home] Error fetching custom covers:', userBooksError);
           }
           
-          // Create a map: `${user_id}:${book_id}` -> custom_cover_url
           const customCoverMap = new Map<string, string | null>();
+          const currentPageMap = new Map<string, number | null>();
+          const customTotalPagesMap = new Map<string, number | null>();
           if (userBooksData) {
             userBooksData.forEach(ub => {
               const key = `${ub.user_id}:${ub.book_id}`;
-              // custom_cover_url is already a public URL (stored as such in AddCoverModal)
-              // If it's a path (shouldn't happen, but safety check), convert to public URL
               let coverUrl = ub.custom_cover_url;
               if (coverUrl && !coverUrl.startsWith('http')) {
-                // It's a path, convert to public URL
                 const { data: publicUrlData } = supabase.storage.from('book-covers').getPublicUrl(coverUrl);
                 coverUrl = publicUrlData?.publicUrl || null;
               }
               customCoverMap.set(key, coverUrl);
+              currentPageMap.set(key, ub.current_page ?? null);
+              customTotalPagesMap.set(key, ub.custom_total_pages ?? null);
             });
           }
           
-          // Attach custom_cover_url to each activity's book
           data.forEach(activity => {
             if (activity.book_id && activity.books) {
               const key = `${activity.user_id}:${activity.book_id}`;
               const customCoverUrl = customCoverMap.get(key);
+              const currentPage = currentPageMap.get(key);
+              const customTotalPages = customTotalPagesMap.get(key);
               if (customCoverUrl !== undefined) {
                 (activity.books as any).custom_cover_url = customCoverUrl;
+              }
+              if (currentPage !== undefined) {
+                (activity as any).current_page = currentPage;
+              }
+              if (customTotalPages !== undefined) {
+                (activity.books as any).custom_total_pages = customTotalPages;
               }
             }
           });
@@ -416,6 +408,7 @@ export function Home() {
           reading_speed_pph: activity.reading_speed_pph,
           reading_pace_min_per_page: activity.reading_pace_min_per_page,
           reading_speed_wpm: activity.reading_speed_wpm,
+          current_page: (activity as any).current_page ?? null,
           notes: activity.notes,
           quotes: activity.quotes || [],
           book: activity.books,
@@ -718,6 +711,18 @@ export function Home() {
           <>
             <StreakBadge streak={streak} onClick={handleNavigateToInsights} />
             <button
+              onClick={() => setThemeMode(themeResolved === 'dark' ? 'light' : 'dark')}
+              className="p-1.5 hover:bg-black/5 rounded-full transition-colors"
+              title={themeResolved === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
+              aria-label={themeResolved === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
+            >
+              {themeResolved === 'dark' ? (
+                <Sun className="w-4 h-4 text-text-sub-light" />
+              ) : (
+                <Moon className="w-4 h-4 text-text-sub-light" />
+              )}
+            </button>
+            <button
               onClick={handleNavigateToSocial}
               className="p-1.5 hover:bg-black/5 rounded-full transition-colors relative"
               title="Social"
@@ -941,7 +946,7 @@ export function Home() {
       )}
 
       {selectedUserId && (
-        <div className="fixed inset-0 bg-background-light z-[400] overflow-y-auto">
+        <div className="fixed inset-0 bg-background-light z-[400] overflow-hidden">
           <UserProfileView
             userId={selectedUserId}
             onClose={() => {
@@ -1000,6 +1005,8 @@ export function Home() {
           initialPages={editingActivity.pages_read}
           initialDuration={editingActivity.duration_minutes}
           initialNotes={editingActivity.notes}
+          initialPhotos={editingActivity.photos}
+          initialVisibility={editingActivity.visibility}
           onClose={() => {
             setEditingActivityId(null);
             setEditingActivity(null);

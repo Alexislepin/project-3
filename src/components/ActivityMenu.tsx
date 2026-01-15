@@ -44,7 +44,7 @@ export function ActivityMenu({ activityId, userId, currentUserId, onEdit, onDele
           e.stopPropagation();
           setIsOpen(!isOpen);
         }}
-        className="p-1.5 rounded-full hover:bg-stone-100 transition-colors"
+        className="p-1.5 rounded-full transition-colors"
         aria-label="Menu"
       >
         <MoreVertical className="w-4 h-4 text-stone-500" />
@@ -58,7 +58,7 @@ export function ActivityMenu({ activityId, userId, currentUserId, onEdit, onDele
               setIsOpen(false);
               onEdit();
             }}
-            className="w-full px-4 py-2.5 text-left text-sm text-stone-700 hover:bg-stone-50 flex items-center gap-2 transition-colors"
+            className="w-full px-4 py-2.5 text-left text-sm text-stone-700 flex items-center gap-2 transition-colors"
           >
             <Edit className="w-4 h-4" />
             Modifier
@@ -69,7 +69,7 @@ export function ActivityMenu({ activityId, userId, currentUserId, onEdit, onDele
               setIsOpen(false);
               onDelete();
             }}
-            className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+            className="w-full px-4 py-2.5 text-left text-sm text-red-600 flex items-center gap-2 transition-colors"
           >
             <Trash2 className="w-4 h-4" />
             Supprimer

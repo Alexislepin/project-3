@@ -913,36 +913,31 @@ export function generateFallbackSummary(book: {
   firstPublishYear?: number;
   publishedDate?: string;
 }): string {
+  const title = book.title?.trim() || 'Cet ouvrage';
   const author = book.author || book.authors || 'un auteur';
   const pages = book.total_pages || book.pageCount;
   const year = book.firstPublishYear || (book.publishedDate ? new Date(book.publishedDate).getFullYear() : null);
   const category = book.category || book.genre;
 
   const parts: string[] = [];
-  
-  // Type de livre
-  if (category) {
-    parts.push(`Roman de ${author}`);
-  } else {
-    parts.push(`Livre de ${author}`);
-  }
 
-  // Année de publication
+  parts.push(`${title} est un livre de ${author}`);
+
   if (year) {
     parts.push(`publié en ${year}`);
   }
 
-  // Pages
   if (pages) {
-    parts.push(`environ ${pages} pages`);
+    parts.push(`${pages} pages`);
   }
 
-  // Thèmes/catégories
   if (category) {
-    parts.push(`thèmes: ${category}`);
+    parts.push(`autour de ${category}`);
   }
 
-  return parts.join(', ') + '.';
+  parts.push(`(résumé détaillé indisponible).`);
+
+  return parts.join(', ');
 }
 
 

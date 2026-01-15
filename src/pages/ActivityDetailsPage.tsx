@@ -141,44 +141,47 @@ export function ActivityDetailsPage() {
   }
 
   return (
-    <div className="h-screen max-w-2xl mx-auto bg-background-light overflow-hidden">
+    <div className="h-screen max-w-2xl mx-auto bg-background-light dark:bg-neutral-950 overflow-hidden text-stone-900 dark:text-neutral-50">
       <AppHeader title="Détails de l'activité" showBack={true} onBack={() => navigate(-1)} />
       
-      <div className="h-full overflow-y-auto" style={{ paddingTop: '56px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}>
+      <div
+        className="h-full overflow-y-auto"
+        style={{ paddingTop: '56px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom))' }}
+      >
         <div className="p-4 space-y-4">
           {/* Header */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm">
+          <div className="bg-white dark:bg-neutral-900/95 dark:border dark:border-neutral-800 rounded-2xl p-6 shadow-sm">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                <ActivityIcon className="w-6 h-6 text-primary" />
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center dark:bg-primary/20">
+                <ActivityIcon className="w-6 h-6 text-primary dark:text-primary" />
               </div>
               <div className="flex-1">
-                <h1 className="text-xl font-bold text-stone-900">{cleanTitle || activity.title}</h1>
-                <p className="text-sm text-stone-500">{activityLabel}</p>
+                <h1 className="text-xl font-bold text-stone-900 dark:text-neutral-50">{cleanTitle || activity.title}</h1>
+                <p className="text-sm text-stone-500 dark:text-neutral-300">{activityLabel}</p>
               </div>
             </div>
 
             {/* Owner */}
             {owner && (
               <div className="flex items-center gap-2 mb-4">
-                <span className="text-sm text-stone-600">Par</span>
-                <span className="text-sm font-semibold text-stone-900">{ownerName}</span>
+                <span className="text-sm text-stone-600 dark:text-neutral-300">Par</span>
+                <span className="text-sm font-semibold text-stone-900 dark:text-neutral-50">{ownerName}</span>
               </div>
             )}
 
             {/* Stats */}
-            <div className="flex items-center gap-4 text-sm text-stone-600">
+            <div className="flex items-center gap-4 text-sm text-stone-600 dark:text-neutral-300">
               {activity.pages_read && activity.pages_read > 0 && (
                 <div>
-                  <span className="font-semibold">{activity.pages_read}</span> pages
+                  <span className="font-semibold text-stone-900 dark:text-neutral-50">{activity.pages_read}</span> pages
                 </div>
               )}
               {activity.duration_minutes && activity.duration_minutes > 0 && (
                 <div>
-                  <span className="font-semibold">{activity.duration_minutes}</span> min
+                  <span className="font-semibold text-stone-900 dark:text-neutral-50">{activity.duration_minutes}</span> min
                 </div>
               )}
-              <div>
+              <div className="text-stone-600 dark:text-neutral-200">
                 {new Date(activity.created_at).toLocaleDateString('fr-FR', {
                   day: 'numeric',
                   month: 'long',
@@ -190,22 +193,22 @@ export function ActivityDetailsPage() {
 
           {/* Notes */}
           {activity.notes && (
-            <div className="bg-white rounded-2xl p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-stone-900 mb-2">Notes</h2>
-              <p className="text-stone-700 whitespace-pre-wrap">{activity.notes}</p>
+            <div className="bg-white dark:bg-neutral-900/95 dark:border dark:border-neutral-800 rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-stone-900 dark:text-neutral-50 mb-2">Notes</h2>
+              <p className="text-stone-700 dark:text-neutral-200 whitespace-pre-wrap">{activity.notes}</p>
             </div>
           )}
 
           {/* Quotes */}
           {activity.quotes && Array.isArray(activity.quotes) && activity.quotes.length > 0 && (
-            <div className="bg-white rounded-2xl p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-stone-900 mb-3">Citations</h2>
+            <div className="bg-white dark:bg-neutral-900/95 dark:border dark:border-neutral-800 rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-stone-900 dark:text-neutral-50 mb-3">Citations</h2>
               <div className="space-y-3">
                 {activity.quotes.map((quote: any, index: number) => (
-                  <div key={index} className="border-l-4 border-primary pl-3 py-2 bg-gray-50 rounded-r-lg">
-                    <p className="text-sm text-stone-700 italic">"{quote.text}"</p>
+                  <div key={index} className="border-l-4 border-primary pl-3 py-2 bg-gray-50 dark:bg-neutral-800/95 rounded-r-lg">
+                    <p className="text-sm text-stone-700 dark:text-neutral-200 italic">"{quote.text}"</p>
                     {quote.page && (
-                      <p className="text-xs text-stone-500 mt-1">Page {quote.page}</p>
+                      <p className="text-xs text-stone-500 dark:text-neutral-400 mt-1">Page {quote.page}</p>
                     )}
                   </div>
                 ))}
@@ -215,8 +218,8 @@ export function ActivityDetailsPage() {
 
           {/* Photos */}
           {activity.photos && Array.isArray(activity.photos) && activity.photos.length > 0 && (
-            <div className="bg-white rounded-2xl p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-stone-900 mb-3">Photos</h2>
+            <div className="bg-white dark:bg-neutral-900/95 dark:border dark:border-neutral-800 rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-stone-900 dark:text-neutral-50 mb-3">Photos</h2>
               <div className="grid grid-cols-2 gap-3">
                 {activity.photos.map((photo: string, index: number) => {
                   const photoUrl = photo.startsWith('http')

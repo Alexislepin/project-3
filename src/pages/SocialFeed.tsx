@@ -635,8 +635,8 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         ref={(el) => setScrollContainerRef(el)}
         className="h-full overflow-y-auto relative"
         style={{
-          paddingTop: `${headerHeight + tabsHeight}px`, // ✅ ICI - réserve l'espace pour header + tabs
-          paddingBottom: `calc(16px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`, // ✅ Espace supplémentaire pour dernière activité
+          paddingTop: `${tabsHeight}px`, // Header déjà dans le flux, on ne double pas l'espace
+          paddingBottom: `calc(48px + ${TABBAR_HEIGHT}px + env(safe-area-inset-bottom))`, // Plus d'espace de fin
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
@@ -663,16 +663,15 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
         )}
 
         <div 
-          className="px-4 pb-4" 
+          className="px-4" 
           style={{ 
             transform: `translateY(${pullDistance}px)`,
-            paddingTop: 0, // ✅ Plus de paddingTop ici (déjà géré dans le container)
           }}
         >
           {loading ? (
-            <div className="text-center py-12 text-stone-500">Chargement...</div>
+            <div className="text-center py-8 text-stone-500">Chargement...</div>
           ) : isEmpty ? (
-            <div className="text-center py-12">
+            <div className="text-center py-8">
               <p className="text-stone-600 mb-2">
                 {tab === 'books'
                   ? 'Aucune activité sur les livres pour l\'instant'
@@ -683,7 +682,7 @@ export function SocialFeed({ onClose }: SocialFeedProps) {
               </p>
             </div>
           ) : (
-            <div className="space-y-2 mt-0">
+            <div className="space-y-2 py-4">
               {tab === 'books' ? (
                 eventsBooks.map((event) => (
                   <FeedRow

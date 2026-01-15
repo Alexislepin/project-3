@@ -9,6 +9,7 @@ import './i18n';
 import { initializeAppLanguage } from './lib/appLanguage';
 import { initializeOneSignalOnce } from './notifications/initOneSignal';
 import './index.css';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 // Safe timer management to prevent double-invoke issues
 const endedTimers = new Set<string>();
@@ -48,7 +49,9 @@ initializeAppLanguage().then(() => {
         <BrowserRouter>
           <DeepLinkGate />
           <AuthProvider>
-            <App />
+            <ThemeProvider>
+              <App />
+            </ThemeProvider>
           </AuthProvider>
         </BrowserRouter>
       </SplashScreen>
@@ -73,7 +76,9 @@ initializeAppLanguage().then(() => {
         <BrowserRouter>
           <DeepLinkGate />
           <AuthProvider>
-            <App />
+            <ThemeProvider>
+              <App />
+            </ThemeProvider>
           </AuthProvider>
         </BrowserRouter>
       </SplashScreen>

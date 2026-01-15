@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Camera, Quote, Globe, Users, Lock, Plus } from 'lucide-react';
+import { X, Camera, Quote, Globe, Users, Lock, Plus, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { BookCover } from '../components/BookCover';
@@ -9,7 +9,6 @@ import { Toast } from '../components/Toast';
 import { Camera as CapacitorCamera } from '@capacitor/camera';
 import { Capacitor } from '@capacitor/core';
 import { uploadFileToBucket } from '../lib/storageUpload';
-import { BOTTOM_INSET } from '../lib/layoutConstants';
 
 interface SessionSummaryProps {
   bookTitle: string;
@@ -18,12 +17,14 @@ interface SessionSummaryProps {
   coverUrl?: string | null; // Display cover URL (custom_cover_url or book.cover_url)
   pagesRead: number;
   durationMinutes: number;
+  durationSeconds?: number;
   currentPage: number;
-  pagesPerHour: number | null;
-  minPerPage: number | null;
+  originalPage?: number | null;
+  originalStatus?: string | null;
   activityId: string; // Activity ID from ActiveSession (required - activity created as DRAFT)
   onComplete: () => void;
   onCancel: () => void;
+  onDeleted?: () => void;
 }
 
 type Visibility = 'public' | 'followers' | 'private';
@@ -40,12 +41,14 @@ export function SessionSummary({
   coverUrl,
   pagesRead,
   durationMinutes,
+  durationSeconds,
   currentPage,
-  pagesPerHour,
-  minPerPage,
+  originalPage,
+  originalStatus,
   activityId,
   onComplete,
   onCancel,
+  onDeleted,
 }: SessionSummaryProps) {
   const [notes, setNotes] = useState('');
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -53,6 +56,7 @@ export function SessionSummary({
   const [currentQuotePage, setCurrentQuotePage] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [bookData, setBookData] = useState<{
     isbn?: string | null;
     isbn13?: string | null;
@@ -72,6 +76,25 @@ export function SessionSummary({
   const { user } = useAuth();
 
   // Handle cancel: delete the draft activity
+  const revertUserBook = async () => {
+    if (!user || originalPage === undefined || originalPage === null) return;
+    const payload: any = {
+      current_page: originalPage,
+      updated_at: new Date().toISOString(),
+    };
+    if (originalStatus) {
+      payload.status = originalStatus;
+      if (originalStatus !== 'completed') {
+        payload.completed_at = null;
+      }
+    }
+    await supabase
+      .from('user_books')
+      .update(payload)
+      .eq('user_id', user.id)
+      .eq('book_id', bookId);
+  };
+
   const handleCancel = async () => {
     if (user && activityId) {
       // Delete the draft activity
@@ -81,6 +104,7 @@ export function SessionSummary({
         .eq('id', activityId)
         .eq('user_id', user.id);
     }
+    await revertUserBook();
     onCancel();
   };
 
@@ -190,15 +214,56 @@ export function SessionSummary({
     });
   };
 
+  const clearActiveSessionPersisted = () => {
+    try {
+      localStorage.removeItem('lexu_active_activity');
+      document.body.dataset.activeSession = '0';
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteActivity = async () => {
+    if (!user || !activityId) return;
+    setDeleting(true);
+    try {
+      const now = new Date().toISOString();
+      // Try to mark ended before delete to stop timers/bannières
+      await supabase
+        .from('activities')
+        .update({ ended_at: now })
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+
+      await supabase
+        .from('activities')
+        .delete()
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+      clearActiveSessionPersisted();
+      await revertUserBook();
+      if (onDeleted) {
+        onDeleted();
+      } else {
+        onCancel();
+      }
+    } catch (error) {
+      console.error('[SessionSummary] Error deleting activity:', error);
+      setToast({ message: 'Impossible de supprimer cette activité', type: 'error' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleShare = async () => {
     if (!user) return;
 
     setSaving(true);
     setUploadingPhotos(true);
 
-    let photoPaths: string[] = [];
+    let photoUploads: { path: string; publicUrl: string }[] = [];
 
-    // Upload photos if any (store paths, not URLs)
+    // Upload photos if any (store URLs for display; fallback to path)
     if (photos.length > 0) {
       try {
         const uploadPromises = photos.map(async (photo, index) => {
@@ -214,14 +279,14 @@ export function SessionSummary({
             }
 
             // Upload using uploadFileToBucket (for File/Blob objects)
-            const { objectPath } = await uploadFileToBucket({
+            const { objectPath, publicUrl } = await uploadFileToBucket({
               bucket: 'activity-photos',
               path,
               file: photo.file,
             });
 
-            // Return the PATH (not URL) for storage in DB
-            return objectPath;
+            // Return both path and public URL (DB can store URL directly for display)
+            return { path: objectPath, publicUrl };
           } catch (error: any) {
             // If one photo fails, continue with others
             console.error(`[SessionSummary] Photo ${index} upload failed:`, {
@@ -233,17 +298,17 @@ export function SessionSummary({
           }
         });
 
-        const paths = await Promise.all(uploadPromises);
-        photoPaths = paths.filter((path): path is string => path !== null);
+        const uploads = await Promise.all(uploadPromises);
+        photoUploads = uploads.filter((u): u is { path: string; publicUrl: string } => u !== null);
 
-        if (photoPaths.length < photos.length) {
-          console.warn(`[SessionSummary] Only ${photoPaths.length}/${photos.length} photos uploaded successfully`);
+        if (photoUploads.length < photos.length) {
+          console.warn(`[SessionSummary] Only ${photoUploads.length}/${photos.length} photos uploaded successfully`);
           setToast({ 
-            message: `${photoPaths.length}/${photos.length} photos uploadées avec succès`, 
+            message: `${photoUploads.length}/${photos.length} photos uploadées avec succès`, 
             type: 'info' 
           });
         } else {
-          console.log(`[SessionSummary] All ${photoPaths.length} photos uploaded successfully`);
+          console.log(`[SessionSummary] All ${photoUploads.length} photos uploaded successfully`);
         }
       } catch (error: any) {
         // Bucket not found or other critical error
@@ -272,19 +337,23 @@ export function SessionSummary({
     setUploadingPhotos(false);
 
     // UPDATE the existing activity (created in ActiveSession)
-    // Store photo PATHS (not URLs) in the photos array
+    // Store photo URLs (fallback to path) in the photos array
+    const photoUrls =
+      photoUploads.length > 0
+        ? photoUploads.map((u) => u.publicUrl || u.path)
+        : [];
     const updateData: any = {
       notes: notes || null,
       quotes: quotes.length > 0 ? quotes : null,
       visibility: visibility,
-      photos: photoPaths.length > 0 ? photoPaths : null,
+      photos: photoUrls.length > 0 ? photoUrls : null,
     };
 
     console.log('[SessionSummary] Updating activity:', {
       activityId,
       userId: user.id,
-      photoPathsCount: photoPaths.length,
-      photoPaths: photoPaths.length > 0 ? photoPaths : 'none',
+      photoCount: photoUploads.length,
+      photos: photoUrls.length > 0 ? photoUrls : 'none',
     });
 
     const { error: updateError } = await supabase
@@ -312,7 +381,7 @@ export function SessionSummary({
 
     console.log('[SessionSummary] Activity updated successfully:', {
       activityId,
-      photoPathsCount: photoPaths.length,
+      photoCount: photoUploads.length,
     });
 
     // Note: XP is awarded in LogActivity when activity is created
@@ -328,13 +397,23 @@ export function SessionSummary({
     onComplete();
   };
 
-  const formatDuration = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
+  const getDurationDisplay = (minutes: number, secondsOverride?: number) => {
+    const totalSeconds = secondsOverride ?? Math.max(0, Math.round(minutes * 60));
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+
     if (hours > 0) {
-      return `${hours}h ${mins}m`;
+      return {
+        label: `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`,
+        sizeClass: 'text-xl', // shrink slightly to fit longer text
+      };
     }
-    return `${mins}m`;
+
+    return {
+      label: `${mins}m ${secs.toString().padStart(2, '0')}s`,
+      sizeClass: 'text-2xl',
+    };
   };
 
   const handleAddNote = async () => {
@@ -389,66 +468,88 @@ export function SessionSummary({
   const SHARE_FOOTER_H = 104;
 
   return (
-    <div 
-      className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden"
-      style={{ paddingBottom: BOTTOM_INSET }}
+    <div
+      className="fixed inset-0 z-[210] bg-black/50 flex items-start justify-center"
+      onClick={handleCancel}
     >
-      {/* Sticky Header with safe-area top */}
-      <AppHeader
-        title="Partager votre activité"
-        showClose
-        onClose={handleCancel}
-      />
-
-      {/* Scrollable content container */}
-      <div 
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-6"
-        style={{
-          paddingBottom: `calc(${SHARE_FOOTER_H}px + ${BOTTOM_INSET})`,
-          WebkitOverflowScrolling: 'touch',
-          overscrollBehaviorY: 'contain',
-          overscrollBehaviorX: 'none',
-        }}
+      <div
+        className="bg-background-light w-full max-w-md h-[100dvh] flex flex-col overflow-hidden"
+        style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+        onClick={(e) => e.stopPropagation()}
       >
+        {/* Sticky Header with safe-area top */}
+        <AppHeader
+          title="Partager votre activité"
+          showClose
+          onClose={handleCancel}
+        />
+
+        {/* Scrollable content container */}
+        <div 
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-6"
+          style={{
+            paddingBottom: `calc(${SHARE_FOOTER_H}px + env(safe-area-inset-bottom, 0px) + 56px)`,
+            WebkitOverflowScrolling: 'touch',
+            overscrollBehaviorY: 'contain',
+            overscrollBehaviorX: 'none',
+          }}
+        >
         <div className="bg-card-light rounded-2xl p-6 mb-6 border border-gray-200">
-          <div className="flex items-start gap-4 mb-4">
-            <BookCover
-              coverUrl={coverUrl || undefined}
-              title={bookTitle}
-              author={bookAuthor}
-              isbn={bookData?.isbn || null}
-              isbn13={bookData?.isbn13 || null}
-              isbn10={bookData?.isbn10 || null}
-              cover_i={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
-              openlibrary_cover_id={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
-              googleCoverUrl={bookData?.google_books_id ? `https://books.google.com/books/content?id=${bookData.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
-              className="size-16 rounded-lg shrink-0"
-              bookId={bookId}
-            />
-            <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-lg leading-tight mb-1">{bookTitle}</h3>
-              <p className="text-text-sub-light text-sm">{bookAuthor}</p>
+          <div className="flex items-start gap-3 mb-4">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <BookCover
+                coverUrl={coverUrl || undefined}
+                title={bookTitle}
+                author={bookAuthor}
+                isbn={bookData?.isbn || null}
+                isbn13={bookData?.isbn13 || null}
+                isbn10={bookData?.isbn10 || null}
+                cover_i={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
+                openlibrary_cover_id={bookData?.openlibrary_cover_id ? (typeof bookData.openlibrary_cover_id === 'string' ? parseInt(bookData.openlibrary_cover_id) || null : bookData.openlibrary_cover_id) : null}
+                googleCoverUrl={bookData?.google_books_id ? `https://books.google.com/books/content?id=${bookData.google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
+                className="size-16 rounded-lg shrink-0"
+                bookId={bookId}
+              />
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-lg leading-tight mb-1">{bookTitle}</h3>
+                <p className="text-text-sub-light text-sm">{bookAuthor}</p>
+              </div>
             </div>
+            <button
+              onClick={handleDeleteActivity}
+              disabled={deleting || saving || uploadingPhotos}
+              className="p-2 rounded-full border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Supprimer l'activité"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
           </div>
 
           <div className="grid grid-cols-3 gap-3 mb-4">
             <div className="bg-background-light rounded-xl p-3 text-center">
-              <p className="text-2xl font-bold text-text-main-light">{pagesRead}</p>
+            <p className="text-2xl font-bold text-text-main-light whitespace-nowrap">{pagesRead}</p>
               <p className="text-xs text-text-sub-light font-medium mt-1">Pages</p>
             </div>
             <div className="bg-background-light rounded-xl p-3 text-center">
-              <p className="text-2xl font-bold text-text-main-light">{formatDuration(durationMinutes)}</p>
+            {(() => {
+              const duration = getDurationDisplay(durationMinutes, durationSeconds);
+              return (
+                <p className={`font-bold text-text-main-light whitespace-nowrap leading-tight ${duration.sizeClass}`}>
+                  {duration.label}
+                </p>
+              );
+            })()}
               <p className="text-xs text-text-sub-light font-medium mt-1">Durée</p>
             </div>
             <div className="bg-background-light rounded-xl p-3 text-center">
-              <p className="text-2xl font-bold text-text-main-light">{currentPage}</p>
+            <p className="text-2xl font-bold text-text-main-light whitespace-nowrap">{currentPage}</p>
               <p className="text-xs text-text-sub-light font-medium mt-1">Actuel</p>
             </div>
           </div>
 
           {pagesRead > 0 && (() => {
             const pages = Math.max(0, pagesRead);
-            const mins = Math.max(1, durationMinutes);
+            const mins = Math.max(1, (durationSeconds ?? durationMinutes * 60) / 60);
 
             const pph = pages > 0 ? Number((pages / (mins / 60)).toFixed(1)) : null;
             const minPerPageCalc = pages > 0 ? Number((mins / pages).toFixed(1)) : null;
@@ -650,19 +751,26 @@ export function SessionSummary({
         </div>
       </div>
 
-      {/* ✅ Footer FIXED CTA */}
-      <div className="fixed left-0 right-0 z-[210]" style={{ bottom: BOTTOM_INSET }}>
-        <div className="max-w-md mx-auto px-6 pb-4">
-          <button
-            onClick={handleShare}
-            disabled={saving || uploadingPhotos}
-            className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50 font-black tracking-wide"
-          >
-            <span className="text-black text-lg font-bold uppercase tracking-wide">
-              {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
-            </span>
-          </button>
+        {/* ✅ Footer FIXED CTA */}
+        <div
+          className="fixed left-0 right-0 bottom-0 z-[220]"
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+        >
+          <div className="max-w-md mx-auto px-6">
+            <div className="bg-background-light border border-gray-200 rounded-2xl shadow-[0_-8px_24px_rgba(0,0,0,0.12)] pt-3 px-4 pb-4 space-y-3">
+              <button
+                onClick={handleShare}
+                disabled={saving || uploadingPhotos}
+                className="w-full h-14 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all disabled:opacity-50 font-black tracking-wide shadow-lg"
+              >
+                <span className="text-[rgba(0,0,0,1)] text-lg font-bold uppercase tracking-wide">
+                  {uploadingPhotos ? 'Upload photos...' : saving ? 'Partage...' : 'Partager l\'activité'}
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
+
       </div>
 
       {/* Modal ajouter note */}

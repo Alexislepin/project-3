@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { supabase } from '../lib/supabase';
@@ -89,6 +89,38 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
   const hasSubmittedChallenge = isControlled ? (ui?.hasSubmittedChallenge ?? false) : false;
   
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  // Guard anti double-submit pour éviter un double award XP si l'utilisateur spamme
+  const submitGuardRef = useRef(false);
+  // ✅ Helper setters (pour éviter setRecapError/setRecapData inexistants)
+  const setRecapLoadingState = (v: boolean) => {
+    if (isControlled && setUI) setUI(s => ({ ...s, recapLoading: v }));
+    else setLocalRecapLoading(v);
+  };
+
+  const setRecapDataState = (v: any) => {
+    if (isControlled && setUI) setUI(s => ({ ...s, recapData: v }));
+    else setLocalRecapData(v);
+  };
+
+  const setRecapErrorState = (v: any) => {
+    if (isControlled && setUI) setUI(s => ({ ...s, recapError: v }));
+    else setLocalRecapError(v);
+  };
+
+  const setTabState = (tab: 'personnages' | 'takeaways' | 'detaille' | 'defi') => {
+    if (isControlled && setUI) setUI(s => ({ ...s, tab }));
+    else setLocalRecapTab(tab);
+  };
+
+  const setUserAnswerDraftState = (v: string) => {
+    if (isControlled && setUI) setUI(s => ({ ...s, userAnswerDraft: v }));
+    else setLocalUserChallengeAnswer(v);
+  };
+
+  const setChallengeResultState = (v: any) => {
+    if (isControlled && setUI) setUI(s => ({ ...s, challengeResult: v }));
+    else setLocalChallengeResult(v);
+  };
 
   // Load recap when modal opens (only in non-controlled mode)
   useEffect(() => {
@@ -100,13 +132,16 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
   // Reset states when modal closes (only in non-controlled mode)
   useEffect(() => {
     if (!open && !isControlled) {
-      setLocalRecapData(null);
-      setLocalRecapTab('personnages');
-      setLocalUserChallengeAnswer('');
-      setLocalChallengeResult(null);
-      setLocalRecapError(null);
+      setRecapDataState(null);
+      setTabState('personnages');
+      setUserAnswerDraftState('');
+      setChallengeResultState(null);
+      setRecapErrorState(null);
     }
   }, [open, isControlled]);
+
+  // ✅ Anti-race "stale response" propre avec compteur
+  const recapReqIdRef = useRef(0);
 
   const loadRecap = async (force = false) => {
     if (!user) return;
@@ -118,9 +153,10 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
     }
 
     // Local mode
-    setLocalRecapLoading(true);
-    setLocalRecapData(null);
-    setLocalRecapError(null);
+    const reqId = ++recapReqIdRef.current;
+    setRecapLoadingState(true);
+    setRecapDataState(null);
+    setRecapErrorState(null);
 
     try {
       // ✅ Build payload with all available identifiers
@@ -148,6 +184,47 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
         body: payload,
       });
 
+      // ✅ Log la réponse brute pour debug
+      console.log('[Recap] invoke result', { reqId, latest: recapReqIdRef.current, error, data });
+
+      // ✅ Ignorer les réponses obsolètes
+      if (reqId !== recapReqIdRef.current) {
+        console.log('[Recap] ignoring stale response', { reqId, latest: recapReqIdRef.current });
+        return;
+      }
+
+      // ✅ Fallback front-end si jamais on reçoit encore status:"no_data"
+      if (data?.status === 'no_data') {
+        console.warn('[Recap] no_data received -> converting to fallback recap', data);
+        
+        const fallback = {
+          ultra_20s: "Rappel prêt, même sans notes.",
+          summary:
+            "Je n'ai pas encore de notes/sessions enregistrées. Voici un aperçu général. Ajoute une note ou termine une session pour enrichir le rappel.",
+          key_takeaways: [
+            "Aperçu général (sans spoiler)",
+            "Thèmes majeurs",
+            "Contexte",
+            "Ce qu'il faut suivre en lisant",
+            "Ajoute une note pour personnaliser",
+          ],
+          characters: [],
+          detailed:
+            "Conseil : ajoute une note rapide ou enregistre une session (même 1 minute) pour générer un rappel personnalisé.",
+          challenge: {
+            question: "Comment rendre ce rappel plus pertinent ?",
+            answer: "Ajouter une note ou une session de lecture.",
+            explanation: "Cela donne du contexte réel à l'IA.",
+          },
+          meta: data?.meta,
+        };
+        
+        setRecapDataState(fallback);
+        setRecapErrorState(null);
+        setRecapLoadingState(false);
+        return;
+      }
+
       // ✅ Handle Supabase client errors (network, HTTP non-2xx, etc.)
       if (error) {
         const requestId = data?.requestId || data?.meta?.requestId || 'unknown';
@@ -158,11 +235,8 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
           message: errorMessage,
           requestId,
         };
-        if (isControlled && setUI) {
-          setUI(s => ({ ...s, recapError: errorObj, recapLoading: false }));
-        } else {
-          setLocalRecapError(errorObj);
-        }
+        setRecapErrorState(errorObj);
+        setRecapLoadingState(false);
         setToast({ 
           message: `${errorMessage} · Code: ${requestId}`, 
           type: 'error' 
@@ -176,22 +250,14 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
         console.warn('[BookRecapModal] Functional error:', { data, requestId });
         console.log('[BookRecapModal] requestId', requestId);
         
-        // Si status === 'no_data', c'est vraiment pas de données (pas une erreur)
-        if (data.status === 'no_data') {
-          console.log('[BookRecapModal] No data available:', { requestId });
-          setRecapData(null);
-          setRecapError(null);
-          // Pas de toast pour no_data - UI affiche "Pas assez d'infos"
-          return;
-        }
-        
         // Sinon, c'est une vraie erreur fonctionnelle
         const errorMessage = data.error || 'Impossible de charger le rappel';
         const details = data.meta?.details ? ` (${data.meta.details})` : '';
-        setRecapError({ 
+        setRecapErrorState({ 
           message: `${errorMessage}${details}`,
           requestId,
         });
+        setRecapLoadingState(false);
         setToast({ 
           message: `${errorMessage}${details} · Code: ${requestId}`, 
           type: 'error' 
@@ -204,8 +270,9 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
         const requestId = data.meta?.requestId || 'unknown';
         console.log('[BookRecapModal] No data available:', { requestId });
         console.log('[BookRecapModal] requestId', requestId);
-        setRecapData(null);
-        setRecapError(null);
+        setRecapDataState(null);
+        setRecapErrorState(null);
+        setRecapLoadingState(false);
         // Pas de toast pour no_data - UI affiche "Pas assez d'infos"
         return;
       }
@@ -232,42 +299,36 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
           meta: data.meta,
         };
         
-        if (isControlled && setUI) {
-          setUI(s => ({ ...s, recapData: newRecapData, recapLoading: false, recapError: null, tab: 'personnages', userAnswerDraft: '' }));
-        } else {
-          setLocalRecapData(newRecapData);
-          setLocalRecapTab('personnages');
-          setLocalUserChallengeAnswer('');
-          setLocalChallengeResult(null);
-          setLocalRecapError(null);
-        }
+        setRecapDataState(newRecapData);
+        setRecapLoadingState(false);
+        setRecapErrorState(null);
+        setUserAnswerDraftState('');
+        setChallengeResultState(null);
       } else {
         // ✅ No ultra_20s but no error either (shouldn't happen, but handle gracefully)
         const requestId = data?.meta?.requestId || 'unknown';
         console.warn('[BookRecapModal] No ultra_20s in response:', { data, requestId });
         console.log('[BookRecapModal] requestId', requestId);
-        setRecapData(null);
-        setRecapError({ 
+        setRecapDataState(null);
+        setRecapErrorState({ 
           message: 'Réponse invalide du serveur',
           requestId,
         });
+        setRecapLoadingState(false);
       }
     } catch (err) {
       // ✅ Only log unexpected errors
       console.error('[BookRecapModal] Unexpected error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Erreur inattendue';
-      setRecapError({ 
+      setRecapErrorState({ 
         message: errorMessage,
         requestId: 'unknown',
       });
+      setRecapLoadingState(false);
       setToast({ 
         message: errorMessage, 
         type: 'error' 
       });
-    } finally {
-      if (!isControlled) {
-        setLocalRecapLoading(false);
-      }
     }
   };
 
@@ -276,6 +337,13 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
   };
 
   const submitChallenge = async () => {
+    // Guard double-submit (click spam, Enter key while pending)
+    if (challengeSubmitting || submitGuardRef.current) {
+      console.warn('[BookRecapModal] submit blocked: already submitting');
+      return;
+    }
+    submitGuardRef.current = true;
+    
     const question = recapData?.challenge?.question || recapData?.question;
     if (!user || !question) return;
     
@@ -371,6 +439,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
       } else {
         setLocalChallengeSubmitting(false);
       }
+      submitGuardRef.current = false;
     }
   };
 
@@ -397,7 +466,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
         type="button"
         onClick={handleRegenerateRecap}
         disabled={recapLoading}
-        className="flex-1 py-3 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors text-sm font-medium text-text-main-light disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="flex-1 py-3 px-4 rounded-lg bg-white hover:bg-gray-100 dark:bg-[rgba(23,23,24,1)] dark:hover:bg-[rgba(35,35,37,1)] transition-colors text-sm font-medium text-[rgba(161,161,170,1)] dark:text-text-main-light disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
         {recapLoading ? (
           <>
@@ -431,8 +500,8 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
       >
         {headerContent}
           {/* Tab selector */}
-        <div className="px-0 pt-0 pb-2 border-b border-gray-100 mb-3">
-            <div className="flex gap-1.5 bg-gray-100 rounded-lg p-1">
+        <div className="px-0 pt-0 pb-2 border-b border-border mb-3">
+            <div className="flex gap-1.5 bg-surface-2 rounded-lg p-1">
               {(['personnages', 'takeaways', 'detaille', 'defi'] as const).map((tab) => {
                 const isDefi = tab === 'defi';
                 const isActive = recapTab === tab;
@@ -441,25 +510,20 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                   key={tab}
                   type="button"
                   onClick={() => {
-                    if (isControlled && setUI && onTabChange) {
+                    if (onTabChange) {
                       onTabChange(tab);
-                      setUI(s => ({ ...s, tab, userAnswerDraft: '', challengeResult: null }));
-                    } else {
-                      setLocalRecapTab(tab);
-                      setLocalUserChallengeAnswer('');
-                      setLocalChallengeResult(null);
                     }
+                    setTabState(tab);
+                    setUserAnswerDraftState('');
+                    setChallengeResultState(null);
                   }}
                   disabled={recapLoading}
                   className={`flex-1 py-2 px-2 rounded-md text-xs font-medium transition-all disabled:opacity-50 ${
-                      isActive
-                        ? isDefi
-                          ? 'bg-yellow-300 text-black font-semibold shadow-sm'
-                          : 'bg-black text-white font-semibold shadow-sm'
-                        : isDefi
-                        ? 'bg-yellow-100/50 text-yellow-800 hover:bg-yellow-200/70'
-                      : 'text-text-sub-light hover:text-text-main-light'
+                    isActive
+                      ? 'bg-[#e7ff0b] text-black hover:text-black font-semibold shadow-sm'
+                      : 'bg-transparent text-text-sub-light hover:text-text-main-light'
                   }`}
+                  style={isActive ? { color: 'rgba(0, 0, 0, 1)' } : undefined}
                 >
                     {tab === 'personnages' ? 'Personnages' : tab === 'takeaways' ? 'À retenir' : tab === 'detaille' ? 'Détaillé' : 'Défi'}
                 </button>
@@ -527,7 +591,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                         {recapData.characters.map((character, idx) => {
                           const whyText = character.why_important || character.why || "";
                           return (
-                            <div key={idx} className="border-b border-gray-100 pb-3 last:border-0 last:pb-0">
+                            <div key={idx} className="border-b border-border pb-3 last:border-0 last:pb-0">
                               <p className="font-bold text-sm text-text-main-light mb-0.5">{character.name}</p>
                               <p className="text-xs text-text-main-light mb-1.5 leading-relaxed line-clamp-2">{character.who}</p>
                               {whyText && (
@@ -631,7 +695,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
 
                   return (
                     <div className="space-y-4">
-                      <div className="bg-gray-100 rounded-xl p-4">
+                    <div className="rounded-xl p-4 bg-white border-0 dark:bg-[#161618] dark:border dark:border-[#2d2f36]">
                         <p className="text-[10px] font-semibold text-text-main-light uppercase tracking-wider mb-3">DÉFI COMPRÉHENSION</p>
                         <p className="text-lg font-bold text-text-main-light leading-tight">{question}</p>
                         <p className="text-[10px] text-text-sub-light mt-2 italic">Zéro spoiler — basé sur ton avancée.</p>
@@ -640,7 +704,7 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                       <div className="space-y-3">
                         {!challengeResult ? (
                           <>
-                            <div className="bg-[#f5f5f7] border border-[#e5e7eb] rounded-lg p-4">
+                            <div className="rounded-lg p-4 bg-white border-0 dark:bg-[#0f0f11] dark:border dark:border-[#2d2f36]">
                               <label className="block text-xs font-semibold text-text-sub-light uppercase tracking-wide mb-2">
                                 Ta réponse (optionnel)
                               </label>
@@ -653,9 +717,9 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                                     setLocalUserChallengeAnswer(e.target.value);
                                   }
                                 }}
-                                placeholder="Ta réponse (optionnel)"
+                                placeholder=""
                                 rows={2}
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary outline-none resize-none text-sm text-text-main-light bg-white"
+                                className="w-full px-3 py-2 rounded-lg focus:border-primary focus:ring-1 focus:ring-primary outline-none resize-none text-sm text-text-main-light bg-white border border-[#e5e7eb] dark:bg-[#111111] dark:border-[#2d2f36] dark:placeholder-[#9ca3af]"
                               />
                             </div>
                             
@@ -678,19 +742,19 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                         ) : (
                           <>
                             {/* Badge verdict */}
-                            <div className={`p-3 rounded-lg border-2 ${
+                            <div className={`p-3 rounded-lg ${
                               challengeResult.verdict === 'correct'
-                                ? 'bg-green-50 border-green-200'
+                                ? 'border-2 bg-green-50 border-green-200'
                                 : challengeResult.verdict === 'partial'
-                                ? 'bg-primary/20 border-primary/40'
-                                : 'bg-gray-50 border-gray-200'
+                                ? 'border-2 bg-primary/20 border-primary/40'
+                                : 'bg-[#161618] border-0'
                             }`}>
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                   <span className="text-lg">
                                     {challengeResult.verdict === 'correct' ? '✅' : challengeResult.verdict === 'partial' ? '🟡' : '❌'}
                                   </span>
-                                  <span className="text-sm font-semibold text-text-main-light">
+                                  <span className="text-sm font-semibold text-text-main-light dark:text-black">
                                     {challengeResult.verdict === 'correct' ? 'Correct' : challengeResult.verdict === 'partial' ? 'Presque' : 'Faux'}
                                   </span>
                                 </div>
@@ -718,34 +782,18 @@ export function BookRecapModal({ open, onClose, book, uptoPage, ui, setUI, loadR
                             </div>
                             
                             {/* Réponse */}
-                            <div className="bg-[#f5f5f7] border border-[#e5e7eb] rounded-lg p-4">
+                            <div className="rounded-lg p-4 bg-white border-0 dark:bg-[#0f0f11] dark:border dark:border-[#2d2f36]">
                               <p className="text-xs font-semibold text-text-sub-light uppercase tracking-wide mb-2">Réponse</p>
-                              <p className="text-sm text-[#111] leading-relaxed">{challengeResult.answer}</p>
+                              <p className="text-sm text-text-main-light dark:text-white leading-relaxed">{challengeResult.answer}</p>
                             </div>
                             
                             {/* Explication */}
                             {challengeResult.explanation && (
-                              <div className="bg-[#f5f5f7] border border-[#e5e7eb] rounded-lg p-4">
-                                <p className="text-xs font-semibold text-text-sub-light uppercase tracking-wide mb-2">Pourquoi ?</p>
-                                <p className="text-sm text-[#111] leading-relaxed">{challengeResult.explanation}</p>
+                              <div className="rounded-lg p-4 bg-white border-0 dark:bg-[#0f0f11] dark:border dark:border-[#2d2f36]">
+                                <p className="text-xs font-semibold text-[var(--tw-ring-offset-color)] dark:text-white uppercase tracking-wide mb-2">Pourquoi ?</p>
+                                <p className="text-sm text-text-main-light dark:text-white leading-relaxed">{challengeResult.explanation}</p>
                               </div>
                             )}
-                            
-                            {/* Bouton Rejouer */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (isControlled && setUI) {
-                                  setUI(s => ({ ...s, challengeResult: null, userAnswerDraft: '' }));
-                                } else {
-                                  setLocalChallengeResult(null);
-                                  setLocalUserChallengeAnswer('');
-                                }
-                              }}
-                              className="w-full py-2.5 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
-                            >
-                              Rejouer
-                            </button>
                           </>
                         )}
                       </div>

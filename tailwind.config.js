@@ -1,19 +1,41 @@
+import colors from 'tailwindcss/colors';
+
+const withOpacityValue = (variable) => ({ opacityValue } = { opacityValue: undefined }) => {
+  if (opacityValue !== undefined) {
+    return `rgb(var(${variable}) / ${opacityValue})`;
+  }
+  return `rgb(var(${variable}))`;
+};
+
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: ['class', 'theme-dark'],
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
+    colors: {
+      transparent: 'transparent',
+      current: 'currentColor',
+      primary: withOpacityValue('--color-accent'),
+      white: withOpacityValue('--color-surface'),
+      black: withOpacityValue('--color-text'),
+      background: withOpacityValue('--color-bg'),
+      'background-light': withOpacityValue('--color-bg'),
+      surface: withOpacityValue('--color-surface'),
+      'surface-2': withOpacityValue('--color-surface-2'),
+      'card-light': withOpacityValue('--color-surface'),
+      border: withOpacityValue('--color-border'),
+      'text-main-light': withOpacityValue('--color-text'),
+      'text-sub-light': withOpacityValue('--color-muted'),
+      muted: withOpacityValue('--color-muted'),
+      'muted-2': withOpacityValue('--color-muted-2'),
+      overlay: withOpacityValue('--color-overlay'),
+      gray: colors.gray,
+      red: colors.red,
+      amber: colors.amber,
+      green: colors.green,
+      stone: colors.stone,
+    },
     extend: {
-      colors: {
-        'primary': '#E6FF00',
-        'background-light': '#F5F5F5',
-        'background-dark': '#050505',
-        'card-light': '#ffffff',
-        'card-dark': '#1A1A1A',
-        'text-main-light': '#050505',
-        'text-main-dark': '#F5F5F5',
-        'text-sub-light': '#1A1A1A',
-        'text-sub-dark': '#111111',
-      },
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui'],
         display: ['Spline Sans', 'sans-serif'],

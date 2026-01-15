@@ -51,8 +51,8 @@ export function AddBookStatusModal({ onClose, onSelect, bookTitle }: AddBookStat
       >
         <div className="p-6">
           <div className="flex items-start gap-4 mb-6">
-            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Book className="w-6 h-6 text-blue-600" />
+            <div className="w-12 h-12 bg-black/5 rounded-full flex items-center justify-center flex-shrink-0">
+              <Book className="w-6 h-6 text-black/70" />
             </div>
             <div className="flex-1">
               <h3 className="text-lg font-semibold text-gray-900 mb-1">
@@ -68,29 +68,29 @@ export function AddBookStatusModal({ onClose, onSelect, bookTitle }: AddBookStat
             <button
               onClick={() => handleSelect('reading')}
               disabled={isAdding}
-              className="w-full p-4 bg-blue-50 hover:bg-blue-100 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full p-4 bg-gray-100 hover:bg-gray-200 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <div className="font-semibold text-blue-900">
+              <div className="font-semibold text-gray-900">
                 {isAdding ? 'Ajout en cours...' : 'En cours de lecture'}
               </div>
-              <div className="text-sm text-blue-700">Je lis ce livre actuellement</div>
+              <div className="text-sm text-gray-700">Je lis ce livre actuellement</div>
             </button>
 
             <button
               onClick={() => handleSelect('completed')}
               disabled={isAdding}
-              className="w-full p-4 bg-green-50 hover:bg-green-100 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full p-4 bg-gray-100 hover:bg-gray-200 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <div className="font-semibold text-green-900">
+              <div className="font-semibold text-gray-900">
                 {isAdding ? 'Ajout en cours...' : 'Déjà lu'}
               </div>
-              <div className="text-sm text-green-700">J'ai terminé ce livre</div>
+              <div className="text-sm text-gray-700">J'ai terminé ce livre</div>
             </button>
 
             <button
               onClick={() => handleSelect('want_to_read')}
               disabled={isAdding}
-              className="w-full p-4 bg-gray-50 hover:bg-gray-100 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full p-4 bg-gray-100 hover:bg-gray-200 text-left rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="font-semibold text-gray-900">
                 {isAdding ? 'Ajout en cours...' : 'À lire'}

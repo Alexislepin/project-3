@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Heart, MessageCircle, BookOpen, Dumbbell, Brain, Target, Quote } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Heart, MessageCircle, BookOpen, Dumbbell, Brain, Target, Quote, X } from 'lucide-react';
 import { formatDistanceToNow } from '../utils/dateUtils';
 import { BookCover } from './BookCover';
 import { ActivityMenu } from './ActivityMenu';
@@ -33,17 +34,22 @@ interface Activity {
     title: string;
     author: string;
     cover_url?: string;
+    custom_cover_url?: string | null;
     openlibrary_cover_id?: number;
     isbn?: string;
+    total_pages?: number | null;
   };
   book_id?: string;
   notes?: string;
   quotes?: ActivityQuote[];
   photos?: string[] | null;
   created_at: string;
+  updated_at?: string | null;
+  ended_at?: string | null;
   reactions_count: number;
   comments_count: number;
   user_has_reacted: boolean;
+  current_page?: number | null;
 }
 
 interface ActivityCardProps {
@@ -71,32 +77,32 @@ const activityLabels = {
   habit: 'Habitude',
 };
 
+
 export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdit, onDelete, onUserClick, variant = 'default' }: ActivityCardProps) {
   const { user } = useAuth();
   const Icon = activityIcons[activity.type];
   const label = activityLabels[activity.type];
+  const [photoPreviewOpen, setPhotoPreviewOpen] = useState<string | null>(null);
+  const displayTimestamp = activity.ended_at || activity.updated_at || activity.created_at;
 
   // Resolve avatar URL (path -> public URL if needed)
   const avatarUrl = useMemo(() => {
     const resolved = resolveAvatarUrl(activity.user?.avatar_url, supabase);
-    return addCacheBuster(resolved, activity.user?.updated_at);
-  }, [activity.user?.avatar_url, activity.user?.updated_at]);
+    return addCacheBuster(resolved, undefined); // No cache key available for activity.user
+  }, [activity.user?.avatar_url]);
 
-  // Get photo URL from activities.photos array
-  const photoPath =
-    Array.isArray(activity.photos) && activity.photos.length > 0
-      ? activity.photos[0]
-      : null;
-
-  // Generate imageUrl: if photoPath is already a URL (starts with http), use it directly
-  // Otherwise, generate public URL from storage path
-  const imageUrl = photoPath
-    ? (photoPath.startsWith('http://') || photoPath.startsWith('https://'))
-      ? photoPath
-      : supabase.storage
-          .from('activity-photos')
-          .getPublicUrl(photoPath).data.publicUrl
-    : null;
+  // Resolve all photo URLs (support full gallery)
+  const photoUrls = useMemo(() => {
+    if (!Array.isArray(activity.photos) || activity.photos.length === 0) return [];
+    return activity.photos
+      .map((photoPath) => {
+        if (!photoPath) return null;
+        if (photoPath.startsWith('http://') || photoPath.startsWith('https://')) return photoPath;
+        const { data } = supabase.storage.from('activity-photos').getPublicUrl(photoPath);
+        return data?.publicUrl ?? null;
+      })
+      .filter((u): u is string => Boolean(u));
+  }, [activity.photos]);
 
   // Check if this is a reading activity with a book
   const isReadingActivity = activity.type === 'reading' && (activity.book || activity.book_id);
@@ -109,21 +115,33 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
     book: activity.book,
   }) : null;
 
+  const formatDuration = (minutes?: number | null) => {
+    const totalSeconds = Math.max(0, Math.round((minutes ?? 0) * 60));
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    if (m > 0 && s > 0) return `${m}m ${s.toString().padStart(2, '0')}s`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
+  };
+
   if (variant === 'compact') {
     return (
-      <div className="bg-white rounded-xl border border-stone-200 p-3">
+      <div className="bg-white rounded-xl p-3 border-0">
         <div className="flex items-start gap-3">
           {/* Cover or Icon */}
           {isReadingActivity && activity.book ? (
-            <div className="w-12 h-16 shrink-0 rounded-lg overflow-hidden">
-              <BookCover
-                coverUrl={activity.book.cover_url}
-                custom_cover_url={(activity.book as any).custom_cover_url ?? null}
-                title={activity.book.title || ''}
-                author={activity.book.author || ''}
-                className="w-full h-full"
-              />
-            </div>
+            <BookCover
+              title={activity.book.title}
+              author={activity.book.author}
+              coverUrl={activity.book.cover_url ?? null}
+              custom_cover_url={activity.book.custom_cover_url ?? null}
+              openlibrary_cover_id={activity.book.openlibrary_cover_id ?? null}
+              isbn={activity.book.isbn ?? null}
+              book={activity.book}
+              bookId={activity.book_id}
+              className="w-12 h-16 rounded-lg shadow-sm shrink-0"
+              showAddCoverButton={false}
+            />
           ) : (
             <div className="w-12 h-16 shrink-0 rounded-lg bg-stone-100 flex items-center justify-center">
               <Icon className="w-6 h-6 text-stone-400" />
@@ -139,7 +157,7 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
                   {readingUI.actionLabel}
                 </p>
                 {/* Book title (main element) */}
-                <h3 className="text-sm font-bold text-stone-900 leading-snug line-clamp-1 mb-1">
+                <h3 className="text-sm font-bold text-[rgb(var(--color-text))] leading-snug line-clamp-1 mb-1">
                   {readingUI.title}
                 </h3>
                 {/* Author (secondary) */}
@@ -147,15 +165,34 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
                 {/* Stats chips */}
                 {readingUI.statsChips.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-1">
-                    {readingUI.statsChips.map((chip, idx) => (
-                      <span
-                        key={idx}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-stone-700 text-[10px] font-medium"
-                      >
-                        <span className="font-semibold">{chip.value}</span>
-                        <span className="text-stone-500">{chip.label}</span>
-                      </span>
-                    ))}
+                    {readingUI.statsChips.map((chip, idx) => {
+                      const isSpeed = chip.label === 'pages/h';
+                      const isPace = chip.label === 'min/page';
+                      const highlight = isSpeed || isPace;
+                      const chipClasses = highlight
+                        ? 'inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary text-black text-[10px] font-semibold'
+                        : 'inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-stone-700 text-[10px] font-medium';
+                      const labelClasses = highlight ? 'text-black' : 'text-stone-500';
+                      return (
+                        <span
+                          key={idx}
+                          className={chipClasses}
+                        >
+                          <span
+                            className="font-semibold"
+                            style={highlight ? { color: '#000' } : undefined}
+                          >
+                            {chip.value}
+                          </span>
+                          <span
+                            className={labelClasses}
+                            style={highlight ? { color: '#000' } : undefined}
+                          >
+                            {chip.label}
+                          </span>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -174,7 +211,7 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
               </>
             )}
 
-            <p className="text-xs text-stone-400 mt-1.5">{formatDistanceToNow(activity.created_at)}</p>
+            <p className="text-xs text-stone-400 mt-1.5">{formatDistanceToNow(displayTimestamp)}</p>
           </div>
         </div>
       </div>
@@ -182,8 +219,9 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
   }
 
   return (
+    <>
     <div 
-      className="bg-white rounded-2xl border border-stone-200 shadow-sm mb-3 overflow-hidden"
+      className="bg-white rounded-2xl shadow-sm mb-3 overflow-hidden border-0 border-none"
       onClick={(e) => {
         // Prevent card click from interfering with button clicks
         const target = e.target as HTMLElement;
@@ -192,22 +230,7 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
         }
       }}
     >
-      {/* Photo - displayed above the card content if it exists */}
-      {imageUrl && (
-        <div className="w-full aspect-video overflow-hidden bg-gray-100">
-          <img
-            src={imageUrl}
-            alt="Photo de l'activité"
-            className="w-full h-full object-cover"
-            onError={(e) => {
-              console.error('[ActivityCard] Failed to load photo:', imageUrl);
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        </div>
-      )}
-
-      <div className="p-4">
+      <div className="p-4 border-0 border-none border-transparent">
         {/* Header row: avatar + name + time + menu */}
         <div className="flex items-center justify-between mb-3">
           <button
@@ -231,13 +254,18 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="font-semibold text-stone-900 text-sm truncate">{activity.user.display_name}</span>
+                <span
+                  className="font-semibold text-sm truncate"
+                  style={{ color: 'rgb(var(--color-text))' }}
+                >
+                  {activity.user.display_name}
+                </span>
                 <span className="text-stone-400 text-xs truncate">@{activity.user.username}</span>
               </div>
             </div>
           </button>
           <div className="flex items-center gap-2">
-            <span className="text-stone-400 text-xs flex-shrink-0">{formatDistanceToNow(activity.created_at)}</span>
+            <span className="text-stone-400 text-xs flex-shrink-0">{formatDistanceToNow(displayTimestamp)}</span>
             {user && onEdit && onDelete && (
               <ActivityMenu
                 activityId={activity.id}
@@ -255,46 +283,69 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
           <div className="flex items-start gap-4 mb-3">
             <div className="flex-1 min-w-0">
               {/* Action label (short, no title duplication) */}
-              <p className="text-sm text-stone-500 mb-2">
+              <p
+                className="text-sm mb-2"
+                style={{ color: 'rgb(var(--color-text))' }}
+              >
                 {readingUI.actionLabel}
               </p>
               
               {/* Title (main element, large) */}
-              <h3 className="text-lg font-bold text-stone-900 leading-tight line-clamp-2 mb-1.5">
+              <h3 className="text-lg font-bold text-[rgb(var(--color-text))] leading-tight line-clamp-2 mb-1.5">
                 {readingUI.title}
               </h3>
               
               {/* Author (secondary) */}
               <p className="text-stone-500 text-sm line-clamp-1 mb-3">{readingUI.author}</p>
 
-              {/* Stats chips (premium style) */}
-              {readingUI.statsChips.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {readingUI.statsChips.map((chip, idx) => (
+            {/* Stats chips (progression masquée tant qu'on ne stocke pas un snapshot par activité) */}
+            {readingUI.statsChips.length > 0 && (
+              <div className="flex flex-wrap gap-2 items-center">
+                {readingUI.statsChips.map((chip, idx) => {
+                  const isSpeed = chip.label === 'pages/h';
+                  const isPace = chip.label === 'min/page' || chip.label === 's/page';
+                  const highlight = isSpeed || isPace;
+                  const chipClasses = highlight
+                    ? 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-black text-xs font-semibold'
+                    : 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-stone-700 text-xs font-medium';
+                  const labelClasses = highlight ? 'text-black' : 'text-stone-500';
+                  return (
                     <span
                       key={idx}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 text-stone-700 text-xs font-medium"
+                      className={chipClasses}
                     >
-                      <span className="font-bold text-stone-900">{chip.value}</span>
-                      <span className="text-stone-500">{chip.label}</span>
+                      <span
+                        className="font-bold text-stone-900"
+                        style={highlight ? { color: '#000' } : undefined}
+                      >
+                        {chip.value}
+                      </span>
+                      <span
+                        className={labelClasses}
+                        style={highlight ? { color: '#000' } : undefined}
+                      >
+                        {chip.label}
+                      </span>
                     </span>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
+            )}
             </div>
             
             {/* Cover (small, rounded, with shadow) */}
-            {activity.book.cover_url && (
-              <div className="w-14 h-20 shrink-0 rounded-xl overflow-hidden shadow-sm">
-                <BookCover
-                  coverUrl={activity.book.cover_url}
-                  custom_cover_url={(activity.book as any).custom_cover_url ?? null}
-                  title={activity.book.title || ''}
-                  author={activity.book.author || ''}
-                  className="w-full h-full"
-                />
-              </div>
-            )}
+            <BookCover
+              title={activity.book.title}
+              author={activity.book.author}
+              coverUrl={activity.book.cover_url ?? null}
+              custom_cover_url={activity.book.custom_cover_url ?? null}
+              openlibrary_cover_id={activity.book.openlibrary_cover_id ?? null}
+              isbn={activity.book.isbn ?? null}
+              book={activity.book}
+              bookId={activity.book_id}
+              className="w-14 h-20 rounded-xl shadow-sm shrink-0"
+              showAddCoverButton={false}
+            />
           </div>
         ) : (
           <div className="mb-3">
@@ -308,7 +359,7 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
                 <span className="text-stone-400 text-[10px] font-medium">{activity.pages_read} pages</span>
               )}
               {activity.duration_minutes && activity.duration_minutes > 0 && (
-                <span className="text-stone-400 text-[10px] font-medium">{activity.duration_minutes} min</span>
+                <span className="text-stone-400 text-[10px] font-medium">{formatDuration(activity.duration_minutes)}</span>
               )}
             </div>
           
@@ -319,8 +370,8 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
 
         {/* Notes */}
         {activity.notes && (
-          <div className="bg-stone-50 rounded-xl p-3 mb-3">
-            <p className="text-stone-700 text-sm leading-relaxed">{activity.notes}</p>
+          <div className="rounded-xl p-3 mb-3 bg-surface-2 border border-border">
+            <p className="text-text-main-light text-sm leading-relaxed">{activity.notes}</p>
           </div>
         )}
 
@@ -328,9 +379,12 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
         {activity.quotes && activity.quotes.length > 0 && (
           <div className="mb-3 space-y-2">
             {activity.quotes.map((quote, index) => (
-              <div key={index} className="border-l-4 border-primary pl-3 py-2 bg-gray-50 rounded-r-lg">
+              <div
+                key={index}
+                className="border-l-4 border-primary pl-3 py-2 rounded-r-lg bg-surface border border-border/70"
+              >
                 <div className="flex items-start gap-2">
-                  <Quote className="w-4 h-4 text-text-sub-light mt-0.5 flex-shrink-0" />
+                  <Quote className="w-4 h-4 text-[rgba(230,255,0,1)] mt-0.5 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-text-main-light italic line-clamp-3">"{quote.text}"</p>
                     <p className="text-xs text-text-sub-light mt-1">Page {quote.page}</p>
@@ -338,6 +392,49 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Photos grid (compact, under text) */}
+        {photoUrls.length > 0 && (
+          <div className="mb-3">
+            <div className="flex items-center gap-2 mb-2 text-sm text-stone-500">
+              <span className="font-semibold text-stone-700">Photos</span>
+              <span className="text-xs text-stone-400">({photoUrls.length})</span>
+            </div>
+            <div className="grid grid-cols-3 gap-6">
+              {photoUrls.slice(0, 3).map((url, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setPhotoPreviewOpen(url);
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  className="aspect-[4/3] overflow-hidden rounded-xl border border-gray-200 bg-gray-50 hover:shadow-sm transition-shadow"
+                >
+                  <img
+                    src={url}
+                    alt={`Photo ${idx + 1}`}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    draggable={false}
+                    onMouseDown={(e) => {
+                      // Empêche Safari/iOS d'ouvrir l'image en plein écran natif
+                      e.preventDefault();
+                    }}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -430,5 +527,32 @@ export function ActivityCard({ activity, onReact, onComment, onOpenLikers, onEdi
         </div>
       </div>
     </div>
+
+    {/* Lightbox photo preview */}
+    {photoPreviewOpen && typeof document !== 'undefined' && createPortal(
+      <div
+        className="fixed inset-0 z-[240] bg-black/80 flex items-center justify-center p-4"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 72px)' }} // laisser de l'air au-dessus de la nav
+        onClick={() => setPhotoPreviewOpen(null)}
+      >
+        <div className="relative max-w-5xl max-h-[75vh] w-full flex items-center justify-center">
+          <img
+            src={photoPreviewOpen}
+            alt="Photo d'activité"
+            className="max-h-[75vh] max-w-full object-contain rounded-2xl shadow-2xl"
+          />
+          <button
+            type="button"
+            onClick={() => setPhotoPreviewOpen(null)}
+            className="absolute top-2 right-2 w-10 h-10 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-black/80 transition-colors"
+            aria-label="Fermer la photo"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 }

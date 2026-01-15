@@ -114,7 +114,7 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                     className={`w-full flex items-center gap-3 p-4 rounded-2xl transition-colors text-left cursor-pointer ${
                       isCurrentUser
                         ? 'bg-primary/10 border-2 border-primary'
-                        : 'hover:bg-stone-50 border border-transparent'
+                        : 'hover:bg-neutral-200/80 dark:hover:bg-neutral-800/80 border border-transparent'
                     }`}
                     style={isCurrentUser ? { color: 'inherit' } : undefined}
                   >
@@ -147,7 +147,11 @@ export function LeaderboardModal({ onClose, onUserClick }: LeaderboardModalProps
                     {/* User info - simplifié pour toujours voir les noms complets */}
                     <div className="flex-1 min-w-0 flex flex-col gap-1 pr-2">
                       {/* Ligne 1: Nom complet (pas tronqué, peut prendre plusieurs lignes si nécessaire) */}
-                      <h3 className={`font-bold text-stone-900 break-words ${isCurrentUser ? 'text-primary' : ''}`}>
+                      <h3
+                        className={`font-bold text-text-main-light break-words ${
+                          isCurrentUser ? 'text-primary' : ''
+                        }`}
+                      >
                         {profile.display_name || 'Utilisateur'}
                         {isCurrentUser && (
                           <span className="ml-2 text-xs font-medium text-black whitespace-nowrap">

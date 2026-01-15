@@ -16,7 +16,7 @@ type BookStatus = 'reading' | 'completed' | 'want_to_read';
 
 export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: UserLibraryViewProps) {
   const [userBooks, setUserBooks] = useState<any[]>([]);
-  const [filter, setFilter] = useState<BookStatus>('reading');
+  const [filter, setFilter] = useState<'all' | BookStatus>(mode === 'reading' ? 'reading' : 'all');
   const [loading, setLoading] = useState(true);
   const [selectedBook, setSelectedBook] = useState<any>(null);
 
@@ -31,32 +31,39 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
   const loadUserBooks = async () => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from('user_books')
-      .select(`
+    const baseSelect = `
+      id,
+      status,
+      current_page,
+      book_id,
+      created_at,
+      updated_at,
+      custom_cover_url,
+      book:books (
         id,
-        status,
-        current_page,
-        book_id,
-        created_at,
-        updated_at,
-        custom_cover_url,
-        book:books (
-          id,
-          title,
-          author,
-          cover_url,
-          total_pages,
-          description,
-          isbn,
-          google_books_id,
-          edition,
-          openlibrary_cover_id
-        )
-      `)
+        title,
+        author,
+        cover_url,
+        total_pages,
+        description,
+        isbn,
+        google_books_id,
+        edition,
+        openlibrary_cover_id
+      )
+    `;
+
+    let query = supabase
+      .from('user_books')
+      .select(baseSelect)
       .eq('user_id', userId)
-      .eq('status', filter)
       .order('updated_at', { ascending: false });
+
+    if (filter !== 'all') {
+      query = query.eq('status', filter);
+    }
+
+    const { data, error } = await query;
 
     console.log('[user_books fetch UserLibraryView]', { statusFilter: filter, userId, data, error });
 
@@ -192,12 +199,26 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
               <ArrowLeft className="w-5 h-5 text-text-sub-light" />
             </button>
             <h1 className="text-xl font-bold">
-              {mode === 'liked' ? `Livres likés de ${userName}` : `Bibliothèque de ${userName}`}
+              {mode === 'liked'
+                ? `Livres likés de ${userName}`
+                : mode === 'reading'
+                  ? `Livres en cours de ${userName}`
+                  : `Bibliothèque de ${userName}`}
             </h1>
           </div>
 
           {mode !== 'liked' && (
             <div className="flex gap-2 overflow-x-auto">
+              <button
+                onClick={() => setFilter('all')}
+                className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
+                  filter === 'all'
+                    ? 'bg-primary text-black shadow-sm'
+                    : 'bg-gray-100 text-text-sub-light hover:bg-gray-200'
+                }`}
+              >
+                Tous
+              </button>
               <button
                 onClick={() => setFilter('reading')}
                 className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
@@ -233,7 +254,10 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
         </div>
       </div>
 
-      <div className="p-4">
+      <div
+        className="p-4"
+        style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}
+      >
         {loading ? (
           <div className="text-center py-12 text-text-sub-light">Chargement...</div>
         ) : userBooks.length === 0 ? (
@@ -247,7 +271,7 @@ export function UserLibraryView({ userId, userName, onClose, mode = 'all' }: Use
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 pb-8">
             {userBooks.map((userBook) => {
               const book = userBook.book;
               if (!book) {

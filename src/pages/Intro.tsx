@@ -32,27 +32,29 @@ export function Intro({ onDone }: IntroProps) {
 
   return (
     <div
-      className={`fixed inset-0 bg-black flex flex-col items-center justify-center z-[9999] transition-opacity duration-200 ${
+      className={`fixed inset-0 flex flex-col items-center justify-center z-[9999] transition-opacity duration-200 bg-[rgb(0,0,0)] ${
         fadeIn ? 'opacity-100' : 'opacity-0'
       }`}
     >
-      {/* Logo */}
-      <div className="mb-8">
-        <BrandLogo size={64} color="#fff" />
+      <div className="w-full max-w-[420px] px-8 text-center space-y-8">
+        {/* Title */}
+        <h1 className="font-extrabold tracking-tight text-[rgb(255,255,255)] text-[clamp(48px,18vw,92px)] leading-none">
+          LEXU.
+        </h1>
+
+        {/* Tagline */}
+        <p className="text-[rgba(255,255,255,0.75)] text-lg font-medium !mt-0">
+          Votre compagnon de lecture
+        </p>
+
+        {/* Start Button */}
+        <button
+          onClick={handleStart}
+          className="w-full py-4 bg-primary text-[rgb(0,0,0)] font-bold rounded-full shadow-[0_8px_28px_rgba(249,245,6,0.3)] hover:brightness-95 active:scale-95 transition-all"
+        >
+          Commencer
+        </button>
       </div>
-
-      {/* Tagline */}
-      <p className="text-white/80 text-lg font-medium mb-12 text-center px-8">
-        Votre compagnon de lecture
-      </p>
-
-      {/* Start Button */}
-      <button
-        onClick={handleStart}
-        className="px-8 py-4 bg-primary text-black font-bold rounded-full hover:brightness-95 active:scale-95 transition-all"
-      >
-        Commencer
-      </button>
     </div>
   );
 }

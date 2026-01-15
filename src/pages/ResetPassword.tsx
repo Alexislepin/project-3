@@ -318,7 +318,7 @@ export function ResetPasswordPage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="mb-2">
-            <BrandLogo size={48} color="#111" />
+            <BrandLogo size={48} />
           </div>
         </div>
 

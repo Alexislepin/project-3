@@ -33,10 +33,15 @@ export function AppHeader({
 }: AppHeaderProps) {
   return (
     <div
-      className={`sticky top-0 bg-white/95 backdrop-blur-md border-b border-gray-200 ${className}`}
+      className={`sticky top-0 backdrop-blur-md border-none ${className}`}
       style={{
         paddingTop: 'var(--sat)',
         zIndex: 60, // Au-dessus de la searchBar (zIndex 40)
+        backgroundColor: 'var(--color-surface)',
+        borderBottomWidth: 0,
+        borderBottomStyle: 'none',
+        borderBottomColor: 'transparent',
+        borderImage: 'none',
       }}
     >
       <div className="px-4 py-3">
@@ -49,7 +54,7 @@ export function AppHeader({
                   className="p-2 -ml-2 hover:bg-black/10 rounded-full transition-colors flex-shrink-0"
                   aria-label="Retour"
                 >
-                  <ArrowLeft className="w-5 h-5 text-stone-900" />
+                  <ArrowLeft className="w-5 h-5 text-[rgb(var(--color-text))]" />
                 </button>
               )}
               {showClose && onClose && (
@@ -62,7 +67,9 @@ export function AppHeader({
                 </button>
               )}
               {title && (
-                <h1 className="text-lg font-bold tracking-tight truncate">{title}</h1>
+                <h1 className="text-lg font-bold tracking-tight truncate text-black dark:text-neutral-50">
+                  {title}
+                </h1>
               )}
             </div>
             {rightActions && (

@@ -4,30 +4,34 @@ export function formatDistanceToNow(dateString: string): string {
   const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
   if (diffInSeconds < 60) {
-    return 'just now';
+    return 'À l’instant';
   }
 
   const diffInMinutes = Math.floor(diffInSeconds / 60);
   if (diffInMinutes < 60) {
-    return `${diffInMinutes}m ago`;
+    return diffInMinutes === 1 ? 'Il y a 1 minute' : `Il y a ${diffInMinutes} minutes`;
   }
 
   const diffInHours = Math.floor(diffInMinutes / 60);
   if (diffInHours < 24) {
-    return `${diffInHours}h ago`;
+    return diffInHours === 1 ? 'Il y a 1 heure' : `Il y a ${diffInHours} heures`;
   }
 
   const diffInDays = Math.floor(diffInHours / 24);
+  if (diffInDays === 1) {
+    return 'Hier';
+  }
   if (diffInDays < 7) {
-    return `${diffInDays}d ago`;
+    return `Il y a ${diffInDays} jours`;
   }
 
   const diffInWeeks = Math.floor(diffInDays / 7);
-  if (diffInWeeks < 4) {
-    return `${diffInWeeks}w ago`;
+  if (diffInWeeks < 5) {
+    return diffInWeeks === 1 ? 'Il y a 1 semaine' : `Il y a ${diffInWeeks} semaines`;
   }
 
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // Sinon, afficher la date courte en français
+  return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /**

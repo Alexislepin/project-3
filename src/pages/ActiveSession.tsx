@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Flame, Clock, Pause, Play, X, Plus } from 'lucide-react';
+import { Flame, Clock, Pause, Play, X, Plus, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { SessionSummary } from './SessionSummary';
@@ -8,7 +8,7 @@ import { AppHeader } from '../components/AppHeader';
 import { Toast } from '../components/Toast';
 import { BookRecapModal } from '../components/BookRecapModal';
 import { RecapUIState, DEFAULT_RECAP_UI } from '../lib/recapUI';
-import { BOTTOM_INSET } from '../lib/layoutConstants';
+import { useScrollLock } from '../hooks/useScrollLock';
 
 
 type NoteTag = 'citation' | 'idee' | 'question' | null;
@@ -19,6 +19,17 @@ interface ActiveSessionProps {
 }
 
 export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
+  // Lock body scroll when ActiveSession is open (full-screen focus mode)
+  useScrollLock(true);
+
+  // Set data-modal-open flag to hide tabbar/FAB
+  useEffect(() => {
+    document.body.dataset.modalOpen = '1';
+    return () => {
+      document.body.dataset.modalOpen = '0';
+    };
+  }, []);
+
   const [selectedBook, setSelectedBook] = useState<any>(null);
   const [userBooks, setUserBooks] = useState<any[]>([]);
   const [showBookSelect, setShowBookSelect] = useState(true);
@@ -42,18 +53,82 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   } | null>(null);
   const [recapUI, setRecapUI] = useState<RecapUIState>(DEFAULT_RECAP_UI);
   const [recapTabTouched, setRecapTabTouched] = useState(false);
-  const recapReqRef = useRef<string | null>(null);
+  const recapReqIdRef = useRef(0);
   const [notePage, setNotePage] = useState<string>('');
   const [noteText, setNoteText] = useState('');
   const [noteTag, setNoteTag] = useState<NoteTag>(null);
   const [savingNote, setSavingNote] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   const [activityId, setActivityId] = useState<string | null>(null);
+  const [finishedSeconds, setFinishedSeconds] = useState<number | null>(null);
   const { user } = useAuth();
+  const parsedCurrentPage = Number(currentPage);
+  const pageProvided = currentPage.trim() !== '' && Number.isFinite(parsedCurrentPage);
+  const pageValid = pageProvided && (startPage === null ? true : parsedCurrentPage >= startPage);
+  const pageError =
+    !pageProvided ? 'Indique ta page actuelle pour terminer' :
+    startPage !== null && parsedCurrentPage < startPage ? `Min: ${startPage}` :
+    '';
+
+  // Prefill the current page with the starting page so the finish button isn't blocked
+  useEffect(() => {
+    if (currentPage === '' && startPage !== null) {
+      setCurrentPage(String(startPage));
+    }
+  }, [currentPage, startPage]);
+  
+  // Navigation helpers to exit and open library/scanner
+  const navigateToLibrary = (opts?: { openScanner?: boolean; openManualAdd?: boolean }) => {
+    onCancel(); // close ActiveSession overlay
+    // push state to library route and notify router
+    window.history.pushState('/library', '', '/library');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    // defer actions until view switches
+    setTimeout(() => {
+      if (opts?.openScanner) {
+        window.dispatchEvent(new CustomEvent('lexu:open-scanner'));
+      }
+      if (opts?.openManualAdd) {
+        window.dispatchEvent(new CustomEvent('open-manual-add'));
+      }
+    }, 80);
+  };
   
   // Guard anti double-submit
   const isSavingRef = useRef(false);
   const activityIdRef = useRef<string | null>(null);
+
+  // Persist active session locally (fallback for banner)
+  const persistActiveSession = (opts: {
+    activityId: string;
+    startedAt: string;
+    lastPauseAt: string | null;
+    pausedTotalSeconds: number;
+    bookTitle?: string | null;
+    currentPage?: number | null;
+  }) => {
+    const payload = {
+      id: opts.activityId,
+      started_at: opts.startedAt,
+      last_pause_at: opts.lastPauseAt,
+      paused_total_seconds: opts.pausedTotalSeconds,
+      book: { title: opts.bookTitle ?? null },
+      current_page: opts.currentPage ?? null,
+    };
+    try {
+      localStorage.setItem('lexu_active_activity', JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  };
+
+  const clearActiveSessionPersisted = () => {
+    try {
+      localStorage.removeItem('lexu_active_activity');
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     loadUserBooks();
@@ -69,13 +144,42 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const handleCancel = () => {
     isSavingRef.current = false;
     activityIdRef.current = null;
+    clearActiveSessionPersisted();
     onCancel();
+  };
+
+  // Supprime l'activité et ferme l'écran (utilisé par le bouton corbeille footer)
+  const handleDeleteFromFooter = async () => {
+    if (!user || !activityId) {
+      handleCancel();
+      return;
+    }
+    try {
+      // Marquer ended_at pour arrêter bannières/timers, puis delete
+      const now = new Date().toISOString();
+      await supabase
+        .from('activities')
+        .update({ ended_at: now })
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+
+      await supabase
+        .from('activities')
+        .delete()
+        .eq('id', activityId)
+        .eq('user_id', user.id);
+    } catch (error) {
+      console.error('[ActiveSession] delete from footer failed', error);
+    } finally {
+      handleCancel();
+    }
   };
   
   // Wrapper pour onFinish avec reset des refs
   const handleFinishWrapper = () => {
     isSavingRef.current = false;
     activityIdRef.current = null;
+    clearActiveSessionPersisted();
     onFinish();
   };
 
@@ -225,6 +329,15 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         setSelectedBook(userBookData);
         setStartPage(userBookData.current_page || 0);
       }
+
+      persistActiveSession({
+        activityId: data.id,
+        startedAt: data.started_at,
+        lastPauseAt: data.last_pause_at,
+        pausedTotalSeconds: data.paused_total_seconds || 0,
+        bookTitle: (userBookData as any)?.book?.title ?? null,
+        currentPage: (userBookData as any)?.current_page ?? null,
+      });
     }
   };
 
@@ -285,6 +398,14 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       setStartPage(selectedBook.current_page || 0);
       setShowBookSelect(false);
       setIsRunning(true);
+      persistActiveSession({
+        activityId: activityResult.id,
+        startedAt: activityResult.started_at,
+        lastPauseAt: activityResult.last_pause_at,
+        pausedTotalSeconds: activityResult.paused_total_seconds || 0,
+        bookTitle: selectedBook.book?.title ?? null,
+        currentPage: selectedBook.current_page ?? null,
+      });
     } finally {
       isSavingRef.current = false;
       activityIdRef.current = null;
@@ -341,15 +462,26 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   const handleFinish = async () => {
     if (!user || !selectedBook || startPage === null || !activityId) return;
 
+    const parsedPage = Number(currentPage);
+    const pageProvided = currentPage.trim() !== '' && Number.isFinite(parsedPage);
+    const pageValid = pageProvided && parsedPage >= startPage;
+    if (!pageValid) {
+      setToast({ message: 'Indique ta page actuelle avant de terminer', type: 'error' });
+      return;
+    }
+
     setSaving(true);
 
-    const endPage = parseInt(currentPage) || startPage;
+    const endPage = Math.max(startPage, Math.floor(parsedPage));
     const pagesRead = Math.max(0, endPage - startPage);
-    const durationMinutes = Math.max(1, Math.floor(displaySeconds / 60));
+    const elapsedSeconds = Math.max(1, Math.round(displaySeconds)); // fige la durée exacte au moment du stop
+    const durationMinutesFloat = Math.max(elapsedSeconds / 60, 1 / 60);
+    const durationMinutes = Math.max(1, Math.round(durationMinutesFloat)); // DB column is integer
+    setFinishedSeconds(elapsedSeconds);
 
     // Check if book is completed
-    const totalPages = selectedBook.book?.total_pages;
-    const isCompleted = totalPages && endPage >= totalPages;
+    const bookTotalPages = selectedBook.book?.total_pages ?? selectedBook.custom_total_pages ?? null;
+    const isCompleted = bookTotalPages && endPage >= bookTotalPages;
 
     // Update user_books current_page and status if completed
     const userBookUpdateData: any = {
@@ -368,32 +500,35 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       .eq('book_id', selectedBook.book_id);
 
     // Calculate reading pace
-    const calcReadingPace = (pagesRead: number, durationMinutes: number) => {
-      const mins = Math.max(1, durationMinutes);
+    const calcReadingPace = (pagesRead: number, mins: number) => {
       const pages = Math.max(0, pagesRead);
+      if (pages === 0) {
+        return { pagesPerHour: null, minPerPage: null };
+      }
 
-      const pagesPerHour = pages > 0 ? pages / (mins / 60) : 0;
-      const minPerPage = pages > 0 ? mins / pages : 0;
+      const pagesPerHourRaw = pages / (mins / 60);
+      const minPerPageRaw = mins / pages;
 
       return {
-        pagesPerHour: pages > 0 ? Number(pagesPerHour.toFixed(1)) : null,
-        minPerPage: pages > 0 ? Number(minPerPage.toFixed(1)) : null,
+        pagesPerHour: Math.round(Math.max(0, pagesPerHourRaw)),
+        minPerPage: Math.round(Math.max(0, minPerPageRaw)),
       };
     };
 
     // Optionnel
-    const calcWPM = (pagesRead: number, durationMinutes: number, wordsPerPage = 250) => {
-      const mins = Math.max(1, durationMinutes);
+    const calcWPM = (pagesRead: number, mins: number, wordsPerPage = 250) => {
       const pages = Math.max(0, pagesRead);
       if (pages === 0) return null;
       return Math.round((pages * wordsPerPage) / mins);
     };
 
-    const { pagesPerHour, minPerPage } = calcReadingPace(pagesRead, durationMinutes);
-    const wpm = calcWPM(pagesRead, durationMinutes, 250); // ou une value user/profile
+    const { pagesPerHour, minPerPage } = calcReadingPace(pagesRead, durationMinutesFloat);
+    const wpm = calcWPM(pagesRead, durationMinutesFloat, 250); // ou une value user/profile
 
     // Update the existing activity row
     const now = new Date().toISOString();
+    const totalPages = selectedBook.book?.total_pages ?? selectedBook.custom_total_pages ?? null;
+
     const updateData: any = {
       ended_at: now,
       pages_read: pagesRead,
@@ -462,6 +597,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
     setSaving(false);
     setShowSummary(true);
+    clearActiveSessionPersisted();
   };
 
   // Helper to get display fields (same as Library)
@@ -514,22 +650,36 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       return;
     }
     
-    // Block if challenge is submitting or already submitted
-    if (recapUI.challengeSubmitting || recapUI.hasSubmittedChallenge) {
+    // Block if challenge is submitting; allow force reload even after submission
+    if (recapUI.challengeSubmitting) {
       console.log('[ActiveSession] loadRecap blocked', { 
         challengeSubmitting: recapUI.challengeSubmitting,
         hasSubmittedChallenge: recapUI.hasSubmittedChallenge
       });
       return;
     }
+    if (!force && recapUI.hasSubmittedChallenge) {
+      console.log('[ActiveSession] loadRecap blocked (challenge already submitted)');
+      return;
+    }
     
-    // Guard against stale requests
-    const reqId = `${Date.now()}-${Math.random()}`;
-    recapReqRef.current = reqId;
+    // ✅ Anti-race "stale response" propre avec compteur
+    const reqId = ++recapReqIdRef.current;
     
     console.log('[ActiveSession] loadRecap called', { force, bookId: recapBook.book.id, uptoPage: recapBook.uptoPage });
     
-    setRecapUI(s => ({ ...s, recapLoading: true, recapError: null }));
+    setRecapUI(s => ({ 
+      ...s, 
+      recapLoading: true, 
+      recapError: null,
+      // Reset challenge state when forcing to allow a new attempt
+      hasSubmittedChallenge: force ? false : s.hasSubmittedChallenge,
+      challengeResult: force ? null : s.challengeResult,
+      userAnswerDraft: force ? '' : s.userAnswerDraft,
+      submittedAnswer: force ? '' : s.submittedAnswer,
+      frozenQuestion: force ? null : s.frozenQuestion,
+      challengeSubmitting: false,
+    }));
     
     try {
       const payload: any = {
@@ -554,8 +704,47 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         body: payload,
       });
       
-      if (reqId !== recapReqRef.current) {
-        console.log('[ActiveSession] loadRecap stale response ignored');
+      // ✅ Log la réponse brute pour debug
+      console.log('[Recap] invoke result', { reqId, latest: recapReqIdRef.current, error, data });
+      
+      // ✅ Ignorer les réponses obsolètes
+      if (reqId !== recapReqIdRef.current) {
+        console.log('[Recap] ignoring stale response', { reqId, latest: recapReqIdRef.current });
+        return;
+      }
+      
+      // ✅ Fallback front-end si jamais on reçoit encore status:"no_data"
+      if (data?.status === 'no_data') {
+        console.warn('[Recap] no_data received -> converting to fallback recap', data);
+        
+        const fallback = {
+          ultra_20s: "Rappel prêt, même sans notes.",
+          summary:
+            "Je n'ai pas encore de notes/sessions enregistrées. Voici un aperçu général. Ajoute une note ou termine une session pour enrichir le rappel.",
+          key_takeaways: [
+            "Aperçu général (sans spoiler)",
+            "Thèmes majeurs",
+            "Contexte",
+            "Ce qu'il faut suivre en lisant",
+            "Ajoute une note pour personnaliser",
+          ],
+          characters: [],
+          detailed:
+            "Conseil : ajoute une note rapide ou enregistre une session (même 1 minute) pour générer un rappel personnalisé.",
+          challenge: {
+            question: "Comment rendre ce rappel plus pertinent ?",
+            answer: "Ajouter une note ou une session de lecture.",
+            explanation: "Cela donne du contexte réel à l'IA.",
+          },
+          meta: data?.meta,
+        };
+        
+        setRecapUI(s => ({ 
+          ...s, 
+          recapLoading: false,
+          recapData: fallback,
+          recapError: null
+        }));
         return;
       }
       
@@ -569,22 +758,12 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         return;
       }
       
-      if (data && data.ok === false && data.status !== 'no_data') {
+      if (data && data.ok === false) {
         const requestId = data.requestId || data.meta?.requestId || 'unknown';
         setRecapUI(s => ({ 
           ...s, 
           recapLoading: false,
           recapError: { message: data.error || 'Impossible de charger le rappel', requestId }
-        }));
-        return;
-      }
-      
-      if (data && data.status === 'no_data') {
-        setRecapUI(s => ({ 
-          ...s, 
-          recapLoading: false,
-          recapData: null,
-          recapError: null
         }));
         return;
       }
@@ -623,7 +802,7 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
         }));
       }
     } catch (err: any) {
-      if (reqId !== recapReqRef.current) return;
+      if (reqId !== recapReqIdRef.current) return;
       console.error('[ActiveSession] loadRecap error:', err);
       setRecapUI(s => ({ 
         ...s, 
@@ -632,6 +811,16 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       }));
     }
   }, [user, recapBook, recapUI.challengeSubmitting, recapUI.hasSubmittedChallenge]);
+
+  // Stop déclenché depuis la bannière : ouvrir l'écran et terminer comme si on appuyait sur "Terminer la session"
+  useEffect(() => {
+    const handleStopFromBanner = () => {
+      if (saving || showSummary) return;
+      void handleFinish();
+    };
+    window.addEventListener('lexu:stop-session-from-banner', handleStopFromBanner);
+    return () => window.removeEventListener('lexu:stop-session-from-banner', handleStopFromBanner);
+  }, [handleFinish, saving, showSummary]);
   
   // Auto-load recap when modal opens
   useEffect(() => {
@@ -640,6 +829,14 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
     }
   }, [recapOpen, recapBook, recapTabTouched, loadRecap]);
   
+  // ✅ Masquer tabbar/FAB quand ActiveSession est ouvert (full-screen focus)
+  useEffect(() => {
+    document.body.dataset.activeSession = '1';
+    return () => {
+      document.body.dataset.activeSession = '0';
+    };
+  }, []);
+
   // Set modalOpen flag to prevent navigation on xp-updated
   useEffect(() => {
     if (recapOpen) {
@@ -856,24 +1053,13 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
   );
 
   if (showSummary && selectedBook && selectedBook.book && startPage !== null) {
-    const endPage = parseInt(currentPage) || startPage;
+    const endPage = Number.isFinite(Number(currentPage))
+      ? Math.max(startPage, Math.floor(Number(currentPage)))
+      : startPage;
     const pagesRead = Math.max(0, endPage - startPage);
-    const durationMinutes = Math.max(1, Math.floor(displaySeconds / 60)); // ✅ Fix: prevent division by 0
+    const durationSeconds = finishedSeconds ?? Math.max(1, displaySeconds);
+    const durationMinutes = Math.max(1, Math.round(durationSeconds / 60)); // arrondi pour l'affichage / stockage
     
-    const calcReadingPace = (pagesRead: number, durationMinutes: number) => {
-      const mins = Math.max(1, durationMinutes);
-      const pages = Math.max(0, pagesRead);
-
-      const pagesPerHour = pages > 0 ? pages / (mins / 60) : 0;
-      const minPerPage = pages > 0 ? mins / pages : 0;
-
-      return {
-        pagesPerHour: pages > 0 ? Number(pagesPerHour.toFixed(1)) : null,
-        minPerPage: pages > 0 ? Number(minPerPage.toFixed(1)) : null,
-      };
-    };
-    
-    const { pagesPerHour, minPerPage } = calcReadingPace(pagesRead, durationMinutes);
     const { displayTitle, displayAuthor, displayCover } = getDisplayFields(selectedBook);
     
     return (
@@ -886,12 +1072,14 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             coverUrl={displayCover}
             pagesRead={pagesRead}
             durationMinutes={durationMinutes}
+            durationSeconds={durationSeconds}
             currentPage={endPage}
-            pagesPerHour={pagesPerHour}
-            minPerPage={minPerPage}
+            originalPage={startPage}
+            originalStatus={selectedBook.status}
             activityId={activityId}
             onComplete={handleFinishWrapper}
             onCancel={() => setShowSummary(false)}
+            onDeleted={handleFinishWrapper}
           />
         )}
         {renderModalsAndToast()}
@@ -907,139 +1095,166 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
       }, 50);
     };
 
-    const BOOK_SELECT_FOOTER_H = 180; // ~ IA + bouton + hint + padding
+    const footerVisible = userBooks.length > 0;
+    const BOOK_SELECT_FOOTER_H = 130; // footer réduit pour remonter le call-to-action
 
     return (
       <div 
-        className="fixed inset-0 bg-background-light z-50 flex flex-col h-[100dvh] overflow-hidden"
-        style={{ paddingBottom: BOTTOM_INSET }}
+        className="fixed inset-0 bg-background-light z-[200] flex flex-col h-[100dvh] overflow-hidden"
       >
-        {/* Sticky Header with safe-area top */}
-        <AppHeader
-          title="Démarrer une session de lecture"
-          showClose
-          onClose={handleCancel}
-        />
-
-        {/* Scrollable content container */}
-        <div 
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6"
-          style={{
-            WebkitOverflowScrolling: 'touch',
-            overscrollBehaviorY: 'contain',
-            overscrollBehaviorX: 'none',
-            paddingBottom: `calc(${BOOK_SELECT_FOOTER_H}px + ${BOTTOM_INSET})`,
-          }}
-        >
-          <div className="w-full max-w-md mx-auto flex flex-col justify-center min-h-full py-8">
-            <h3 className="text-2xl font-bold text-center mb-6">Que lisez-vous ?</h3>
-
-            {userBooks.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-text-sub-light mb-4">Aucun livre dans votre bibliothèque</p>
-                <p className="text-sm text-text-sub-light">Ajoutez d'abord des livres à votre bibliothèque</p>
-              </div>
-            ) : (
-              <div className="max-h-[50vh] overflow-y-auto pr-1 scrollbar-hide mb-4">
-              <div className="space-y-3">
-                {userBooks.map((ub) => {
-                  if (!ub.book) {
-                    console.warn('UserBook without book data:', ub);
-                    return null;
-                  }
-                  const { displayTitle, displayAuthor, displayCover } = getDisplayFields(ub);
-                  const book = ub.book;
-                  return (
-                    <button
-                      key={ub.book_id}
-                        onClick={() => onPickBook(ub)}
-                      className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${
-                        selectedBook?.book_id === ub.book_id
-                          ? 'bg-primary text-black shadow-md'
-                          : 'bg-card-light hover:bg-gray-50 border border-gray-200'
-                      }`}
-                    >
-                      <BookCover
-                        custom_cover_url={ub.custom_cover_url || null}
-                        coverUrl={displayCover}
-                        title={displayTitle}
-                        author={displayAuthor}
-                        isbn={(book as any)?.isbn || null}
-                        isbn13={(book as any)?.isbn13 || null}
-                        isbn10={(book as any)?.isbn10 || null}
-                        cover_i={(book as any)?.openlibrary_cover_id || null}
-                        openlibrary_cover_id={(book as any)?.openlibrary_cover_id || null}
-                        googleCoverUrl={(book as any)?.google_books_id ? `https://books.google.com/books/content?id=${(book as any).google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
-                        className="w-12 h-16 rounded-lg flex-shrink-0"
-                        bookId={book?.id}
-                      />
-                      <div className="flex-1 text-left">
-                        <h4 className="font-bold text-base">{displayTitle}</h4>
-                        <p className={`text-sm ${selectedBook?.book_id === ub.book_id ? 'text-black/70' : 'text-text-sub-light'}`}>
-                          {displayAuthor}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-                </div>
-              </div>
-            )}
-          </div>
+        {/* Header avec safe-area top et hit-area généreuse */}
+        <div style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+          <AppHeader
+            title="Démarrer une session de lecture"
+            showClose
+            onClose={handleCancel}
+          />
         </div>
 
-        {/* ✅ Footer FIXED (ne scroll plus avec la liste) */}
-        <div
-          className="fixed left-0 right-0 z-[60]"
-          style={{ bottom: BOTTOM_INSET }}
-        >
-          <div className="max-w-md mx-auto px-6">
-            <div className="bg-background-light/95 backdrop-blur border border-gray-200 rounded-2xl shadow-lg p-4 space-y-3">
-              {/* ✅ IA toujours visible quand un livre est sélectionné */}
-              {selectedBook?.book && (
-                <button
-                  type="button"
-                  onClick={handleRecapClick}
-                  className="w-full py-3 px-4 rounded-xl bg-card-light border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
-                >
-                  IA {selectedBook.current_page === 0 ? '(début)' : `(jusqu'à p.${selectedBook.current_page})`}
-                </button>
-              )}
+        {/* Conteneur central sans double scroll : une seule zone scrollable */}
+        <div className="flex-1 min-h-0 flex justify-center px-4">
+          <div 
+            className="w-full max-w-xl flex flex-col min-h-0"
+            style={{ paddingTop: '12px' }}
+          >
+            <h3 className="text-2xl font-bold text-center mb-4">Que lisez-vous ?</h3>
 
-              <button
-                onClick={() => {
-                  if (!selectedBook) return;
-                  startSession();
-                }}
-                disabled={!selectedBook}
-                className={[
-                  "w-full py-4 rounded-xl font-bold transition-colors",
-                  selectedBook
-                    ? "bg-text-main-light text-white hover:bg-text-main-light/90"
-                    : "bg-gray-200 text-gray-500 cursor-not-allowed",
-                ].join(" ")}
-              >
-                {selectedBook ? "Démarrer la session" : "Sélectionner un livre"}
-              </button>
-
-              {!selectedBook && (
-                <p className="text-center text-xs text-text-sub-light">
-                  Sélectionne un livre pour afficher le rappel IA et ajouter une note
-                </p>
+            <div
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+              style={{
+                WebkitOverflowScrolling: 'touch',
+                overscrollBehavior: 'contain',
+                paddingBottom: footerVisible
+                  ? `calc(${BOOK_SELECT_FOOTER_H}px + env(safe-area-inset-bottom) + 20px)`
+                  : `calc(env(safe-area-inset-bottom) + 20px)`,
+                maxHeight: 'min(70vh, 520px)', // petite fenêtre centrée sur iPhone
+              }}
+            >
+              {userBooks.length === 0 ? (
+                <div className="text-center py-12 space-y-4">
+                  <p className="text-text-sub-light">Aucun livre dans votre bibliothèque</p>
+                  <p className="text-sm text-text-sub-light">Ajoutez d'abord des livres à votre bibliothèque</p>
+                  <div className="flex flex-col gap-2 items-center">
+                    <button
+                      type="button"
+                      onClick={() => navigateToLibrary({ openManualAdd: true })}
+                      className="w-full max-w-xs py-3 px-4 rounded-xl bg-primary text-black font-semibold hover:brightness-95 transition-colors shadow-sm"
+                    >
+                      Ajouter un livre
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateToLibrary({ openScanner: true })}
+                      className="w-full max-w-xs py-3 px-4 rounded-xl border border-gray-200 text-text-main-light font-semibold transition-colors"
+                    >
+                      Scanner un livre
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3 pb-2">
+                  {userBooks.map((ub) => {
+                    if (!ub.book) {
+                      console.warn('UserBook without book data:', ub);
+                      return null;
+                    }
+                    const { displayTitle, displayAuthor, displayCover } = getDisplayFields(ub);
+                    const book = ub.book;
+                    return (
+                      <button
+                        key={ub.book_id}
+                        onClick={() => onPickBook(ub)}
+                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all ${
+                          selectedBook?.book_id === ub.book_id
+                            ? 'bg-primary text-black shadow-md'
+                            : 'bg-card-light border border-gray-200'
+                        }`}
+                      >
+                        <BookCover
+                          custom_cover_url={ub.custom_cover_url || null}
+                          coverUrl={displayCover}
+                          title={displayTitle}
+                          author={displayAuthor}
+                          isbn={(book as any)?.isbn || null}
+                          isbn13={(book as any)?.isbn13 || null}
+                          isbn10={(book as any)?.isbn10 || null}
+                          cover_i={(book as any)?.openlibrary_cover_id || null}
+                          openlibrary_cover_id={(book as any)?.openlibrary_cover_id || null}
+                          googleCoverUrl={(book as any)?.google_books_id ? `https://books.google.com/books/content?id=${(book as any).google_books_id}&printsec=frontcover&img=1&zoom=1&source=gbs_api` : null}
+                          className="w-12 h-16 rounded-lg flex-shrink-0"
+                          bookId={book?.id}
+                        />
+                        <div className="flex-1 text-left">
+                          <h4 className="font-bold text-base">{displayTitle}</h4>
+                          <p className={`text-sm ${selectedBook?.book_id === ub.book_id ? 'text-black/70' : 'text-text-sub-light'}`}>
+                            {displayAuthor}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>
         </div>
+
+        {/* ✅ Footer FIXED (ne scroll plus avec la liste) */}
+        {footerVisible && (
+          <div
+            className="fixed left-0 right-0 z-[60]"
+            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 32px)' }}
+          >
+            <div className="max-w-xl mx-auto px-6">
+              <div className="bg-background-light/95 backdrop-blur border border-gray-200 rounded-2xl shadow-lg p-4 space-y-3">
+                {/* ✅ IA toujours visible quand un livre est sélectionné */}
+                {selectedBook?.book && (
+                  <button
+                    type="button"
+                    onClick={handleRecapClick}
+                    className="w-full py-3 px-4 rounded-xl bg-card-light border border-gray-200 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
+                  >
+                    IA {selectedBook.current_page === 0 ? '(début)' : `(jusqu'à p.${selectedBook.current_page})`}
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    if (!selectedBook) return;
+                    startSession();
+                  }}
+                  disabled={!selectedBook}
+                  className={[
+                    "w-full py-4 rounded-xl font-bold transition-colors",
+                    selectedBook
+                      ? "bg-text-main-light text-white hover:bg-text-main-light/90"
+                      : "bg-gray-200 text-gray-500 cursor-not-allowed",
+                  ].join(" ")}
+                >
+                  {selectedBook ? "Démarrer la session" : "Sélectionner un livre"}
+                </button>
+
+                {!selectedBook && (
+                  <p className="text-center text-xs text-text-sub-light">
+                    Sélectionne un livre pour afficher le rappel IA et ajouter une note
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {renderModalsAndToast()}
       </div>
     );
   }
 
+  // Footer height estimate for padding calculation
+  const ACTIVE_SESSION_FOOTER_H = 120; // ~ buttons + padding
+
   return (
     <div 
-      className="fixed inset-0 bg-background-light z-50 flex flex-col max-w-md mx-auto h-[100dvh] overflow-hidden"
-      style={{ paddingBottom: BOTTOM_INSET }}
+      className="fixed inset-0 bg-background-light z-[200] flex flex-col h-[100dvh] overflow-hidden"
     >
       {/* Sticky Header with safe-area top */}
       <AppHeader
@@ -1057,11 +1272,13 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
 
       {/* Scrollable content container */}
       <div 
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 pb-6 safe-bottom-content"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6"
         style={{
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'contain',
           overscrollBehaviorX: 'none',
+          // Pas de tabbar : on ne réserve que le footer + safe-area
+          paddingBottom: `calc(${ACTIVE_SESSION_FOOTER_H}px + env(safe-area-inset-bottom, 0px) + 16px)`,
         }}
       >
         <div className="flex flex-col items-center justify-center min-h-full py-6">
@@ -1104,14 +1321,14 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                 <button
                   type="button"
                   onClick={handleRecapClick}
-                  className="w-full py-2.5 px-4 rounded-xl bg-card-light border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
+                  className="w-full py-2.5 px-4 rounded-xl bg-card-light border border-gray-200 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
                 >
                   IA {selectedBook.current_page === 0 ? '(début)' : `(jusqu'à p.${selectedBook.current_page})`}
                 </button>
                 <button
                   type="button"
                   onClick={openAddNoteModal}
-                  className="w-full py-2 px-4 rounded-xl bg-card-light border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
+                  className="w-full py-2 px-4 rounded-xl bg-card-light border border-gray-200 transition-colors text-sm font-medium text-text-main-light flex items-center justify-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
                   Ajouter une note
@@ -1140,8 +1357,12 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
             </div>
           </div>
 
-          <div className="w-full">
-            <label className="flex items-center justify-between gap-4 bg-card-light border-2 border-gray-200 rounded-full p-2 pl-6 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary transition-all">
+          <div className="w-full space-y-2">
+            <label
+              className={`flex items-center justify-between gap-4 bg-card-light border-2 rounded-full p-2 pl-6 transition-all ${
+                pageError ? 'border-red-400 ring-1 ring-red-200' : 'border-gray-200 focus-within:border-primary focus-within:ring-1 focus-within:ring-primary'
+              }`}
+            >
               <span className="text-base font-bold whitespace-nowrap">Page actuelle</span>
               <div className="flex items-center gap-2 flex-1 justify-end">
                 <input
@@ -1164,31 +1385,47 @@ export function ActiveSession({ onFinish, onCancel }: ActiveSessionProps) {
                 )}
               </div>
             </label>
+            {pageError && (
+              <p className="text-sm text-red-600 font-medium text-right">{pageError}</p>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="p-6 pt-2 shrink-0 bg-background-light" style={{ paddingBottom: 'calc(16px + var(--sab))' }}>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={togglePause}
-            className="size-16 shrink-0 flex items-center justify-center rounded-full bg-card-light text-text-main-light hover:bg-gray-100 transition-colors"
-          >
-            {isRunning ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 ml-1" />}
-          </button>
+      {/* Footer fixé en bas */}
+      <div 
+        className="fixed left-0 right-0 bottom-0 z-[60] bg-background-light"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+      >
+        <div className="max-w-md mx-auto p-6 pt-2">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={togglePause}
+              className="size-14 shrink-0 flex items-center justify-center rounded-full bg-card-light text-text-main-light hover:bg-gray-100 transition-colors"
+            >
+              {isRunning ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7 ml-1" />}
+            </button>
 
-          <button
-            onClick={handleFinish}
-            disabled={saving}
-            className="h-16 flex-1 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all group relative overflow-hidden disabled:opacity-50"
-          >
-            <span className="relative z-10 text-black text-lg font-bold uppercase tracking-wide flex items-center gap-2">
-              {saving ? 'Enregistrement...' : 'Terminer la session'}
-            </span>
-          </button>
-        </div>
-        <div className="mt-6 flex justify-center">
-          <div className="h-1 w-32 bg-gray-200 rounded-full" />
+            <button
+              onClick={handleFinish}
+              disabled={saving || !pageValid}
+              className="h-16 flex-1 flex items-center justify-center rounded-full bg-primary hover:brightness-95 transition-all group relative overflow-hidden disabled:opacity-50"
+            >
+              <span
+                className="relative z-10 text-black text-lg font-bold uppercase tracking-wide flex items-center gap-2"
+                style={{ color: 'rgba(0, 0, 0, 1)' }}
+              >
+                {saving ? 'Enregistrement...' : 'Terminer la session'}
+              </span>
+            </button>
+
+            <button
+              onClick={handleDeleteFromFooter}
+              className="size-14 shrink-0 flex items-center justify-center rounded-full bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+            >
+              <Trash2 className="w-6 h-6" />
+            </button>
+          </div>
         </div>
       </div>
       {renderModalsAndToast()}

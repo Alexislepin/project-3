@@ -2,80 +2,202 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { Camera } from "lucide-react";
 import { BookQuickActions } from "./BookQuickActions";
 import { supabase } from "../lib/supabase";
-import { addCacheBuster } from "../lib/resolveImageUrl";
 import { Capacitor } from "@capacitor/core";
-import { resolveBookCover } from "../lib/bookCover";
+import { getPooledCoverUrl } from "../lib/pooledCovers";
+import { canonicalBookKey } from "../lib/bookSocial";
 
 /**
- * Échappe les caractères XML pour éviter les injections
+ * Helper: clean ISBN by removing non-digit characters
  */
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+const cleanIsbn = (v?: string | null): string | null => {
+  if (!v) return null;
+  const cleaned = v.replace(/[-\s]/g, '');
+  return cleaned.length >= 10 ? cleaned : null;
+};
+
+/**
+ * Helper: check if URL is empty or placeholder
+ */
+const isEmptyOrPlaceholder = (url?: string | null): boolean => {
+  if (!url) return true;
+  const u = url.toLowerCase();
+  if (u.includes('placeholder')) return true;
+  if (u.includes('image_not_available')) return true;
+  if (u.includes('/covers/placeholder-book')) return true;
+  return false;
+};
+
+/**
+ * Helper: check if URL is trusted (our storage, Google, OpenLibrary ID-based)
+ */
+const isTrustedCoverUrl = (url?: string | null): boolean => {
+  if (!url) return false;
+
+  // Our pooled storage (Supabase storage bucket "book-covers")
+  if (url.includes('/storage/v1/object/public/book-covers/')) return true;
+  if (url.includes('supabase.co/storage/v1/object/public/book-covers/')) return true;
+
+  // Google thumbnails
+  if (url.includes('books.google.com') || url.includes('googleusercontent.com')) return true;
+
+  // OpenLibrary ID-based is generally ok (better than /b/isbn)
+  if (url.includes('covers.openlibrary.org/b/id/')) return true;
+
+  return false;
+};
+
+/**
+ * Helper: resolve storage path to public URL
+ * Rejects local URIs and forces https on iOS
+ */
+const resolveStorageUrl = (input: string | null | undefined): string | null => {
+  if (!input || isEmptyOrPlaceholder(input)) return null;
+  
+  // Reject local URIs - these should never be stored in DB
+  if (input.startsWith('file://') || input.startsWith('capacitor://')) {
+    console.warn('[BookCover] Rejected local URI:', input);
+    return null;
+  }
+  
+  // If it's already an HTTP(S) URL, use it directly
+  if (input.startsWith('http://') || input.startsWith('https://')) {
+    // ⚠️ iOS: force https (http is blocked by App Transport Security)
+    if (Capacitor.getPlatform() === 'ios' && input.startsWith('http://')) {
+      return input.replace('http://', 'https://');
+    }
+    return input;
+  }
+  
+  // Otherwise, treat it as a storage path and resolve to public URL
+  const { data } = supabase.storage.from('book-covers').getPublicUrl(input);
+  return data?.publicUrl || null;
+};
+
+/**
+ * Helper: hash string to a hue value (0-360) for deterministic color generation
+ */
+function hashStringToHue(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash) % 360;
 }
 
 /**
- * Encode une string UTF-8 en base64 (gère les accents et caractères spéciaux)
+ * Helper: escape XML/HTML special characters
  */
-function toBase64Utf8(input: string): string {
-  return btoa(unescape(encodeURIComponent(input)));
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /**
- * Génère une cover SVG avec gradient et texte (titre/auteur)
+ * Helper: extract initials from title (e.g., "Harry Potter" -> "HP")
  */
-function generateCoverSVG(title: string, author: string): string {
-  // Couleurs de gradient (variations de bleu/violet)
-  const colors = [
-    ['#667eea', '#764ba2'],
-    ['#f093fb', '#f5576c'],
-    ['#4facfe', '#00f2fe'],
-    ['#43e97b', '#38f9d7'],
-    ['#fa709a', '#fee140'],
-  ];
+function getInitialsFromTitle(title: string): string {
+  if (!title) return '?';
+  const words = title.trim().split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) return '?';
+  if (words.length === 1) {
+    return words[0].substring(0, 2).toUpperCase();
+  }
+  return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
+}
+
+/**
+ * Generate a fallback cover as SVG data-uri
+ * Always returns a valid data-uri that will never fail to load
+ */
+function generateFallbackCoverDataUri(title: string, author?: string): string {
+  const safeTitle = title || 'Sans titre';
+  const safeAuthor = author || '';
+  const initials = getInitialsFromTitle(safeTitle);
   
-  // Sélectionner une couleur basée sur le hash du titre
-  const hash = title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const [color1, color2] = colors[hash % colors.length];
+  // Generate deterministic colors from title hash
+  const hue = hashStringToHue(safeTitle);
+  const primaryHue = hue;
+  const secondaryHue = (hue + 60) % 360; // Complementary color
   
-  // Tronquer le titre si trop long
-  const displayTitle = title.length > 30 ? title.substring(0, 27) + '...' : title;
-  const displayAuthor = author.length > 25 ? author.substring(0, 22) + '...' : author;
+  // Convert HSL to RGB for gradient stops
+  const hslToRgb = (h: number, s: number, l: number): string => {
+    h = h / 360;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h * 6) % 2 - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    
+    if (h < 1/6) { r = c; g = x; }
+    else if (h < 2/6) { r = x; g = c; }
+    else if (h < 3/6) { g = c; b = x; }
+    else if (h < 4/6) { g = x; b = c; }
+    else if (h < 5/6) { r = x; b = c; }
+    else { r = c; b = x; }
+    
+    r = Math.round((r + m) * 255);
+    g = Math.round((g + m) * 255);
+    b = Math.round((b + m) * 255);
+    return `rgb(${r},${g},${b})`;
+  };
   
-  // Échapper le XML pour éviter les injections
-  const safeTitle = escapeXml(displayTitle);
-  const safeAuthor = escapeXml(displayAuthor);
+  const color1 = hslToRgb(primaryHue, 0.6, 0.5);
+  const color2 = hslToRgb(secondaryHue, 0.5, 0.6);
+  const color3 = hslToRgb((primaryHue + 120) % 360, 0.4, 0.55);
+  
+  // Truncate title to fit (max 3 lines, ~40 chars per line)
+  const maxTitleLength = 120;
+  const displayTitle = safeTitle.length > maxTitleLength 
+    ? safeTitle.substring(0, maxTitleLength) + '...'
+    : safeTitle;
+  
+  // Split title into lines (roughly 40 chars per line)
+  const words = displayTitle.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+  for (const word of words) {
+    if ((currentLine + ' ' + word).length > 40 && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = currentLine ? currentLine + ' ' + word : word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  const titleLines = lines.slice(0, 3); // Max 3 lines
   
   const svg = `
-    <svg width="200" height="300" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
-          <stop offset="100%" style="stop-color:${color2};stop-opacity:1" />
-        </linearGradient>
-      </defs>
-      <rect width="200" height="300" fill="url(#grad)"/>
-      <text x="100" y="120" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">
-        ${safeTitle.split(' ').slice(0, 3).join(' ')}
-      </text>
-      ${safeTitle.split(' ').length > 3 ? `
-      <text x="100" y="145" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle">
-        ${safeTitle.split(' ').slice(3).join(' ')}
-      </text>
-      ` : ''}
-      <text x="100" y="200" font-family="system-ui, -apple-system, sans-serif" font-size="12" fill="rgba(255,255,255,0.9)" text-anchor="middle" dominant-baseline="middle">
-        ${safeAuthor}
-      </text>
-    </svg>
-  `.trim();
+<svg width="400" height="600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
+      <stop offset="50%" style="stop-color:${color2};stop-opacity:1" />
+      <stop offset="100%" style="stop-color:${color3};stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+  <rect width="400" height="600" fill="url(#bg)"/>
+  <g transform="translate(200, 200)">
+    <circle cx="0" cy="0" r="50" fill="rgba(255,255,255,0.15)" filter="url(#shadow)"/>
+    <text x="0" y="10" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="bold" fill="rgba(255,255,255,0.9)" text-anchor="middle" dominant-baseline="middle">${escapeXml(initials)}</text>
+  </g>
+  <g transform="translate(200, 450)">
+    ${titleLines.map((line, idx) => `
+    <text x="0" y="${idx * 28}" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="600" fill="rgba(255,255,255,0.95)" text-anchor="middle" dominant-baseline="middle">${escapeXml(line)}</text>
+    `).join('')}
+    ${safeAuthor ? `
+    <text x="0" y="${titleLines.length * 28 + 8}" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="400" fill="rgba(255,255,255,0.75)" text-anchor="middle" dominant-baseline="middle">${escapeXml(safeAuthor)}</text>
+    ` : ''}
+  </g>
+</svg>`.trim();
   
-  return `data:image/svg+xml;base64,${toBase64Utf8(svg)}`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
-
 
 type BookCoverProps = {
   title: string;
@@ -83,28 +205,28 @@ type BookCoverProps = {
   coverUrl?: string | null; // Initial cover URL (can be from any source)
   custom_cover_url?: string | null; // User-specific custom cover (highest priority)
   customCoverUrl?: string | null; // Alias for custom_cover_url (for compatibility)
-  cacheKey?: string; // Cache-busting key (e.g., updated_at timestamp)
+  cacheKey?: string; // Cache-busting key (e.g., updated_at timestamp) - when this changes, reset state
   isbn?: string | null;
   isbn13?: string | null;
   isbn10?: string | null;
   cover_i?: number | null; // OpenLibrary cover ID (most reliable)
   openlibrary_cover_id?: number | null; // Alias for cover_i
   googleCoverUrl?: string | null; // Google Books thumbnail/smallThumbnail
+  bookKey?: string | null; // Explicit book_key (e.g., 'isbn:9781234567890' or 'uuid:...')
+  book?: any; // Full book object for quick actions (used to derive book_key if not provided)
   className?: string;
   likes?: number;
   comments?: number;
-  book?: any; // Full book object for quick actions
   isLiked?: boolean; // Whether current user has liked this book
   onCountsChange?: (nextLikes: number, nextComments: number, nextLiked: boolean) => void;
   onOpenComments?: () => void;
   onShowToast?: (message: string, type?: 'success' | 'info' | 'error') => void;
   showQuickActions?: boolean; // Whether to show quick actions buttons
-  onCoverLoaded?: (url: string, source: string) => void; // Callback when a valid cover is loaded
+  onCoverLoaded?: (url: string, source: string) => void; // Callback when a valid cover is loaded (DEPRECATED: no DB writeback)
   onAddCover?: () => void; // Callback when user wants to add a custom cover
   bookId?: string; // Book ID for custom cover upload
   showAddCoverButton?: boolean; // Whether to show "Add cover" button when placeholder
 };
-
 
 export function BookCover({
   title,
@@ -128,155 +250,284 @@ export function BookCover({
   isbn10,
   cover_i,
   googleCoverUrl,
+  bookKey: explicitBookKey,
   onCoverLoaded,
   onAddCover,
   bookId,
   showAddCoverButton = false,
 }: BookCoverProps) {
-  // Get custom cover URL (support both prop names)
-  const customCover = custom_cover_url ?? customCoverUrl ?? null;
-  
-  /**
-   * Resolve cover URL: converts storage path to public URL if needed
-   * Rejects local URIs (file://, capacitor://) and returns null
-   * Forces https on iOS (http is blocked)
-   */
-  const resolveStorageUrl = (input: string | null): string | null => {
-    if (!input) return null;
-    
-    // Reject local URIs - these should never be stored in DB
-    if (input.startsWith('file://') || input.startsWith('capacitor://')) {
-      console.warn('[BookCover] Rejected local URI:', input);
-      return null;
+  // Get custom cover URL (support both prop names AND book.custom_cover_url)
+  const customCoverProp = custom_cover_url ?? customCoverUrl ?? null;
+  const customCoverFromBook = book?.custom_cover_url ?? null;
+
+  // Derive book_key for OpenLibrary ISBN fallback
+  const derivedBookKey = useMemo(() => {
+    if (explicitBookKey && explicitBookKey.trim() && explicitBookKey !== 'unknown') {
+      return explicitBookKey.trim();
     }
-    
-    // If it's already an HTTP(S) URL, use it directly
-    if (input.startsWith('http://') || input.startsWith('https://')) {
-      // ⚠️ iOS: force https (http is blocked by App Transport Security)
-      if (Capacitor.getPlatform() === 'ios' && input.startsWith('http://')) {
-        return input.replace('http://', 'https://');
+    if (book) {
+      const key = canonicalBookKey(book);
+      if (key && key !== 'unknown') {
+        return key;
       }
-      return input;
     }
-    
-    // Otherwise, treat it as a storage path and resolve to public URL
-    const { data } = supabase.storage.from('book-covers').getPublicUrl(input);
-    return data?.publicUrl || null;
-  };
-  
-  // Resolve custom cover (path -> URL if needed)
-  const resolvedCustomCover = resolveStorageUrl(customCover);
-  const resolvedCoverUrl = resolveStorageUrl(coverUrl);
-  
-  // Try to resolve cover with fallbacks (OpenLibrary, Google Books, etc.)
-  const resolvedCover = useMemo(() => {
-    // Priority 1: Custom cover (user-specific)
-    if (resolvedCustomCover) {
-      return resolvedCustomCover;
+    const isbnValue = cleanIsbn(isbn13) || cleanIsbn(isbn10) || cleanIsbn(isbn);
+    if (isbnValue) {
+      return `isbn:${isbnValue}`;
     }
-    
-    // Priority 2: cover_url from database
-    if (resolvedCoverUrl) {
-      return resolvedCoverUrl;
+    if (book?.id && typeof book.id === 'string' && book.id.length > 10) {
+      return `uuid:${book.id}`;
     }
-    
-    // Priority 3: OpenLibrary cover_i (most reliable)
+    return null;
+  }, [explicitBookKey, book, isbn13, isbn10, isbn]);
+
+  // Build ordered candidate list (EXACT priority as specified)
+  // PRIORITY:
+  // 1. custom_cover_url (if present)
+  // 2. OpenLibrary cover via openlibrary_cover_id (highest priority)
+  // 3. If bookKey is isbn:XXXXXXXXX, fallback OpenLibrary ISBN cover
+  // 4. coverUrl (explicit prop, e.g. books.cover_url from Supabase)
+  // 5. googleCoverUrl (ONLY if coverUrl is null/empty/placeholder AND no openlibrary_cover_id)
+  // 6. Placeholder
+  const candidates = useMemo(() => {
+    const list: string[] = [];
+
+    // 1) custom_cover_url (prop explicite ou from book)
+    const customCover = customCoverProp ?? customCoverFromBook ?? null;
+    if (customCover && !isEmptyOrPlaceholder(customCover)) {
+      const resolved = resolveStorageUrl(customCover);
+      if (resolved) list.push(resolved);
+    }
+
+    // 2) OpenLibrary cover via openlibrary_cover_id (highest priority after custom)
     const olCoverId = openlibrary_cover_id ?? cover_i;
     if (olCoverId && typeof olCoverId === 'number' && olCoverId > 0) {
-      return `https://covers.openlibrary.org/b/id/${olCoverId}-L.jpg?default=false`;
+      const olIdUrl = `https://covers.openlibrary.org/b/id/${olCoverId}-L.jpg?default=false`;
+      list.push(olIdUrl);
     }
-    
-    // Priority 4: Google Books cover URL
-    if (googleCoverUrl) {
-      return googleCoverUrl;
-    }
-    
-    // Priority 5: OpenLibrary via ISBN (ISBN13 preferred, then ISBN10)
-    const cleanIsbn = isbn13 || isbn10 || isbn;
-    if (cleanIsbn) {
-      const cleaned = cleanIsbn.replace(/[-\s]/g, '');
-      if (cleaned.length >= 10) {
-        return `https://covers.openlibrary.org/b/isbn/${cleaned}-L.jpg?default=false`;
+
+    // 3) If bookKey is isbn:XXXXXXXXX, fallback OpenLibrary ISBN cover
+    if (derivedBookKey && derivedBookKey.startsWith('isbn:')) {
+      const isbnFromKey = derivedBookKey.replace('isbn:', '');
+      const olIsbnUrl = `https://covers.openlibrary.org/b/isbn/${isbnFromKey}-L.jpg?default=false`;
+      if (!list.includes(olIsbnUrl)) {
+        list.push(olIsbnUrl);
+      }
+    } else {
+      // Fallback: try to build from ISBN props if bookKey is not isbn:
+      const isbnValue = cleanIsbn(isbn13) || cleanIsbn(isbn10) || cleanIsbn(isbn);
+      if (isbnValue) {
+        const olIsbnUrl = `https://covers.openlibrary.org/b/isbn/${isbnValue}-L.jpg?default=false`;
+        if (!list.includes(olIsbnUrl)) {
+          list.push(olIsbnUrl);
+        }
       }
     }
+
+    // 4) coverUrl (explicit prop, e.g. books.cover_url from Supabase)
+    // Check if coverUrl is already an OpenLibrary cover or valid image
+    const hasValidCoverUrl = coverUrl && !isEmptyOrPlaceholder(coverUrl);
+    const isCoverUrlOpenLibrary = hasValidCoverUrl && (
+      coverUrl.includes('covers.openlibrary.org') || 
+      isTrustedCoverUrl(coverUrl)
+    );
     
-    // Fallback: placeholder
-    return '/covers/placeholder-book.png';
-  }, [resolvedCustomCover, resolvedCoverUrl, openlibrary_cover_id, cover_i, googleCoverUrl, isbn13, isbn10, isbn]);
-  
-  // Add cache-buster ONLY when cacheKey is provided (and stable)
-  const finalCoverUrl = useMemo(() => {
-    if (!resolvedCover) return undefined;
-    if (!cacheKey) return resolvedCover; // ✅ no buster => stable
-    return addCacheBuster(resolvedCover, cacheKey);
-  }, [resolvedCover, cacheKey]);
-
-  // ✅ Always validate src
-  const safeCoverUrl = useMemo(() => {
-    if (!finalCoverUrl) return undefined;
-
-    if (
-      finalCoverUrl.startsWith("http://") ||
-      finalCoverUrl.startsWith("https://") ||
-      finalCoverUrl.startsWith("data:") ||
-      finalCoverUrl.startsWith("/")
-    ) {
-      return finalCoverUrl;
+    if (hasValidCoverUrl && !isCoverUrlOpenLibrary) {
+      // Only add if it's not already an OpenLibrary cover (to avoid duplicates)
+      const resolved = resolveStorageUrl(coverUrl);
+      if (resolved && !list.includes(resolved)) {
+        list.push(resolved);
+      }
+    } else if (isCoverUrlOpenLibrary) {
+      // coverUrl is already OpenLibrary or trusted - use it (may already be in list from step 2)
+      const resolved = resolveStorageUrl(coverUrl);
+      if (resolved && !list.includes(resolved)) {
+        list.push(resolved);
+      }
     }
 
-    console.warn("[BookCover] Rejected invalid cover URL:", finalCoverUrl);
-    return undefined;
-  }, [finalCoverUrl]);
+    // 5) googleCoverUrl (ONLY if coverUrl is null/empty/placeholder AND no openlibrary_cover_id)
+    // ⚠️ Important: if coverUrl is already an OpenLibrary cover OR valid image (non-placeholder),
+    // then googleCoverUrl must never "take over"
+    if (!hasValidCoverUrl && !olCoverId && googleCoverUrl && !isEmptyOrPlaceholder(googleCoverUrl)) {
+      if (!list.includes(googleCoverUrl)) {
+        list.push(googleCoverUrl);
+      }
+    }
 
-  // Real displayed src (can fallback to placeholder on error)
-  const [imgSrc, setImgSrc] = useState<string | undefined>(safeCoverUrl);
-  const imgErrorRef = useRef(false);
+    // 6) Fallback SVG data-uri (always last, never fails)
+    const fallbackDataUri = generateFallbackCoverDataUri(title, author);
+    list.push(fallbackDataUri);
 
+    // De-duplicate while preserving order
+    return Array.from(new Set(list));
+  }, [customCoverProp, customCoverFromBook, openlibrary_cover_id, cover_i, derivedBookKey, isbn13, isbn10, isbn, coverUrl, googleCoverUrl, title, author]);
+
+  // Track current candidate index and failed URLs for this instance
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const failedUrlsRef = useRef<Set<string>>(new Set());
+
+  // Compute a stable "identity key" that changes when props that should trigger a reset change
+  const identityKey = useMemo(() => {
+    return [
+      bookId || '',
+      cacheKey || '',
+      customCoverProp || '',
+      customCoverFromBook || '',
+      coverUrl || '',
+      googleCoverUrl || '',
+      openlibrary_cover_id?.toString() || cover_i?.toString() || '',
+      isbn13 || isbn10 || isbn || '',
+    ].join('|');
+  }, [bookId, cacheKey, customCoverProp, customCoverFromBook, coverUrl, googleCoverUrl, openlibrary_cover_id, cover_i, isbn13, isbn10, isbn]);
+
+  // Reset state when identity key changes (new book, cover changed, etc.)
+  const prevIdentityKeyRef = useRef<string>('');
   useEffect(() => {
-    // ✅ avoid useless setState if same
-    setImgSrc((prev) => (prev === safeCoverUrl ? prev : safeCoverUrl));
-    imgErrorRef.current = false;
-  }, [safeCoverUrl]);
+    if (prevIdentityKeyRef.current !== identityKey) {
+      const previousKey = prevIdentityKeyRef.current;
+      // Reset to first candidate
+      setCurrentIdx(0);
+      // Clear failed URLs cache (new identity = fresh start)
+      failedUrlsRef.current = new Set();
+      prevIdentityKeyRef.current = identityKey;
+      
+      if (import.meta.env.DEV) {
+        console.debug('[BookCover] Reset state due to identity change', {
+          title,
+          previousKey,
+          newKey: identityKey,
+          candidatesCount: candidates.length,
+          candidates: candidates.slice(0, -1), // Exclude placeholder
+        });
+      }
+    }
+  }, [identityKey, title, candidates.length]);
 
-  const PLACEHOLDER = "/covers/placeholder-book.png";
+  // Find first valid candidate (skip failed URLs)
+  const effectiveIdx = useMemo(() => {
+    // Find first candidate that hasn't failed, starting from currentIdx
+    for (let i = currentIdx; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      if (!failedUrlsRef.current.has(candidate)) {
+        return i;
+      }
+    }
+    // All candidates failed, return last index (placeholder)
+    return candidates.length - 1;
+  }, [candidates, currentIdx]);
 
+  // Sync currentIdx with effectiveIdx if they differ (skip failed URLs automatically)
+  useEffect(() => {
+    if (effectiveIdx !== currentIdx && effectiveIdx < candidates.length) {
+      setCurrentIdx(effectiveIdx);
+    }
+  }, [effectiveIdx, currentIdx, candidates.length]);
+
+  // Current src to display (always valid - last candidate is SVG data-uri)
+  const currentSrc = candidates[effectiveIdx] || candidates[candidates.length - 1] || generateFallbackCoverDataUri(title, author);
+
+  // Track pooled cover URL (async, for future use - not in priority list yet)
+  const [pooledUrl, setPooledUrl] = useState<string | null>(null);
+  const lastPooledKeyRef = useRef<string | null>(null);
+  const hasCustom = !!customCoverProp || !!customCoverFromBook;
+
+  // Load pooled cover (for future use - not in priority list per requirements)
+  useEffect(() => {
+    let cancelled = false;
+    if (!derivedBookKey || hasCustom) {
+      setPooledUrl(null);
+      lastPooledKeyRef.current = null;
+      return;
+    }
+    if (lastPooledKeyRef.current === derivedBookKey && pooledUrl !== undefined) {
+      return;
+    }
+    lastPooledKeyRef.current = derivedBookKey;
+    (async () => {
+      const url = await getPooledCoverUrl(derivedBookKey);
+      if (cancelled) return;
+      setPooledUrl(url || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [derivedBookKey, hasCustom]);
+
+  // DEV-only debug log (once per render when src changes)
+  const prevSrcRef = useRef<string>('');
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (prevSrcRef.current !== currentSrc) {
+      console.debug('[BookCover] Cover resolved', {
+        title,
+        bookId,
+        identityKey,
+        candidatesCount: candidates.length,
+        candidates: candidates.slice(0, -1), // Exclude placeholder
+        currentIdx,
+        failedUrls: Array.from(failedUrlsRef.current),
+        finalSrc: currentSrc,
+        source: candidates.indexOf(currentSrc) >= 0 ? `candidate[${candidates.indexOf(currentSrc)}]` : 'placeholder',
+      });
+      prevSrcRef.current = currentSrc;
+    }
+  }, [title, bookId, identityKey, candidates.length, currentIdx, currentSrc]);
+
+  // Handle image error: mark URL as failed and advance to next candidate
+  // Note: SVG data-uri (last candidate) should never fail, but we handle it gracefully
   const handleImageError = () => {
-    if (imgErrorRef.current) return;
-    imgErrorRef.current = true;
-    setImgSrc(PLACEHOLDER);
+    const failedUrl = currentSrc;
+    const isFallbackSvg = failedUrl && failedUrl.startsWith('data:image/svg+xml');
+    
+    // Don't mark SVG data-uri as failed (it should always load)
+    if (failedUrl && !isFallbackSvg) {
+      failedUrlsRef.current.add(failedUrl);
+      
+      if (import.meta.env.DEV) {
+        console.debug('[BookCover] Image failed, advancing to next candidate', {
+          title,
+          failedUrl,
+          currentIdx,
+          nextIdx: currentIdx + 1,
+          remainingCandidates: candidates.length - currentIdx - 1,
+        });
+      }
+
+      // Advance to next candidate (SVG data-uri is last, so this will eventually reach it)
+      if (currentIdx < candidates.length - 1) {
+        setCurrentIdx((prev) => prev + 1);
+      }
+    } else if (isFallbackSvg && import.meta.env.DEV) {
+      console.warn('[BookCover] SVG fallback failed (unexpected)', { title, failedUrl });
+    }
   };
 
-  const isPlaceholder = !imgSrc || imgSrc === PLACEHOLDER;
+  // Check if current src is the fallback SVG
+  const isFallback = currentSrc && currentSrc.startsWith('data:image/svg+xml');
 
   return (
     <div className={`relative overflow-hidden ${className}`}>
-      {imgSrc && imgSrc !== PLACEHOLDER ? (
-        <img
-          src={imgSrc}
-          alt={`${title}${author ? ` - ${author}` : ""}`}
-          className="w-full h-full object-cover"
-          loading="lazy"
-          decoding="async"
-          onError={handleImageError}
-        />
-      ) : (
-        // Neutral placeholder with title text (never render broken <img>)
-        <div className="w-full h-full bg-gray-200 flex flex-col items-center justify-center p-4">
-          <div className="text-center">
-            <p className="text-sm font-semibold text-gray-600 line-clamp-3 mb-1">
-              {title || 'Sans titre'}
-            </p>
-            {author && (
-              <p className="text-xs text-gray-500 line-clamp-1">
-                {author}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Always render <img> - even for fallback SVG (guarantees an image is always displayed) */}
+      <img
+        key={`${identityKey}-${currentIdx}`} // Force re-mount on identity/idx change to clear browser cache
+        src={currentSrc}
+        alt={`${title}${author ? ` - ${author}` : ""}`}
+        className="w-full h-full object-cover"
+        loading="lazy"
+        decoding="async"
+        onError={handleImageError}
+        onLoad={() => {
+          // Optional: notify parent that a cover loaded (for analytics, but NO DB writeback)
+          // Don't notify for fallback SVG (it's not a "real" cover)
+          if (onCoverLoaded && !isFallback) {
+            onCoverLoaded(currentSrc, 'resolved');
+          }
+        }}
+      />
 
-      {/* Add Cover Button (shown when placeholder and button enabled) */}
-      {isPlaceholder && showAddCoverButton && onAddCover && bookId && (
+      {/* Add Cover Button (shown when fallback SVG and button enabled) */}
+      {isFallback && showAddCoverButton && onAddCover && bookId && (
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -307,4 +558,3 @@ export function BookCover({
     </div>
   );
 }
-

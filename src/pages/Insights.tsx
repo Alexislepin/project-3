@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Target, Calendar, Flame, Plus, X, BookOpen, Clock, Trophy } from 'lucide-react';
+import { Target, Calendar, Flame, Plus, X, BookOpen, Clock, Trophy, ChevronLeft, ChevronRight } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { TABBAR_HEIGHT } from '../lib/layoutConstants';
 
@@ -70,6 +71,14 @@ export function Insights() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   const [calendarData, setCalendarData] = useState<{ [key: string]: boolean }>({});
+
+  const getTodayMonthStart = () => {
+    const d = startOfLocalDay();
+    d.setDate(1);
+    return d;
+  };
+
+  const [calendarMonth, setCalendarMonth] = useState(() => getTodayMonthStart());
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [newGoalType, setNewGoalType] = useState<string>('daily_15min');
   const [newGoalValue, setNewGoalValue] = useState<string>('15');
@@ -102,6 +111,7 @@ export function Insights() {
   const [activityFocus, setActivityFocus] = useState<ActivityFocus | null>(null);
   
   const { user, profile: contextProfile, refreshProfile } = useAuth();
+  const navigate = useNavigate();
 
   const openLeaderboard = () => setShowLeaderboard(true);
   const closeLeaderboard = () => setShowLeaderboard(false);
@@ -195,9 +205,7 @@ export function Insights() {
       // Calculate date boundaries in local timezone
       const today = startOfLocalDay();
       const weekStart = startOfLocalWeek();
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
+      const monthStart = new Date(calendarMonth);
       
       // Use the new helper function for last 7 days range (ISO)
       const { start: last7dStartISO, end: last7dEndISO } = last7DaysRangeISO();
@@ -232,7 +240,8 @@ export function Insights() {
           .from('activities')
           .select('created_at, photos')
           .eq('user_id', user.id)
-          .gte('created_at', monthStart.toISOString()),
+          .gte('created_at', monthStart.toISOString())
+          .lt('created_at', new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1).toISOString()),
         supabase
           .from('activities')
           .select('pages_read, duration_minutes, reading_speed_pph, reading_pace_min_per_page, created_at, photos')
@@ -444,15 +453,14 @@ export function Insights() {
         setProfile(profileData);
       }
 
-      // Build calendar data from month activities
-    const activityMap: { [key: string]: boolean } = {};
+      // Build calendar data from month activities (current cursor month)
+      const activityMap: { [key: string]: boolean } = {};
       allMonthActivities.forEach((activity) => {
         const activityDate = new Date(activity.created_at);
         const dateKey = toLocalDateKey(activityDate);
-      activityMap[dateKey] = true;
-    });
-
-    setCalendarData(activityMap);
+        activityMap[dateKey] = true;
+      });
+      setCalendarData(activityMap);
     } catch (error) {
       console.error('[loadInsightsData] Unexpected error:', error);
     } finally {
@@ -554,9 +562,8 @@ export function Insights() {
   };
 
   const generateCalendarDays = () => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     
@@ -580,8 +587,7 @@ export function Insights() {
 
   const isActivityDay = (day: number | null) => {
     if (!day) return false;
-    const now = new Date();
-    const date = new Date(now.getFullYear(), now.getMonth(), day);
+    const date = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
     const dateKey = toLocalDateKey(date);
     return calendarData[dateKey] || false;
   };
@@ -593,21 +599,82 @@ export function Insights() {
 
   const isToday = (day: number | null) => {
     if (!day) return false;
-    const now = new Date();
-    const date = new Date(now.getFullYear(), now.getMonth(), day);
+    const date = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
     const dateKey = toLocalDateKey(date);
     return isTodayKey(dateKey);
   };
 
   const isFutureDay = (day: number | null) => {
     if (!day) return false;
-    const now = new Date();
-    const checkDate = new Date(now.getFullYear(), now.getMonth(), day);
+    const checkDate = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
     // compare à la journée (pas à l'heure)
-    return startOfLocalDay(checkDate) > startOfLocalDay(now);
+    return startOfLocalDay(checkDate) > startOfLocalDay(new Date());
   };
 
-  const monthName = new Date().toLocaleString('default', { month: 'long' });
+  const handleDayClick = (day: number | null) => {
+    if (!day) return;
+    const date = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
+    const dateKey = toLocalDateKey(date);
+    if (!isActivityDay(day) || isFutureDay(day)) return;
+    navigate(`/insights/day/${dateKey}`);
+  };
+
+  const loadCalendarForMonth = async (monthCursor: Date) => {
+    if (!user) return;
+    const start = new Date(monthCursor);
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+
+    const { data, error } = await supabase
+      .from('activities')
+      .select('created_at')
+      .eq('user_id', user.id)
+      .gte('created_at', start.toISOString())
+      .lt('created_at', end.toISOString());
+
+    if (error) {
+      console.error('[loadCalendarForMonth] error', error);
+      return;
+    }
+
+    const activityMap: { [key: string]: boolean } = {};
+    data?.forEach((activity) => {
+      const activityDate = new Date(activity.created_at);
+      const dateKey = toLocalDateKey(activityDate);
+      activityMap[dateKey] = true;
+    });
+    setCalendarData(activityMap);
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    loadCalendarForMonth(calendarMonth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, calendarMonth]);
+
+  const monthLabel = calendarMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+
+  const goToPrevMonth = () => {
+    setCalendarMonth((prev) => {
+      const next = new Date(prev);
+      next.setMonth(prev.getMonth() - 1);
+      return next;
+    });
+  };
+
+  const goToNextMonth = () => {
+    setCalendarMonth((prev) => {
+      const next = new Date(prev);
+      next.setMonth(prev.getMonth() + 1);
+      return next;
+    });
+  };
+
+  const goToToday = () => {
+    setCalendarMonth(getTodayMonthStart());
+  };
 
   if (loading) {
     return (
@@ -659,9 +726,9 @@ export function Insights() {
                 {/* Leaderboard Button */}
                 <button
                   onClick={openLeaderboard}
-                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors font-medium"
+                  className="leaderboard-btn mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-[rgba(231,255,11,1)] text-black rounded-xl hover:bg-[rgba(231,255,11,0.9)] transition-colors font-medium"
                 >
-                  <Trophy className="w-4 h-4" />
+                  <Trophy className="w-4 h-4 text-black" />
                   Classement
                 </button>
               </div>
@@ -1038,7 +1105,27 @@ export function Insights() {
         <div className="flex flex-col gap-4 mb-8">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-[22px] font-bold tracking-tight text-text-main-light">Régularité</h2>
-            <span className="text-sm font-medium text-text-sub-light">{monthName}</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={goToPrevMonth}
+                className="p-2 rounded-full hover:bg-black/10 transition-colors text-text-sub-light"
+                aria-label="Mois précédent"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-sm font-medium text-text-sub-light capitalize">
+                {monthLabel}
+              </span>
+              <button
+                type="button"
+                onClick={goToNextMonth}
+                className="p-2 rounded-full hover:bg-black/10 transition-colors text-text-sub-light"
+                aria-label="Mois suivant"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <div className="rounded-2xl bg-card-light border border-gray-200 p-5 shadow-sm">
             <div className="mb-4 grid grid-cols-7 gap-1 text-center text-xs font-semibold text-text-sub-light">
@@ -1059,40 +1146,43 @@ export function Insights() {
                 const isActive = isActivityDay(day);
                 const today = isToday(day);
                 const future = isFutureDay(day);
+                const now = new Date();
+                const dateForDay = new Date(now.getFullYear(), now.getMonth(), day);
+                const dateKey = toLocalDateKey(dateForDay);
+                const cellClasses = `flex w-8 h-8 items-center justify-center rounded-full text-xs font-bold transition-all ${
+                  isActive
+                    ? today
+                      ? 'bg-primary text-black shadow-sm ring-2 ring-background-light ring-offset-2 ring-offset-primary'
+                      : 'bg-primary text-black shadow-sm'
+                    : today
+                    ? 'bg-gray-100 text-text-sub-light ring-2 ring-gray-300'
+                    : future
+                    ? 'bg-gray-100 text-text-sub-light opacity-40'
+                    : 'bg-gray-100 text-text-sub-light'
+                }`;
+
+                if (isActive && !future) {
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => handleDayClick(day)}
+                      className={`${cellClasses} hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary`}
+                      aria-label={`Voir les activités du ${dateForDay.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}`}
+                    >
+                      {day}
+                    </button>
+                  );
+                }
 
                 return (
-                  <div
-                    key={day}
-                    className={`flex w-8 h-8 items-center justify-center rounded-full text-xs font-bold transition-all ${
-                      isActive
-                        ? today
-                          ? 'bg-primary text-black shadow-sm ring-2 ring-background-light ring-offset-2 ring-offset-primary'
-                          : 'bg-primary text-black shadow-sm'
-                        : today
-                        ? 'bg-gray-100 text-text-sub-light ring-2 ring-gray-300'
-                        : future
-                        ? 'bg-gray-100 text-text-sub-light opacity-40'
-                        : 'bg-gray-100 text-text-sub-light'
-                    }`}
-                  >
+                  <div key={day} className={cellClasses} aria-label={dateKey}>
                     {day}
                   </div>
                 );
               })}
             </div>
           </div>
-        </div>
-
-        <div className="bg-card-light rounded-2xl p-6 text-center shadow-sm border border-gray-200 relative overflow-hidden mb-8">
-          <div className="absolute left-4 top-4 text-4xl text-gray-100">
-            <span className="transform scale-x-[-1] inline-block">&ldquo;</span>
-          </div>
-          <p className="relative z-10 text-lg font-medium italic leading-relaxed text-text-main-light">
-            La discipline est le pont entre les objectifs et la réussite.
-          </p>
-          <p className="mt-3 text-xs font-bold uppercase tracking-widest text-text-sub-light">
-            — Jim Rohn
-          </p>
         </div>
 
         <div className="bg-card-light rounded-xl border border-gray-200 p-6 mb-6 shadow-sm">

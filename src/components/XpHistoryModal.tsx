@@ -11,6 +11,7 @@ import { X, Trophy } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { formatXp } from '../lib/leveling';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface XpEvent {
   id: string;
@@ -51,6 +52,7 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
   const { user, refreshProfile } = useAuth();
   const [items, setItems] = useState<XpItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const { resolved } = useTheme();
 
   const targetUserId = userId ?? user?.id;
 
@@ -149,14 +151,31 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
       }
 
       // Normalize xp_history items
-      const historyItems: XpItem[] = (historyData || []).map((item: XpHistoryItem) => ({
-        id: item.id,
-        created_at: item.created_at,
-        amount: item.amount,
-        title: item.source === 'reading' ? 'Session de lecture' : (item.description || item.source),
-        subtitle: item.description && item.source !== 'reading' ? item.description : null,
-        kind: item.source,
-      }));
+      const formatShortDate = (d: string) => {
+        const date = new Date(d);
+        return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+      };
+
+      const historyItems: XpItem[] = (historyData || []).map((item: XpHistoryItem) => {
+        const hasDescription = !!item.description && item.description.trim().length > 0;
+        const isReading = item.source === 'reading';
+        const shortDate = formatShortDate(item.created_at);
+        const xpLabel = `+${item.amount} XP`;
+
+        return {
+          id: item.id,
+          created_at: item.created_at,
+          amount: item.amount,
+          // Pour les sessions de lecture : montrer l’info de session si dispo, sinon date + XP
+          title: isReading
+            ? (hasDescription ? item.description!.trim() : `Session de lecture · ${shortDate}`)
+            : (item.description || item.source),
+          subtitle: isReading
+            ? xpLabel
+            : (hasDescription ? `${xpLabel} · ${shortDate}` : `${xpLabel} · ${shortDate}`),
+          kind: item.source,
+        };
+      });
 
       // Normalize xp_events items
       const eventItems: XpItem[] = (eventsData || []).map((event: XpEvent) => ({
@@ -308,7 +327,11 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
               {items.map((item) => (
                 <div
                   key={item.id}
-                  className="flex items-start gap-3 p-4 bg-stone-50 rounded-xl border border-stone-200"
+                  className={
+                    resolved === 'dark'
+                      ? 'flex items-start gap-3 p-4 bg-[rgba(22,22,24,1)] rounded-xl border border-[rgba(231,255,11,0.1)]'
+                      : 'flex items-start gap-3 p-4 bg-stone-50 rounded-xl border border-stone-200'
+                  }
                 >
                   {/* Icon */}
                   <div className="flex-shrink-0 mt-0.5">
@@ -325,7 +348,13 @@ export function XpHistoryModal({ open, onClose, userId, displayName, onAfterSync
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <div className="flex-1">
-                        <p className="text-sm font-semibold text-stone-900">
+                        <p
+                          className={
+                            resolved === 'dark'
+                              ? 'text-sm font-semibold text-[var(--tw-ring-offset-color)]'
+                              : 'text-sm font-semibold text-stone-900'
+                          }
+                        >
                           {displayName && targetUserId !== user?.id
                             ? personalizeMessage(item.title, displayName)
                             : item.title}

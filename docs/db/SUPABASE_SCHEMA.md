@@ -456,6 +456,39 @@
 
 ---
 
+### 17. `book_covers`
+
+**Purpose:** Centralized pool of book covers uploaded by users. Allows fallback to covers already uploaded by any user for the same book_key.
+
+**Columns:**
+
+| Column Name | Data Type | Nullable | Default | Notes |
+|------------|-----------|----------|---------|-------|
+| `id` | `uuid` | ❌ NO | `gen_random_uuid()` | PRIMARY KEY |
+| `book_key` | `text` | ❌ NO | - | Unique book identifier (e.g., `isbn:9781234567890` or UUID from books table) |
+| `storage_path` | `text` | ❌ NO | - | Path in Storage bucket "book-covers" (e.g., `book_covers/isbn:9781234567890/abc123.jpg`) |
+| `source` | `text` | ❌ NO | `'user'` | CHECK: `'user'`, `'openlibrary'`, `'google'`, `'manual'` |
+| `width` | `integer` | ✅ YES | `NULL` | Image width in pixels |
+| `height` | `integer` | ✅ YES | `NULL` | Image height in pixels |
+| `created_by` | `uuid` | ✅ YES | `NULL` | REFERENCES `auth.users(id)` ON DELETE SET NULL (user who uploaded the cover) |
+| `created_at` | `timestamptz` | ❌ NO | `now()` | Creation timestamp |
+| `updated_at` | `timestamptz` | ❌ NO | `now()` | Last update timestamp (auto-updated by trigger) |
+
+**Primary Key:** `id`  
+**Unique Constraints:** `book_key` - One cover per book_key  
+**Foreign Keys:** `created_by` → `auth.users(id)` ON DELETE SET NULL  
+**RLS Enabled:** ✅ YES
+
+**Storage:**
+- Bucket: `book-covers` (public read)
+- Path structure: `book_covers/<book_key>/<uuid>.<ext>`
+- File size limit: 10MB
+- Allowed MIME types: `image/jpeg`, `image/png`, `image/webp`
+
+**Note:** This table stores metadata for the centralized cover pool. The actual image files are stored in Supabase Storage bucket "book-covers". One cover per `book_key` allows deterministic fallback when a book doesn't have a cover from external sources (OpenLibrary, Google Books).
+
+---
+
 ## Relationships
 
 ### One-to-Many
@@ -615,6 +648,15 @@
 | `Allow authenticated users to insert summaries` | INSERT | `true` | Authenticated users can insert summaries |
 | `Allow authenticated users to update summaries` | UPDATE | `true` | Authenticated users can update summaries |
 
+### `book_covers`
+
+| Policy Name | Operation | Condition | Explanation |
+|------------|-----------|-----------|-------------|
+| `Public can read book covers` | SELECT | `true` | Anyone can read book covers (public read) |
+| `Authenticated users can insert book covers` | INSERT | `auth.uid() = created_by` | Authenticated users can insert covers (must set created_by = auth.uid()) |
+| `Creators can update their book covers` | UPDATE | `created_by = auth.uid()` | Only creator can update their covers |
+| `Creators can delete their book covers` | DELETE | `created_by = auth.uid()` | Only creator can delete their covers |
+
 ---
 
 ## Indexes
@@ -649,6 +691,10 @@
 - `idx_book_summaries_lookup` ON `book_summaries(source, source_id, lang)`
 - `idx_book_summaries_created_at` ON `book_summaries(created_at)`
 - `books_isbn_unique` ON `books(isbn)` WHERE `isbn IS NOT NULL`
+- `idx_book_covers_book_key` ON `book_covers(book_key)`
+- `idx_book_covers_created_by` ON `book_covers(created_by)`
+- `idx_book_covers_source` ON `book_covers(source)`
+- `idx_book_covers_created_at` ON `book_covers(created_at DESC)`
 
 ---
 
@@ -669,6 +715,11 @@
 3. **`update_book_comments_updated_at()`**
    - **Purpose:** Automatically update `updated_at` when a comment is modified
    - **Trigger:** `book_comments_updated_at` BEFORE UPDATE ON `book_comments`
+   - **Logic:** Sets `updated_at = NOW()`
+
+4. **`update_book_covers_updated_at()`**
+   - **Purpose:** Automatically update `updated_at` when a book cover is modified
+   - **Trigger:** `book_covers_updated_at` BEFORE UPDATE ON `book_covers`
    - **Logic:** Sets `updated_at = NOW()`
 
 ---
